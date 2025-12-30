@@ -1,0 +1,170 @@
+//! Signing functions.
+//!
+//! This module provides functions for creating OpenPGP signatures
+//! on data using secret key material.
+
+use std::io::Cursor;
+use std::path::Path;
+
+use pgp::composed::{CleartextSignedMessage, DetachedSignature, MessageBuilder};
+use pgp::crypto::hash::HashAlgorithm;
+use pgp::types::Password;
+use rand::thread_rng;
+
+use crate::error::{Error, Result};
+use crate::internal::parse_secret_key;
+
+/// Sign bytes with a binary signature (wrapping the message).
+///
+/// # Arguments
+/// * `secret_cert` - The signer's secret key (armored or binary)
+/// * `data` - The data to sign
+/// * `password` - Password to unlock the secret key
+///
+/// # Returns
+/// The signed message containing both the signature and the original data.
+pub fn sign_bytes(secret_cert: &[u8], data: &[u8], password: &str) -> Result<Vec<u8>> {
+    sign_bytes_internal(secret_cert, data, password, false)
+}
+
+/// Sign bytes with a cleartext signature.
+///
+/// The message remains human-readable with the signature appended.
+///
+/// # Arguments
+/// * `secret_cert` - The signer's secret key
+/// * `data` - The data to sign (should be text)
+/// * `password` - Password to unlock the secret key
+///
+/// # Returns
+/// The cleartext signed message.
+pub fn sign_bytes_cleartext(secret_cert: &[u8], data: &[u8], password: &str) -> Result<Vec<u8>> {
+    sign_bytes_internal(secret_cert, data, password, true)
+}
+
+/// Create a detached signature for bytes.
+///
+/// # Arguments
+/// * `secret_cert` - The signer's secret key
+/// * `data` - The data to sign
+/// * `password` - Password to unlock the secret key
+///
+/// # Returns
+/// The ASCII-armored detached signature.
+pub fn sign_bytes_detached(secret_cert: &[u8], data: &[u8], password: &str) -> Result<String> {
+    let secret_key = parse_secret_key(secret_cert)?;
+    let password: Password = password.into();
+
+    let mut rng = thread_rng();
+
+    // Use the primary key for signing
+    let signature = DetachedSignature::sign_binary_data(
+        &mut rng,
+        &secret_key.primary_key,
+        &password,
+        HashAlgorithm::Sha256,
+        Cursor::new(data),
+    )
+    .map_err(|e| Error::Crypto(e.to_string()))?;
+
+    signature
+        .to_armored_string(None.into())
+        .map_err(|e| Error::Crypto(e.to_string()))
+}
+
+/// Sign a file to an output file (binary signature).
+///
+/// # Arguments
+/// * `secret_cert` - The signer's secret key
+/// * `input` - Path to the file to sign
+/// * `output` - Path to write the signed file
+/// * `password` - Password to unlock the secret key
+pub fn sign_file(
+    secret_cert: &[u8],
+    input: impl AsRef<Path>,
+    output: impl AsRef<Path>,
+    password: &str,
+) -> Result<()> {
+    let data = std::fs::read(input.as_ref())?;
+    let signed = sign_bytes(secret_cert, &data, password)?;
+    std::fs::write(output.as_ref(), signed)?;
+    Ok(())
+}
+
+/// Sign a file with cleartext signature.
+///
+/// # Arguments
+/// * `secret_cert` - The signer's secret key
+/// * `input` - Path to the file to sign (should be text)
+/// * `output` - Path to write the signed file
+/// * `password` - Password to unlock the secret key
+pub fn sign_file_cleartext(
+    secret_cert: &[u8],
+    input: impl AsRef<Path>,
+    output: impl AsRef<Path>,
+    password: &str,
+) -> Result<()> {
+    let data = std::fs::read(input.as_ref())?;
+    let signed = sign_bytes_cleartext(secret_cert, &data, password)?;
+    std::fs::write(output.as_ref(), signed)?;
+    Ok(())
+}
+
+/// Create a detached signature for a file.
+///
+/// # Arguments
+/// * `secret_cert` - The signer's secret key
+/// * `input` - Path to the file to sign
+/// * `password` - Password to unlock the secret key
+///
+/// # Returns
+/// The ASCII-armored detached signature.
+pub fn sign_file_detached(
+    secret_cert: &[u8],
+    input: impl AsRef<Path>,
+    password: &str,
+) -> Result<String> {
+    let data = std::fs::read(input.as_ref())?;
+    sign_bytes_detached(secret_cert, &data, password)
+}
+
+/// Internal implementation for signing with or without cleartext.
+fn sign_bytes_internal(
+    secret_cert: &[u8],
+    data: &[u8],
+    password: &str,
+    cleartext: bool,
+) -> Result<Vec<u8>> {
+    let secret_key = parse_secret_key(secret_cert)?;
+    let password_obj: Password = password.into();
+
+    let mut rng = thread_rng();
+
+    if cleartext {
+        // For cleartext signatures, convert bytes to string
+        let text = String::from_utf8_lossy(data);
+        let csf = CleartextSignedMessage::sign(&mut rng, &text, &secret_key.primary_key, &password_obj)
+            .map_err(|e| Error::Crypto(e.to_string()))?;
+
+        csf.to_armored_string(None.into())
+            .map(|s| s.into_bytes())
+            .map_err(|e| Error::Crypto(e.to_string()))
+    } else {
+        // For regular signed messages using MessageBuilder
+        let mut builder = MessageBuilder::from_bytes("", data.to_vec());
+
+        builder.sign(&secret_key.primary_key, password_obj, HashAlgorithm::Sha256);
+
+        builder
+            .to_armored_string(&mut rng, None.into())
+            .map(|s| s.into_bytes())
+            .map_err(|e| Error::Crypto(e.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Tests would require key fixtures
+}

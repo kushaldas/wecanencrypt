@@ -1,0 +1,56 @@
+[package]
+name = "wecanencrypt"
+version = "0.1.0"
+edition = "2021"
+authors = ["Kushal Das <mail@kushaldas.in>"]
+repository = "https://github.com/kushaldas/wecanencrypt"
+license = "MIT"
+description = "Pure Rust OpenPGP library for encryption, signing, and key management using rpgp."
+keywords = ["openpgp", "encryption", "cryptography", "pgp", "gpg"]
+categories = ["cryptography", "authentication"]
+
+[features]
+default = []
+keystore = ["rusqlite"]
+network = ["reqwest", "sha1"]
+
+[dependencies]
+# Core OpenPGP implementation (rpgp)
+pgp = { path = "/home/kdas/code/sources/rpgp", default-features = true }
+
+# Random number generation (required for rpgp)
+rand = "0.8"
+
+# For smallvec in key generation
+smallvec = "1.11"
+
+# Hex encoding
+hex = "0.4"
+
+# RSA key parameter access (for policy checks and SSH export)
+rsa = "0.9"
+
+# Elliptic curve crates for ECDSA key access (SSH export)
+p256 = "0.13"
+p384 = "0.13"
+p521 = "0.13"
+
+# SSH key format handling
+sshkeys = "0.3"
+
+# Date/time handling
+chrono = { version = "0.4", features = ["serde"] }
+
+# Error handling
+thiserror = "2.0"
+anyhow = "1.0"
+
+# SQLite key storage (optional)
+rusqlite = { version = "0.32", features = ["bundled"], optional = true }
+
+# Network key fetching (optional)
+reqwest = { version = "0.12", features = ["blocking"], optional = true }
+sha1 = { version = "0.10", optional = true }
+
+[dev-dependencies]
+tempfile = "3.0"
