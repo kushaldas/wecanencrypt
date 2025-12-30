@@ -1,11 +1,11 @@
 //! # WeCanEncrypt
 //!
-//! A pure Rust OpenPGP library for encryption, signing, and key management.
+//! A pure Rust OpenPGP library for encryption, signing, and key management using [rpgp](https://docs.rs/pgp).
 //!
 //! This library provides a functional API for common OpenPGP operations,
 //! including:
 //!
-//! - **Key Generation**: Create RSA or Curve25519 keys
+//! - **Key Generation**: Create RSA, Curve25519, or NIST curve keys
 //! - **Encryption/Decryption**: Encrypt to one or multiple recipients
 //! - **Signing/Verification**: Create and verify signatures
 //! - **Certificate Management**: Parse, modify, and export certificates
@@ -13,22 +13,38 @@
 //!
 //! ## Quick Start
 //!
-//! ```ignore
+//! ```no_run
 //! use wecanencrypt::*;
 //!
-//! // Generate a new key
-//! let key = create_key_simple("password", &["Alice <alice@example.com>"])?;
+//! // Generate a new Curve25519 key (fast)
+//! let key = create_key_simple("password", &["Alice <alice@example.com>"]).unwrap();
 //!
 //! // Encrypt a message
-//! let ciphertext = encrypt_bytes(key.public_key.as_bytes(), b"Hello!", true)?;
+//! let ciphertext = encrypt_bytes(key.public_key.as_bytes(), b"Hello!", true).unwrap();
 //!
 //! // Decrypt it
-//! let plaintext = decrypt_bytes(&key.secret_key, &ciphertext, "password")?;
+//! let plaintext = decrypt_bytes(&key.secret_key, &ciphertext, "password").unwrap();
+//! assert_eq!(plaintext, b"Hello!");
 //! ```
+//!
+//! ## Cipher Suites
+//!
+//! The library supports multiple cipher suites:
+//!
+//! | Suite | Primary Key | Encryption Subkey | Speed |
+//! |-------|-------------|-------------------|-------|
+//! | `Cv25519` (default) | EdDSA Legacy | ECDH Curve25519 | Fast |
+//! | `Cv25519Modern` | Ed25519 (RFC 9580) | X25519 | Fast |
+//! | `NistP256` | ECDSA P-256 | ECDH P-256 | Fast |
+//! | `NistP384` | ECDSA P-384 | ECDH P-384 | Fast |
+//! | `NistP521` | ECDSA P-521 | ECDH P-521 | Fast |
+//! | `Rsa2k` | RSA 2048-bit | RSA 2048-bit | Slow |
+//! | `Rsa4k` | RSA 4096-bit | RSA 4096-bit | Very Slow |
 //!
 //! ## Features
 //!
 //! - `keystore`: Enable SQLite-backed key storage (requires `rusqlite`)
+//! - `network`: Enable network operations for fetching keys from keyservers
 //!
 //! ## Design
 //!

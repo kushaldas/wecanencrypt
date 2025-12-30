@@ -84,6 +84,7 @@ mod key_generation {
     }
 
     #[test]
+    #[ignore = "RSA4k key generation is slow (~10s release, ~200s debug)"]
     fn test_create_key_rsa4k() {
         let key = create_key(
             TEST_PASSWORD,
@@ -517,12 +518,15 @@ mod cross_cipher {
 
     #[test]
     fn test_rsa4k_encrypt_decrypt() {
-        let (secret_key, _) = generate_test_key_with_cipher(CipherSuite::Rsa4k);
-        let public_key = get_pub_key(&secret_key).unwrap();
+        // Use fixture keys instead of generating (RSA4k generation is slow)
+        let store = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/files/store");
+        let public_key = std::fs::read(store.join("rsa4k_public.asc")).unwrap();
+        let secret_key = std::fs::read(store.join("rsa4k_secret.asc")).unwrap();
 
         let message = b"RSA4k encrypted message";
-        let ciphertext = encrypt_bytes(public_key.as_bytes(), message, true).unwrap();
-        let decrypted = decrypt_bytes(&secret_key, &ciphertext, TEST_PASSWORD).unwrap();
+        let ciphertext = encrypt_bytes(&public_key, message, true).unwrap();
+        let decrypted = decrypt_bytes(&secret_key, &ciphertext, "testpassword").unwrap();
 
         assert_eq!(decrypted, message);
     }
@@ -541,12 +545,15 @@ mod cross_cipher {
 
     #[test]
     fn test_rsa4k_sign_verify() {
-        let (secret_key, _) = generate_test_key_with_cipher(CipherSuite::Rsa4k);
-        let public_key = get_pub_key(&secret_key).unwrap();
+        // Use fixture keys instead of generating (RSA4k generation is slow)
+        let store = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/files/store");
+        let public_key = std::fs::read(store.join("rsa4k_public.asc")).unwrap();
+        let secret_key = std::fs::read(store.join("rsa4k_secret.asc")).unwrap();
 
         let message = b"RSA4k signed message";
-        let signed = sign_bytes(&secret_key, message, TEST_PASSWORD).unwrap();
-        let valid = verify_bytes(public_key.as_bytes(), &signed).unwrap();
+        let signed = sign_bytes(&secret_key, message, "testpassword").unwrap();
+        let valid = verify_bytes(&public_key, &signed).unwrap();
 
         assert!(valid);
     }

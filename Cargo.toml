@@ -8,7 +8,7 @@ keywords = ["openpgp", "encryption", "cryptography", "pgp", "gpg"]
 categories = ["cryptography", "authentication"]
 
 [features]
-default = []
+default = ["keystore", "network"]
 keystore = ["rusqlite"]
 network = ["reqwest", "sha1"]
 

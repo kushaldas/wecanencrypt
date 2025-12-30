@@ -18,6 +18,9 @@ use crate::internal::{is_subkey_valid, parse_public_key};
 
 /// Encrypt bytes to a single recipient.
 ///
+/// Encrypts the plaintext to the recipient's public key. The message can only
+/// be decrypted by someone with the corresponding secret key.
+///
 /// # Arguments
 /// * `recipient_cert` - The recipient's public key (armored or binary)
 /// * `plaintext` - The data to encrypt
@@ -27,9 +30,20 @@ use crate::internal::{is_subkey_valid, parse_public_key};
 /// The encrypted message.
 ///
 /// # Example
-/// ```ignore
-/// let public_key = std::fs::read("recipient.asc")?;
-/// let ciphertext = encrypt_bytes(&public_key, b"Hello, World!", true)?;
+///
+/// ```no_run
+/// use wecanencrypt::{create_key_simple, encrypt_bytes, decrypt_bytes, get_pub_key};
+///
+/// // Create a key pair
+/// let key = create_key_simple("password", &["Alice <alice@example.com>"]).unwrap();
+/// let public_key = get_pub_key(&key.secret_key).unwrap();
+///
+/// // Encrypt a message
+/// let ciphertext = encrypt_bytes(public_key.as_bytes(), b"Secret message", true).unwrap();
+///
+/// // Decrypt it
+/// let plaintext = decrypt_bytes(&key.secret_key, &ciphertext, "password").unwrap();
+/// assert_eq!(plaintext, b"Secret message");
 /// ```
 pub fn encrypt_bytes(recipient_cert: &[u8], plaintext: &[u8], armor: bool) -> Result<Vec<u8>> {
     encrypt_bytes_to_multiple(&[recipient_cert], plaintext, armor)
@@ -37,13 +51,41 @@ pub fn encrypt_bytes(recipient_cert: &[u8], plaintext: &[u8], armor: bool) -> Re
 
 /// Encrypt bytes to multiple recipients.
 ///
+/// Encrypts the plaintext so that any of the recipients can decrypt it.
+/// Each recipient only needs their own secret key to decrypt.
+///
 /// # Arguments
-/// * `recipient_certs` - Slice of recipient public keys
+/// * `recipient_certs` - Slice of recipient public keys (armored or binary)
 /// * `plaintext` - The data to encrypt
 /// * `armor` - If true, output ASCII-armored; otherwise binary
 ///
 /// # Returns
 /// The encrypted message that can be decrypted by any of the recipients.
+///
+/// # Example
+///
+/// ```no_run
+/// use wecanencrypt::{create_key_simple, encrypt_bytes_to_multiple, decrypt_bytes, get_pub_key};
+///
+/// // Create two recipients
+/// let alice = create_key_simple("alice_pw", &["Alice <alice@example.com>"]).unwrap();
+/// let bob = create_key_simple("bob_pw", &["Bob <bob@example.com>"]).unwrap();
+///
+/// let alice_pub = get_pub_key(&alice.secret_key).unwrap();
+/// let bob_pub = get_pub_key(&bob.secret_key).unwrap();
+///
+/// // Encrypt to both
+/// let ciphertext = encrypt_bytes_to_multiple(
+///     &[alice_pub.as_bytes(), bob_pub.as_bytes()],
+///     b"Group message",
+///     true,
+/// ).unwrap();
+///
+/// // Either can decrypt
+/// let plain_alice = decrypt_bytes(&alice.secret_key, &ciphertext, "alice_pw").unwrap();
+/// let plain_bob = decrypt_bytes(&bob.secret_key, &ciphertext, "bob_pw").unwrap();
+/// assert_eq!(plain_alice, plain_bob);
+/// ```
 pub fn encrypt_bytes_to_multiple(
     recipient_certs: &[&[u8]],
     plaintext: &[u8],
@@ -90,11 +132,22 @@ pub fn encrypt_bytes_to_multiple(
 
 /// Encrypt a file to a single recipient.
 ///
+/// Reads the input file, encrypts it, and writes the result to the output file.
+///
 /// # Arguments
-/// * `recipient_cert` - The recipient's public key
+/// * `recipient_cert` - The recipient's public key (armored or binary)
 /// * `input` - Path to the input file
 /// * `output` - Path to the output file
-/// * `armor` - If true, output ASCII-armored
+/// * `armor` - If true, output ASCII-armored; otherwise binary
+///
+/// # Example
+///
+/// ```no_run
+/// use wecanencrypt::encrypt_file;
+///
+/// let public_key = std::fs::read("recipient.asc").unwrap();
+/// encrypt_file(&public_key, "document.pdf", "document.pdf.gpg", true).unwrap();
+/// ```
 pub fn encrypt_file(
     recipient_cert: &[u8],
     input: impl AsRef<Path>,
@@ -107,10 +160,26 @@ pub fn encrypt_file(
 /// Encrypt a file to multiple recipients.
 ///
 /// # Arguments
-/// * `recipient_certs` - Slice of recipient public keys
+/// * `recipient_certs` - Slice of recipient public keys (armored or binary)
 /// * `input` - Path to the input file
 /// * `output` - Path to the output file
-/// * `armor` - If true, output ASCII-armored
+/// * `armor` - If true, output ASCII-armored; otherwise binary
+///
+/// # Example
+///
+/// ```no_run
+/// use wecanencrypt::encrypt_file_to_multiple;
+///
+/// let alice_key = std::fs::read("alice.asc").unwrap();
+/// let bob_key = std::fs::read("bob.asc").unwrap();
+///
+/// encrypt_file_to_multiple(
+///     &[&alice_key, &bob_key],
+///     "document.pdf",
+///     "document.pdf.gpg",
+///     true,
+/// ).unwrap();
+/// ```
 pub fn encrypt_file_to_multiple(
     recipient_certs: &[&[u8]],
     input: impl AsRef<Path>,

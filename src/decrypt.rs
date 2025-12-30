@@ -14,19 +14,35 @@ use crate::internal::parse_secret_key;
 
 /// Decrypt bytes using a secret key.
 ///
+/// Decrypts an OpenPGP encrypted message using the recipient's secret key.
+/// The message must have been encrypted to this key.
+///
 /// # Arguments
 /// * `secret_cert` - The recipient's secret key (armored or binary)
-/// * `ciphertext` - The encrypted data
+/// * `ciphertext` - The encrypted data (armored or binary)
 /// * `password` - Password to unlock the secret key
 ///
 /// # Returns
-/// The decrypted plaintext.
+/// The decrypted plaintext bytes.
+///
+/// # Errors
+/// * [`Error::InvalidPassword`] - If the password is incorrect
+/// * [`Error::Crypto`] - If the message wasn't encrypted to this key
 ///
 /// # Example
-/// ```ignore
-/// let secret_key = std::fs::read("secret.asc")?;
-/// let ciphertext = std::fs::read("message.gpg")?;
-/// let plaintext = decrypt_bytes(&secret_key, &ciphertext, "password")?;
+///
+/// ```no_run
+/// use wecanencrypt::{create_key_simple, encrypt_bytes, decrypt_bytes, get_pub_key};
+///
+/// let key = create_key_simple("password", &["Alice <alice@example.com>"]).unwrap();
+/// let public_key = get_pub_key(&key.secret_key).unwrap();
+///
+/// // Encrypt
+/// let ciphertext = encrypt_bytes(public_key.as_bytes(), b"Hello!", true).unwrap();
+///
+/// // Decrypt
+/// let plaintext = decrypt_bytes(&key.secret_key, &ciphertext, "password").unwrap();
+/// assert_eq!(plaintext, b"Hello!");
 /// ```
 pub fn decrypt_bytes(secret_cert: &[u8], ciphertext: &[u8], password: &str) -> Result<Vec<u8>> {
     let secret_key = parse_secret_key(secret_cert)?;

@@ -5,10 +5,11 @@
 
 use chrono::{DateTime, Utc};
 use pgp::composed::{
-    SecretKeyParamsBuilder, SignedPublicKey, SignedSecretKey, SubkeyParamsBuilder,
+    SecretKeyParamsBuilder, SignedKeyDetails, SignedPublicKey, SignedSecretKey,
+    SubkeyParamsBuilder,
 };
-use pgp::packet::{PacketTrait, SignatureConfig, SignatureType, Subpacket, SubpacketData};
-use pgp::types::{KeyDetails, KeyVersion, Password, SignedUser, Timestamp};
+use pgp::packet::{PacketTrait, SignatureConfig, SignatureType, Subpacket, SubpacketData, UserId};
+use pgp::types::{KeyDetails, KeyVersion, PacketHeaderVersion, Password, SignedUser, Timestamp};
 use rand::thread_rng;
 use std::time::SystemTime;
 
@@ -24,11 +25,11 @@ use crate::types::{CertificationType, CipherSuite, GeneratedKey, SubkeyFlags};
 /// # Arguments
 /// * `password` - Password to protect the secret key
 /// * `user_ids` - List of user IDs (e.g., "Name <email@example.com>")
-/// * `cipher` - Cipher suite to use (RSA or Curve25519)
+/// * `cipher` - Cipher suite to use (see [`CipherSuite`] for options)
 /// * `creation_time` - Optional creation time (defaults to now)
 /// * `expiration_time` - Optional expiration time for the primary key
 /// * `subkeys_expiration` - Optional expiration time for subkeys
-/// * `which_keys` - Which subkeys to generate
+/// * `which_keys` - Which subkeys to generate (see [`SubkeyFlags`])
 /// * `can_primary_sign` - Whether the primary key can sign
 /// * `can_primary_expire` - Whether the primary key can expire
 ///
@@ -36,16 +37,40 @@ use crate::types::{CertificationType, CipherSuite, GeneratedKey, SubkeyFlags};
 /// The generated key with public key (armored), secret key (binary), and fingerprint.
 ///
 /// # Example
-/// ```ignore
+///
+/// Generate a Curve25519 key (fast):
+///
+/// ```no_run
+/// use wecanencrypt::{create_key, CipherSuite, SubkeyFlags};
+///
 /// let key = create_key(
-///     "password",
+///     "my_password",
 ///     &["Alice <alice@example.com>"],
 ///     CipherSuite::Cv25519,
 ///     None, None, None,
 ///     SubkeyFlags::all(),
-///     false, true,
-/// )?;
+///     false,
+///     true,
+/// ).unwrap();
+///
 /// println!("Fingerprint: {}", key.fingerprint);
+/// println!("Public key:\n{}", key.public_key);
+/// ```
+///
+/// Generate an RSA-4096 key (slow, ~10s in release mode):
+///
+/// ```ignore
+/// use wecanencrypt::{create_key, CipherSuite, SubkeyFlags};
+///
+/// let key = create_key(
+///     "my_password",
+///     &["Bob <bob@example.com>"],
+///     CipherSuite::Rsa4k,
+///     None, None, None,
+///     SubkeyFlags::all(),
+///     false,
+///     true,
+/// ).unwrap();
 /// ```
 pub fn create_key(
     password: &str,
@@ -194,12 +219,26 @@ pub fn create_key(
 
 /// Generate a key with default settings (Cv25519, all subkeys).
 ///
+/// This is a convenience wrapper around [`create_key`] with sensible defaults:
+/// - Cipher suite: Curve25519 (fast, modern)
+/// - Subkeys: encryption, signing, and authentication
+/// - No expiration
+///
 /// # Arguments
 /// * `password` - Password to protect the secret key
-/// * `user_ids` - List of user IDs
+/// * `user_ids` - List of user IDs (e.g., "Name <email@example.com>")
 ///
 /// # Returns
-/// The generated key.
+/// The generated key with public key, secret key, and fingerprint.
+///
+/// # Example
+///
+/// ```no_run
+/// use wecanencrypt::create_key_simple;
+///
+/// let key = create_key_simple("my_password", &["Alice <alice@example.com>"]).unwrap();
+/// println!("Fingerprint: {}", key.fingerprint);
+/// ```
 pub fn create_key_simple(password: &str, user_ids: &[&str]) -> Result<GeneratedKey> {
     create_key(
         password,
@@ -216,11 +255,26 @@ pub fn create_key_simple(password: &str, user_ids: &[&str]) -> Result<GeneratedK
 
 /// Export the public key as ASCII armor.
 ///
+/// Extracts the public key portion from a certificate (which may contain
+/// secret key material) and returns it as ASCII-armored text.
+///
 /// # Arguments
-/// * `cert_data` - The certificate data
+/// * `cert_data` - The certificate data (public or secret key)
 ///
 /// # Returns
-/// ASCII-armored public key.
+/// ASCII-armored public key suitable for sharing.
+///
+/// # Example
+///
+/// ```no_run
+/// use wecanencrypt::{create_key_simple, get_pub_key};
+///
+/// let key = create_key_simple("password", &["Alice <alice@example.com>"]).unwrap();
+///
+/// // Extract public key from the secret key
+/// let public_key = get_pub_key(&key.secret_key).unwrap();
+/// println!("Share this public key:\n{}", public_key);
+/// ```
 pub fn get_pub_key(cert_data: &[u8]) -> Result<String> {
     let secret_key = parse_secret_key(cert_data)?;
     let public_key = SignedPublicKey::from(secret_key);
@@ -234,12 +288,36 @@ pub fn get_pub_key(cert_data: &[u8]) -> Result<String> {
 ///
 /// # Arguments
 /// * `cert_data` - The certificate data (with secret key)
-/// * `fingerprints` - Fingerprints of subkeys to update
+/// * `fingerprints` - Fingerprints of subkeys to update (hex strings)
 /// * `expiry_time` - New expiration time
 /// * `password` - Password to unlock the secret key
 ///
 /// # Returns
-/// The updated certificate.
+/// The updated certificate with new binding signatures.
+///
+/// # Example
+///
+/// ```no_run
+/// use wecanencrypt::{create_key_simple, update_subkeys_expiry, parse_cert_bytes};
+/// use chrono::{Utc, Duration};
+///
+/// let key = create_key_simple("password", &["Alice <alice@example.com>"]).unwrap();
+///
+/// // Get subkey fingerprints
+/// let info = parse_cert_bytes(&key.secret_key, true).unwrap();
+/// let subkey_fps: Vec<&str> = info.subkeys.iter()
+///     .map(|s| s.fingerprint.as_str())
+///     .collect();
+///
+/// // Update expiration to 1 year from now
+/// let new_expiry = Utc::now() + Duration::days(365);
+/// let updated = update_subkeys_expiry(
+///     &key.secret_key,
+///     &subkey_fps,
+///     new_expiry,
+///     "password",
+/// ).unwrap();
+/// ```
 pub fn update_subkeys_expiry(
     cert_data: &[u8],
     fingerprints: &[&str],
@@ -441,7 +519,20 @@ pub fn update_subkeys_expiry(
 /// * `password` - Password to unlock the secret key
 ///
 /// # Returns
-/// The updated certificate.
+/// The updated certificate with new expiration.
+///
+/// # Example
+///
+/// ```no_run
+/// use wecanencrypt::{create_key_simple, update_primary_expiry};
+/// use chrono::{Utc, Duration};
+///
+/// let key = create_key_simple("password", &["Alice <alice@example.com>"]).unwrap();
+///
+/// // Set primary key to expire in 2 years
+/// let new_expiry = Utc::now() + Duration::days(730);
+/// let updated = update_primary_expiry(&key.secret_key, new_expiry, "password").unwrap();
+/// ```
 pub fn update_primary_expiry(
     cert_data: &[u8],
     expiry_time: DateTime<Utc>,
@@ -541,37 +632,164 @@ pub fn update_primary_expiry(
 
 /// Add a new User ID to a certificate.
 ///
+/// Creates a new self-certification signature binding the new User ID
+/// to the primary key.
+///
 /// # Arguments
 /// * `cert_data` - The certificate data (with secret key)
-/// * `uid` - The new user ID string
+/// * `uid` - The new user ID string (e.g., "Name <email@example.com>")
 /// * `password` - Password to unlock the secret key
 ///
 /// # Returns
-/// The updated certificate.
-pub fn add_uid(_cert_data: &[u8], _uid: &str, _password: &str) -> Result<Vec<u8>> {
-    // TODO: rpgp doesn't have a straightforward API for adding UIDs to existing keys
-    Err(Error::InvalidInput(
-        "Adding UIDs not yet implemented for rpgp".to_string(),
-    ))
+/// The updated certificate with the new User ID.
+///
+/// # Example
+///
+/// ```no_run
+/// use wecanencrypt::{create_key_simple, add_uid, parse_cert_bytes};
+///
+/// let key = create_key_simple("password", &["Alice <alice@example.com>"]).unwrap();
+///
+/// // Add a second email address
+/// let updated = add_uid(&key.secret_key, "Alice Work <alice@work.com>", "password").unwrap();
+///
+/// // Verify the new UID was added
+/// let info = parse_cert_bytes(&updated, true).unwrap();
+/// assert_eq!(info.user_ids.len(), 2);
+/// ```
+pub fn add_uid(cert_data: &[u8], uid: &str, password: &str) -> Result<Vec<u8>> {
+    let mut rng = thread_rng();
+    let secret_key = parse_secret_key(cert_data)?;
+    let password = Password::from(password);
+
+    // Create a new UserId packet
+    let new_uid = UserId::from_str(PacketHeaderVersion::New, uid)
+        .map_err(|e| Error::Crypto(e.to_string()))?;
+
+    // Sign the new user ID (self-certification)
+    let signed_user = new_uid
+        .sign(
+            &mut rng,
+            &secret_key.primary_key,
+            secret_key.primary_key.public_key(),
+            &password,
+        )
+        .map_err(|e| Error::Crypto(e.to_string()))?;
+
+    // Reconstruct the key with the new user ID
+    let mut users = secret_key.details.users.clone();
+    users.push(signed_user);
+
+    let new_details = SignedKeyDetails::new(
+        secret_key.details.revocation_signatures.clone(),
+        secret_key.details.direct_signatures.clone(),
+        users,
+        secret_key.details.user_attributes.clone(),
+    );
+
+    let new_secret_key = SignedSecretKey::new(
+        secret_key.primary_key.clone(),
+        new_details,
+        secret_key.public_subkeys.clone(),
+        secret_key.secret_subkeys.clone(),
+    );
+
+    secret_key_to_bytes(&new_secret_key)
 }
 
 /// Revoke a User ID on a certificate.
 ///
+/// Adds a revocation signature to the specified User ID. The UID remains
+/// in the certificate but is marked as revoked.
+///
 /// # Arguments
 /// * `cert_data` - The certificate data (with secret key)
-/// * `uid` - The user ID to revoke
+/// * `uid` - The exact user ID string to revoke
 /// * `password` - Password to unlock the secret key
 ///
 /// # Returns
-/// The updated certificate with the revoked UID.
-pub fn revoke_uid(_cert_data: &[u8], _uid: &str, _password: &str) -> Result<Vec<u8>> {
-    // TODO: rpgp doesn't have a straightforward API for revoking UIDs
-    Err(Error::InvalidInput(
-        "Revoking UIDs not yet implemented for rpgp".to_string(),
-    ))
+/// The updated certificate with the revocation signature.
+///
+/// # Example
+///
+/// ```no_run
+/// use wecanencrypt::{create_key_simple, add_uid, revoke_uid};
+///
+/// let key = create_key_simple("password", &["Alice <alice@example.com>"]).unwrap();
+///
+/// // Add and then revoke a UID
+/// let with_uid = add_uid(&key.secret_key, "Old Email <old@example.com>", "password").unwrap();
+/// let revoked = revoke_uid(&with_uid, "Old Email <old@example.com>", "password").unwrap();
+/// ```
+pub fn revoke_uid(cert_data: &[u8], uid: &str, password: &str) -> Result<Vec<u8>> {
+    let mut rng = thread_rng();
+    let secret_key = parse_secret_key(cert_data)?;
+    let password = Password::from(password);
+
+    // Find the user ID to revoke
+    let uid_bytes = uid.as_bytes();
+    let uid_index = secret_key
+        .details
+        .users
+        .iter()
+        .position(|u| u.id.id() == uid_bytes)
+        .ok_or_else(|| Error::InvalidInput(format!("User ID '{}' not found in key", uid)))?;
+
+    // Create a revocation signature for this user ID
+    let mut config = SignatureConfig::from_key(&mut rng, &secret_key.primary_key, SignatureType::CertRevocation)
+        .map_err(|e| Error::Crypto(e.to_string()))?;
+
+    config.hashed_subpackets = vec![
+        Subpacket::regular(SubpacketData::SignatureCreationTime(Timestamp::now()))
+            .map_err(|e| Error::Crypto(e.to_string()))?,
+        Subpacket::regular(SubpacketData::IssuerFingerprint(secret_key.primary_key.fingerprint()))
+            .map_err(|e| Error::Crypto(e.to_string()))?,
+    ];
+
+    if secret_key.primary_key.version() <= KeyVersion::V4 {
+        config.unhashed_subpackets = vec![Subpacket::regular(SubpacketData::IssuerKeyId(
+            secret_key.primary_key.legacy_key_id(),
+        ))
+        .map_err(|e| Error::Crypto(e.to_string()))?];
+    }
+
+    let user_to_revoke = &secret_key.details.users[uid_index];
+    let revocation_sig = config
+        .sign_certification_third_party(
+            &secret_key.primary_key,
+            &password,
+            secret_key.primary_key.public_key(),
+            user_to_revoke.id.tag(),
+            &user_to_revoke.id,
+        )
+        .map_err(|e| Error::Crypto(e.to_string()))?;
+
+    // Reconstruct the users list with the revocation signature added
+    let mut users = secret_key.details.users.clone();
+    users[uid_index].signatures.push(revocation_sig);
+
+    let new_details = SignedKeyDetails::new(
+        secret_key.details.revocation_signatures.clone(),
+        secret_key.details.direct_signatures.clone(),
+        users,
+        secret_key.details.user_attributes.clone(),
+    );
+
+    let new_secret_key = SignedSecretKey::new(
+        secret_key.primary_key.clone(),
+        new_details,
+        secret_key.public_subkeys.clone(),
+        secret_key.secret_subkeys.clone(),
+    );
+
+    secret_key_to_bytes(&new_secret_key)
 }
 
 /// Change the password on a secret key.
+///
+/// Decrypts the secret key material with the old password and re-encrypts
+/// it with the new password. This applies to both the primary key and all
+/// secret subkeys.
 ///
 /// # Arguments
 /// * `cert_data` - The certificate data (with secret key)
@@ -579,29 +797,102 @@ pub fn revoke_uid(_cert_data: &[u8], _uid: &str, _password: &str) -> Result<Vec<
 /// * `new_password` - New password
 ///
 /// # Returns
-/// The certificate with the new password.
+/// The certificate with the new password protection.
+///
+/// # Example
+///
+/// ```no_run
+/// use wecanencrypt::{create_key_simple, update_password, decrypt_bytes, encrypt_bytes, get_pub_key};
+///
+/// let key = create_key_simple("old_password", &["Alice <alice@example.com>"]).unwrap();
+///
+/// // Change the password
+/// let updated = update_password(&key.secret_key, "old_password", "new_password").unwrap();
+///
+/// // Now decrypt using the new password
+/// let public_key = get_pub_key(&updated).unwrap();
+/// let encrypted = encrypt_bytes(public_key.as_bytes(), b"test", true).unwrap();
+/// let decrypted = decrypt_bytes(&updated, &encrypted, "new_password").unwrap();
+/// assert_eq!(decrypted, b"test");
+/// ```
 pub fn update_password(
-    _cert_data: &[u8],
-    _old_password: &str,
-    _new_password: &str,
+    cert_data: &[u8],
+    old_password: &str,
+    new_password: &str,
 ) -> Result<Vec<u8>> {
-    // TODO: rpgp doesn't have a straightforward API for changing passwords
-    Err(Error::InvalidInput(
-        "Password update not yet implemented for rpgp".to_string(),
-    ))
+    let mut rng = thread_rng();
+    let secret_key = parse_secret_key(cert_data)?;
+    let old_pw = Password::from(old_password);
+    let new_pw = Password::from(new_password);
+
+    // Clone the primary key and change its password
+    let mut new_primary_key = secret_key.primary_key.clone();
+    new_primary_key
+        .remove_password(&old_pw)
+        .map_err(|e| Error::Crypto(format!("Failed to unlock primary key: {}", e)))?;
+    new_primary_key
+        .set_password(&mut rng, &new_pw)
+        .map_err(|e| Error::Crypto(format!("Failed to set new password on primary key: {}", e)))?;
+
+    // Clone and update password on all secret subkeys
+    let mut new_secret_subkeys = Vec::new();
+    for subkey in &secret_key.secret_subkeys {
+        let mut new_subkey = subkey.clone();
+        new_subkey
+            .key
+            .remove_password(&old_pw)
+            .map_err(|e| Error::Crypto(format!("Failed to unlock subkey: {}", e)))?;
+        new_subkey
+            .key
+            .set_password(&mut rng, &new_pw)
+            .map_err(|e| Error::Crypto(format!("Failed to set new password on subkey: {}", e)))?;
+        new_secret_subkeys.push(new_subkey);
+    }
+
+    let new_secret_key = SignedSecretKey::new(
+        new_primary_key,
+        secret_key.details.clone(),
+        secret_key.public_subkeys.clone(),
+        new_secret_subkeys,
+    );
+
+    secret_key_to_bytes(&new_secret_key)
 }
 
-/// Certify another key with this key.
+/// Certify another key with this key (key signing).
+///
+/// Creates a certification signature on the target key's User IDs,
+/// expressing trust in the binding between the key and the identities.
 ///
 /// # Arguments
-/// * `certifier_data` - The certifier's secret key
-/// * `target_data` - The target certificate to certify
-/// * `certification_type` - Type of certification
-/// * `user_ids` - Specific user IDs to certify (None = all)
+/// * `certifier_data` - The certifier's secret key (your key)
+/// * `target_data` - The target certificate to certify (their public key)
+/// * `certification_type` - Level of verification performed (see [`CertificationType`])
+/// * `user_ids` - Specific user IDs to certify (None = all user IDs)
 /// * `password` - Password for certifier's key
 ///
 /// # Returns
-/// The target certificate with the new certification.
+/// The target certificate with the new certification signature attached.
+///
+/// # Example
+///
+/// ```no_run
+/// use wecanencrypt::{create_key_simple, certify_key, CertificationType, get_pub_key};
+///
+/// // Create two keys
+/// let alice = create_key_simple("alice_pw", &["Alice <alice@example.com>"]).unwrap();
+/// let bob = create_key_simple("bob_pw", &["Bob <bob@example.com>"]).unwrap();
+///
+/// // Alice certifies Bob's key (signs it)
+/// let bob_public = get_pub_key(&bob.secret_key).unwrap();
+/// let certified_bob = certify_key(
+///     &alice.secret_key,
+///     bob_public.as_bytes(),
+///     CertificationType::Casual,
+///     None,  // certify all UIDs
+///     "alice_pw",
+/// ).unwrap();
+/// ```
 pub fn certify_key(
     certifier_data: &[u8],
     target_data: &[u8],

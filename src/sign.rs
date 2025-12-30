@@ -38,6 +38,9 @@ fn select_hash_for_key(secret_key: &SignedSecretKey) -> HashAlgorithm {
 
 /// Sign bytes with a binary signature (wrapping the message).
 ///
+/// Creates an OpenPGP signed message that includes both the signature and
+/// the original data. The recipient can verify and extract the original message.
+///
 /// # Arguments
 /// * `secret_cert` - The signer's secret key (armored or binary)
 /// * `data` - The data to sign
@@ -45,34 +48,88 @@ fn select_hash_for_key(secret_key: &SignedSecretKey) -> HashAlgorithm {
 ///
 /// # Returns
 /// The signed message containing both the signature and the original data.
+///
+/// # Example
+///
+/// ```no_run
+/// use wecanencrypt::{create_key_simple, sign_bytes, verify_bytes, get_pub_key};
+///
+/// let key = create_key_simple("password", &["Alice <alice@example.com>"]).unwrap();
+/// let public_key = get_pub_key(&key.secret_key).unwrap();
+///
+/// // Sign a message
+/// let signed = sign_bytes(&key.secret_key, b"Important message", "password").unwrap();
+///
+/// // Verify it
+/// let valid = verify_bytes(public_key.as_bytes(), &signed).unwrap();
+/// assert!(valid);
+/// ```
 pub fn sign_bytes(secret_cert: &[u8], data: &[u8], password: &str) -> Result<Vec<u8>> {
     sign_bytes_internal(secret_cert, data, password, false)
 }
 
 /// Sign bytes with a cleartext signature.
 ///
-/// The message remains human-readable with the signature appended.
+/// Creates a cleartext signed message where the original text remains
+/// human-readable with the signature appended. Useful for email and text files.
 ///
 /// # Arguments
-/// * `secret_cert` - The signer's secret key
+/// * `secret_cert` - The signer's secret key (armored or binary)
 /// * `data` - The data to sign (should be text)
 /// * `password` - Password to unlock the secret key
 ///
 /// # Returns
-/// The cleartext signed message.
+/// The cleartext signed message (text remains visible).
+///
+/// # Example
+///
+/// ```no_run
+/// use wecanencrypt::{create_key_simple, sign_bytes_cleartext};
+///
+/// let key = create_key_simple("password", &["Alice <alice@example.com>"]).unwrap();
+///
+/// let signed = sign_bytes_cleartext(&key.secret_key, b"Hello, World!", "password").unwrap();
+/// // The output looks like:
+/// // -----BEGIN PGP SIGNED MESSAGE-----
+/// // Hash: SHA256
+/// //
+/// // Hello, World!
+/// // -----BEGIN PGP SIGNATURE-----
+/// // ...
+/// // -----END PGP SIGNATURE-----
+/// ```
 pub fn sign_bytes_cleartext(secret_cert: &[u8], data: &[u8], password: &str) -> Result<Vec<u8>> {
     sign_bytes_internal(secret_cert, data, password, true)
 }
 
 /// Create a detached signature for bytes.
 ///
+/// Creates a signature that is separate from the original data. The recipient
+/// needs both the signature and the original file to verify.
+///
 /// # Arguments
-/// * `secret_cert` - The signer's secret key
+/// * `secret_cert` - The signer's secret key (armored or binary)
 /// * `data` - The data to sign
 /// * `password` - Password to unlock the secret key
 ///
 /// # Returns
 /// The ASCII-armored detached signature.
+///
+/// # Example
+///
+/// ```no_run
+/// use wecanencrypt::{create_key_simple, sign_bytes_detached, verify_bytes_detached, get_pub_key};
+///
+/// let key = create_key_simple("password", &["Alice <alice@example.com>"]).unwrap();
+/// let public_key = get_pub_key(&key.secret_key).unwrap();
+///
+/// let data = b"File contents";
+/// let signature = sign_bytes_detached(&key.secret_key, data, "password").unwrap();
+///
+/// // Verify with the original data and signature
+/// let valid = verify_bytes_detached(public_key.as_bytes(), data, signature.as_bytes()).unwrap();
+/// assert!(valid);
+/// ```
 pub fn sign_bytes_detached(secret_cert: &[u8], data: &[u8], password: &str) -> Result<String> {
     let secret_key = parse_secret_key(secret_cert)?;
     let password: Password = password.into();
@@ -97,11 +154,22 @@ pub fn sign_bytes_detached(secret_cert: &[u8], data: &[u8], password: &str) -> R
 
 /// Sign a file to an output file (binary signature).
 ///
+/// Reads the input file, signs it, and writes the signed message to the output file.
+///
 /// # Arguments
-/// * `secret_cert` - The signer's secret key
+/// * `secret_cert` - The signer's secret key (armored or binary)
 /// * `input` - Path to the file to sign
 /// * `output` - Path to write the signed file
 /// * `password` - Password to unlock the secret key
+///
+/// # Example
+///
+/// ```no_run
+/// use wecanencrypt::sign_file;
+///
+/// let secret_key = std::fs::read("secret.asc").unwrap();
+/// sign_file(&secret_key, "document.pdf", "document.pdf.sig", "password").unwrap();
+/// ```
 pub fn sign_file(
     secret_cert: &[u8],
     input: impl AsRef<Path>,
