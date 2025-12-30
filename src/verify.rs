@@ -188,17 +188,25 @@ fn extract_cleartext(public_key: &SignedPublicKey, signed_message: &[u8]) -> Res
 
     // Try verifying against primary key
     if msg.verify(&public_key.primary_key).is_ok() {
-        return Ok(Some(msg.signed_text().into_bytes()));
+        // Normalize CRLF to LF (OpenPGP cleartext signatures use CRLF internally)
+        let content = normalize_line_endings(&msg.signed_text());
+        return Ok(Some(content));
     }
 
     // Try verifying against subkeys
     for subkey in &public_key.public_subkeys {
         if msg.verify(&subkey.key).is_ok() {
-            return Ok(Some(msg.signed_text().into_bytes()));
+            let content = normalize_line_endings(&msg.signed_text());
+            return Ok(Some(content));
         }
     }
 
     Ok(None)
+}
+
+/// Normalize CRLF line endings to LF.
+fn normalize_line_endings(text: &str) -> Vec<u8> {
+    text.replace("\r\n", "\n").into_bytes()
 }
 
 /// Verify an inline signed message.

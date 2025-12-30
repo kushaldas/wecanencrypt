@@ -12,9 +12,19 @@ pub enum CipherSuite {
     Rsa2k,
     /// RSA with 4096-bit keys
     Rsa4k,
-    /// Curve25519 (default, recommended)
+    /// Curve25519 legacy format (EdDSA for signing, ECDH for encryption)
+    /// This is the pre-RFC 9580 format, widely compatible.
     #[default]
     Cv25519,
+    /// Modern Curve25519 (Ed25519 for signing, X25519 for encryption)
+    /// RFC 9580 native format - better security properties but less compatible.
+    Cv25519Modern,
+    /// NIST P-256 curve (ECDSA for signing, ECDH for encryption)
+    NistP256,
+    /// NIST P-384 curve (ECDSA for signing, ECDH for encryption)
+    NistP384,
+    /// NIST P-521 curve (ECDSA for signing, ECDH for encryption)
+    NistP521,
 }
 
 impl CipherSuite {
@@ -23,8 +33,25 @@ impl CipherSuite {
         match s.to_lowercase().as_str() {
             "rsa2k" | "rsa2048" => Some(CipherSuite::Rsa2k),
             "rsa4k" | "rsa4096" => Some(CipherSuite::Rsa4k),
-            "cv25519" | "curve25519" | "ed25519" => Some(CipherSuite::Cv25519),
+            "cv25519" | "curve25519" | "ed25519" | "ed25519legacy" => Some(CipherSuite::Cv25519),
+            "cv25519modern" | "curve25519modern" | "x25519" => Some(CipherSuite::Cv25519Modern),
+            "nistp256" | "p256" | "secp256r1" => Some(CipherSuite::NistP256),
+            "nistp384" | "p384" | "secp384r1" => Some(CipherSuite::NistP384),
+            "nistp521" | "p521" | "secp521r1" => Some(CipherSuite::NistP521),
             _ => None,
+        }
+    }
+
+    /// Get a human-readable name for the cipher suite.
+    pub fn name(&self) -> &'static str {
+        match self {
+            CipherSuite::Rsa2k => "RSA 2048",
+            CipherSuite::Rsa4k => "RSA 4096",
+            CipherSuite::Cv25519 => "Curve25519 (Legacy)",
+            CipherSuite::Cv25519Modern => "Curve25519 (Modern)",
+            CipherSuite::NistP256 => "NIST P-256",
+            CipherSuite::NistP384 => "NIST P-384",
+            CipherSuite::NistP521 => "NIST P-521",
         }
     }
 }
@@ -272,6 +299,16 @@ impl CipherSuite {
             CipherSuite::Rsa2k => pgp::composed::KeyType::Rsa(2048),
             CipherSuite::Rsa4k => pgp::composed::KeyType::Rsa(4096),
             CipherSuite::Cv25519 => pgp::composed::KeyType::Ed25519Legacy,
+            CipherSuite::Cv25519Modern => pgp::composed::KeyType::Ed25519,
+            CipherSuite::NistP256 => {
+                pgp::composed::KeyType::ECDSA(pgp::crypto::ecc_curve::ECCCurve::P256)
+            }
+            CipherSuite::NistP384 => {
+                pgp::composed::KeyType::ECDSA(pgp::crypto::ecc_curve::ECCCurve::P384)
+            }
+            CipherSuite::NistP521 => {
+                pgp::composed::KeyType::ECDSA(pgp::crypto::ecc_curve::ECCCurve::P521)
+            }
         }
     }
 
@@ -280,7 +317,19 @@ impl CipherSuite {
         match self {
             CipherSuite::Rsa2k => pgp::composed::KeyType::Rsa(2048),
             CipherSuite::Rsa4k => pgp::composed::KeyType::Rsa(4096),
-            CipherSuite::Cv25519 => pgp::composed::KeyType::ECDH(pgp::crypto::ecc_curve::ECCCurve::Curve25519),
+            CipherSuite::Cv25519 => {
+                pgp::composed::KeyType::ECDH(pgp::crypto::ecc_curve::ECCCurve::Curve25519)
+            }
+            CipherSuite::Cv25519Modern => pgp::composed::KeyType::X25519,
+            CipherSuite::NistP256 => {
+                pgp::composed::KeyType::ECDH(pgp::crypto::ecc_curve::ECCCurve::P256)
+            }
+            CipherSuite::NistP384 => {
+                pgp::composed::KeyType::ECDH(pgp::crypto::ecc_curve::ECCCurve::P384)
+            }
+            CipherSuite::NistP521 => {
+                pgp::composed::KeyType::ECDH(pgp::crypto::ecc_curve::ECCCurve::P521)
+            }
         }
     }
 }

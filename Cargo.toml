@@ -2,10 +2,8 @@
 name = "wecanencrypt"
 version = "0.1.0"
 edition = "2021"
-authors = ["Kushal Das <mail@kushaldas.in>"]
-repository = "https://github.com/kushaldas/wecanencrypt"
-license = "MIT"
-description = "Pure Rust OpenPGP library for encryption, signing, and key management using rpgp."
+license = "GPL-3.0-or-later"
+description = "Pure Rust OpenPGP library for encryption, signing, and key management"
 keywords = ["openpgp", "encryption", "cryptography", "pgp", "gpg"]
 categories = ["cryptography", "authentication"]
 

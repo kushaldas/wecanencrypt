@@ -6,13 +6,35 @@
 use std::io::Cursor;
 use std::path::Path;
 
-use pgp::composed::{CleartextSignedMessage, DetachedSignature, MessageBuilder};
+use pgp::composed::{CleartextSignedMessage, DetachedSignature, MessageBuilder, SignedSecretKey};
 use pgp::crypto::hash::HashAlgorithm;
-use pgp::types::Password;
+use pgp::types::{KeyDetails, Password, PublicParams};
 use rand::thread_rng;
 
 use crate::error::{Error, Result};
 use crate::internal::parse_secret_key;
+
+/// Select appropriate hash algorithm based on key type.
+/// ECDSA keys require hash algorithms that match or exceed their security level.
+fn select_hash_for_key(secret_key: &SignedSecretKey) -> HashAlgorithm {
+    let params = secret_key.primary_key.public_params();
+
+    match params {
+        PublicParams::ECDSA(ecdsa) => {
+            // Match hash size to curve size
+            use pgp::types::EcdsaPublicParams;
+            match ecdsa {
+                EcdsaPublicParams::P256 { .. } => HashAlgorithm::Sha256,
+                EcdsaPublicParams::P384 { .. } => HashAlgorithm::Sha384,
+                EcdsaPublicParams::P521 { .. } => HashAlgorithm::Sha512,
+                _ => HashAlgorithm::Sha256,
+            }
+        }
+        PublicParams::EdDSALegacy(_) | PublicParams::Ed25519(_) => HashAlgorithm::Sha256,
+        PublicParams::RSA(_) => HashAlgorithm::Sha256,
+        _ => HashAlgorithm::Sha256,
+    }
+}
 
 /// Sign bytes with a binary signature (wrapping the message).
 ///
@@ -56,13 +78,14 @@ pub fn sign_bytes_detached(secret_cert: &[u8], data: &[u8], password: &str) -> R
     let password: Password = password.into();
 
     let mut rng = thread_rng();
+    let hash_alg = select_hash_for_key(&secret_key);
 
     // Use the primary key for signing
     let signature = DetachedSignature::sign_binary_data(
         &mut rng,
         &secret_key.primary_key,
         &password,
-        HashAlgorithm::Sha256,
+        hash_alg,
         Cursor::new(data),
     )
     .map_err(|e| Error::Crypto(e.to_string()))?;
@@ -137,6 +160,7 @@ fn sign_bytes_internal(
 ) -> Result<Vec<u8>> {
     let secret_key = parse_secret_key(secret_cert)?;
     let password_obj: Password = password.into();
+    let hash_alg = select_hash_for_key(&secret_key);
 
     let mut rng = thread_rng();
 
@@ -153,7 +177,7 @@ fn sign_bytes_internal(
         // For regular signed messages using MessageBuilder
         let mut builder = MessageBuilder::from_bytes("", data.to_vec());
 
-        builder.sign(&secret_key.primary_key, password_obj, HashAlgorithm::Sha256);
+        builder.sign(&secret_key.primary_key, password_obj, hash_alg);
 
         builder
             .to_armored_string(&mut rng, None.into())

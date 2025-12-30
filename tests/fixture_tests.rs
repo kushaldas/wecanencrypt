@@ -903,6 +903,263 @@ mod certification {
 }
 
 // =============================================================================
+// New Cipher Suite Tests (NIST curves and Modern Curve25519)
+// =============================================================================
+
+mod new_cipher_suites {
+    use super::*;
+    use wecanencrypt::{create_key, CipherSuite, SubkeyFlags};
+
+    const PASSWORD: &str = "testpassword";
+
+    /// Helper to test a cipher suite: generate key, encrypt/decrypt, sign/verify
+    fn test_cipher_suite(suite: CipherSuite, name: &str) {
+        // Generate a new key with this cipher suite
+        let key = create_key(
+            PASSWORD,
+            &[&format!("{} Test <{}@example.com>", name, name.to_lowercase())],
+            suite,
+            None, None, None,
+            SubkeyFlags::all(),
+            false,
+            true,
+        ).expect(&format!("Failed to generate {} key", name));
+
+        // Parse the generated key
+        let info = parse_cert_bytes(&key.secret_key, true)
+            .expect(&format!("Failed to parse {} secret key", name));
+        assert!(info.is_secret);
+        assert!(!info.subkeys.is_empty(), "{} key should have subkeys", name);
+
+        // Test encryption/decryption
+        let plaintext = b"Hello from cipher suite test!";
+        let ciphertext = encrypt_bytes(key.public_key.as_bytes(), plaintext, true)
+            .expect(&format!("Failed to encrypt with {} key", name));
+        let decrypted = decrypt_bytes(&key.secret_key, &ciphertext, PASSWORD)
+            .expect(&format!("Failed to decrypt with {} key", name));
+        assert_eq!(decrypted, plaintext, "{} encryption/decryption failed", name);
+
+        // Test signing/verification
+        let message = b"Message to sign with new cipher suite";
+        let signed = sign_bytes(&key.secret_key, message, PASSWORD)
+            .expect(&format!("Failed to sign with {} key", name));
+        let valid = verify_bytes(key.public_key.as_bytes(), &signed)
+            .expect(&format!("Failed to verify {} signature", name));
+        assert!(valid, "{} signature verification failed", name);
+    }
+
+    #[test]
+    fn test_nistp256_key_generation_and_operations() {
+        test_cipher_suite(CipherSuite::NistP256, "NIST-P256");
+    }
+
+    #[test]
+    fn test_nistp384_key_generation_and_operations() {
+        test_cipher_suite(CipherSuite::NistP384, "NIST-P384");
+    }
+
+    #[test]
+    fn test_nistp521_key_generation_and_operations() {
+        test_cipher_suite(CipherSuite::NistP521, "NIST-P521");
+    }
+
+    #[test]
+    fn test_cv25519_modern_key_generation_and_operations() {
+        test_cipher_suite(CipherSuite::Cv25519Modern, "Cv25519Modern");
+    }
+
+    /// Test that fixture keys can be parsed and used
+    #[test]
+    fn test_parse_fixture_nistp256() {
+        let public_path = store_dir().join("nistp256_public.asc");
+        let secret_path = store_dir().join("nistp256_secret.asc");
+
+        let public = read_file(&public_path);
+        let secret = read_file(&secret_path);
+
+        let pub_info = parse_cert_bytes(&public, true).unwrap();
+        let sec_info = parse_cert_bytes(&secret, true).unwrap();
+
+        assert!(!pub_info.is_secret);
+        assert!(sec_info.is_secret);
+        assert_eq!(pub_info.fingerprint, sec_info.fingerprint);
+
+        // Verify algorithm info
+        let details = get_key_cipher_details(&public).unwrap();
+        assert!(details.iter().any(|d| d.algorithm.contains("ECDSA") || d.algorithm.contains("P-256")));
+    }
+
+    #[test]
+    fn test_parse_fixture_nistp384() {
+        let public_path = store_dir().join("nistp384_public.asc");
+        let secret_path = store_dir().join("nistp384_secret.asc");
+
+        let public = read_file(&public_path);
+        let secret = read_file(&secret_path);
+
+        let pub_info = parse_cert_bytes(&public, true).unwrap();
+        let sec_info = parse_cert_bytes(&secret, true).unwrap();
+
+        assert!(!pub_info.is_secret);
+        assert!(sec_info.is_secret);
+        assert_eq!(pub_info.fingerprint, sec_info.fingerprint);
+    }
+
+    #[test]
+    fn test_parse_fixture_nistp521() {
+        let public_path = store_dir().join("nistp521_public.asc");
+        let secret_path = store_dir().join("nistp521_secret.asc");
+
+        let public = read_file(&public_path);
+        let secret = read_file(&secret_path);
+
+        let pub_info = parse_cert_bytes(&public, true).unwrap();
+        let sec_info = parse_cert_bytes(&secret, true).unwrap();
+
+        assert!(!pub_info.is_secret);
+        assert!(sec_info.is_secret);
+        assert_eq!(pub_info.fingerprint, sec_info.fingerprint);
+    }
+
+    #[test]
+    fn test_parse_fixture_cv25519modern() {
+        let public_path = store_dir().join("cv25519modern_public.asc");
+        let secret_path = store_dir().join("cv25519modern_secret.asc");
+
+        let public = read_file(&public_path);
+        let secret = read_file(&secret_path);
+
+        let pub_info = parse_cert_bytes(&public, true).unwrap();
+        let sec_info = parse_cert_bytes(&secret, true).unwrap();
+
+        assert!(!pub_info.is_secret);
+        assert!(sec_info.is_secret);
+        assert_eq!(pub_info.fingerprint, sec_info.fingerprint);
+
+        // Verify algorithm info shows Ed25519/X25519
+        let details = get_key_cipher_details(&public).unwrap();
+        assert!(details.iter().any(|d| d.algorithm.contains("Ed25519") || d.algorithm.contains("X25519")));
+    }
+
+    /// Test encrypt/decrypt with fixture keys
+    #[test]
+    fn test_encrypt_decrypt_with_fixture_nistp256() {
+        let public_path = store_dir().join("nistp256_public.asc");
+        let secret_path = store_dir().join("nistp256_secret.asc");
+
+        let public = read_file(&public_path);
+        let secret = read_file(&secret_path);
+
+        let plaintext = b"Testing NIST P-256 encryption";
+        let ciphertext = encrypt_bytes(&public, plaintext, true).unwrap();
+        let decrypted = decrypt_bytes(&secret, &ciphertext, PASSWORD).unwrap();
+
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn test_encrypt_decrypt_with_fixture_cv25519modern() {
+        let public_path = store_dir().join("cv25519modern_public.asc");
+        let secret_path = store_dir().join("cv25519modern_secret.asc");
+
+        let public = read_file(&public_path);
+        let secret = read_file(&secret_path);
+
+        let plaintext = b"Testing modern Curve25519 encryption";
+        let ciphertext = encrypt_bytes(&public, plaintext, true).unwrap();
+        let decrypted = decrypt_bytes(&secret, &ciphertext, PASSWORD).unwrap();
+
+        assert_eq!(decrypted, plaintext);
+    }
+
+    /// Test sign/verify with fixture keys
+    #[test]
+    fn test_sign_verify_with_fixture_nistp384() {
+        let public_path = store_dir().join("nistp384_public.asc");
+        let secret_path = store_dir().join("nistp384_secret.asc");
+
+        let public = read_file(&public_path);
+        let secret = read_file(&secret_path);
+
+        let message = b"Testing NIST P-384 signing";
+        let signed = sign_bytes(&secret, message, PASSWORD).unwrap();
+        let valid = verify_bytes(&public, &signed).unwrap();
+
+        assert!(valid);
+    }
+
+    #[test]
+    fn test_sign_verify_with_fixture_nistp521() {
+        let public_path = store_dir().join("nistp521_public.asc");
+        let secret_path = store_dir().join("nistp521_secret.asc");
+
+        let public = read_file(&public_path);
+        let secret = read_file(&secret_path);
+
+        let message = b"Testing NIST P-521 signing";
+        let signed = sign_bytes(&secret, message, PASSWORD).unwrap();
+        let valid = verify_bytes(&public, &signed).unwrap();
+
+        assert!(valid);
+    }
+
+    /// Test detached signatures with new cipher suites
+    #[test]
+    fn test_detached_signature_nistp256() {
+        let public_path = store_dir().join("nistp256_public.asc");
+        let secret_path = store_dir().join("nistp256_secret.asc");
+
+        let public = read_file(&public_path);
+        let secret = read_file(&secret_path);
+
+        let data = b"Data for detached signature test";
+        let signature = sign_bytes_detached(&secret, data, PASSWORD).unwrap();
+        let valid = verify_bytes_detached(&public, data, signature.as_bytes()).unwrap();
+
+        assert!(valid);
+    }
+
+    /// Test cleartext signatures with modern Curve25519
+    #[test]
+    fn test_cleartext_signature_cv25519modern() {
+        let public_path = store_dir().join("cv25519modern_public.asc");
+        let secret_path = store_dir().join("cv25519modern_secret.asc");
+
+        let public = read_file(&public_path);
+        let secret = read_file(&secret_path);
+
+        let text = b"Cleartext message for modern Curve25519";
+        let signed = sign_bytes_cleartext(&secret, text, PASSWORD).unwrap();
+        let valid = verify_bytes(&public, &signed).unwrap();
+
+        assert!(valid);
+
+        // Extract and verify content
+        let extracted = verify_and_extract_bytes(&public, &signed).unwrap();
+        assert_eq!(extracted, text);
+    }
+
+    /// Test cipher suite name parsing
+    #[test]
+    fn test_cipher_suite_from_str() {
+        assert_eq!(CipherSuite::from_str("nistp256"), Some(CipherSuite::NistP256));
+        assert_eq!(CipherSuite::from_str("P256"), Some(CipherSuite::NistP256));
+        assert_eq!(CipherSuite::from_str("secp256r1"), Some(CipherSuite::NistP256));
+
+        assert_eq!(CipherSuite::from_str("nistp384"), Some(CipherSuite::NistP384));
+        assert_eq!(CipherSuite::from_str("P384"), Some(CipherSuite::NistP384));
+
+        assert_eq!(CipherSuite::from_str("nistp521"), Some(CipherSuite::NistP521));
+        assert_eq!(CipherSuite::from_str("P521"), Some(CipherSuite::NistP521));
+
+        assert_eq!(CipherSuite::from_str("cv25519modern"), Some(CipherSuite::Cv25519Modern));
+        assert_eq!(CipherSuite::from_str("x25519"), Some(CipherSuite::Cv25519Modern));
+
+        assert_eq!(CipherSuite::from_str("invalid"), None);
+    }
+}
+
+// =============================================================================
 // Network Key Fetching Tests (requires network feature and network access)
 // =============================================================================
 

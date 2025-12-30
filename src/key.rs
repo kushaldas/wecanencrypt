@@ -7,10 +7,10 @@ use chrono::{DateTime, Utc};
 use pgp::composed::{
     SecretKeyParamsBuilder, SignedPublicKey, SignedSecretKey, SubkeyParamsBuilder,
 };
-use pgp::packet::{SignatureConfig, SignatureType, Subpacket, SubpacketData};
+use pgp::packet::{PacketTrait, SignatureConfig, SignatureType, Subpacket, SubpacketData};
 use pgp::types::{KeyDetails, KeyVersion, Password, SignedUser, Timestamp};
 use rand::thread_rng;
-use std::time::Duration as StdDuration;
+use std::time::SystemTime;
 
 use crate::error::{Error, Result};
 use crate::internal::{
@@ -229,8 +229,8 @@ pub fn get_pub_key(cert_data: &[u8]) -> Result<String> {
 
 /// Update the expiration time for specific subkeys.
 ///
-/// Note: This is a simplified implementation. Full subkey management
-/// would require more complex signature manipulation.
+/// Creates new binding signatures for the specified subkeys with
+/// the updated expiration time.
 ///
 /// # Arguments
 /// * `cert_data` - The certificate data (with secret key)
@@ -241,21 +241,199 @@ pub fn get_pub_key(cert_data: &[u8]) -> Result<String> {
 /// # Returns
 /// The updated certificate.
 pub fn update_subkeys_expiry(
-    _cert_data: &[u8],
-    _fingerprints: &[&str],
-    _expiry_time: DateTime<Utc>,
-    _password: &str,
+    cert_data: &[u8],
+    fingerprints: &[&str],
+    expiry_time: DateTime<Utc>,
+    password: &str,
 ) -> Result<Vec<u8>> {
-    // TODO: rpgp doesn't have a straightforward API for modifying existing keys
-    // This would require manually creating new binding signatures
-    Err(Error::InvalidInput(
-        "Subkey expiry update not yet implemented for rpgp".to_string(),
-    ))
+    let mut rng = thread_rng();
+    let secret_key = parse_secret_key(cert_data)?;
+    let password = Password::from(password);
+
+    // Normalize fingerprints for comparison (uppercase, no spaces)
+    let normalized_fps: Vec<String> = fingerprints
+        .iter()
+        .map(|fp| fp.to_uppercase().replace(" ", ""))
+        .collect();
+
+    // Update public subkeys
+    let mut new_public_subkeys = Vec::new();
+    for subkey in &secret_key.public_subkeys {
+        let subkey_fp = fingerprint_to_hex(&subkey.key);
+        let should_update = normalized_fps.iter().any(|fp| subkey_fp.contains(fp) || fp.contains(&subkey_fp));
+
+        if should_update {
+            // Calculate duration from subkey creation to expiry
+            let creation_systime: SystemTime = subkey.key.created_at().into();
+            let subkey_creation: DateTime<Utc> = creation_systime.into();
+            let duration = expiry_time.signed_duration_since(subkey_creation);
+            if duration.num_seconds() <= 0 {
+                return Err(Error::InvalidInput(
+                    "Expiry time must be after subkey creation time".to_string(),
+                ));
+            }
+            let expiry_duration = pgp::types::Duration::from_secs(duration.num_seconds() as u32);
+
+            // Get existing key flags
+            let key_flags = subkey
+                .signatures
+                .first()
+                .map(|sig| sig.key_flags())
+                .unwrap_or_default();
+
+            // Build new binding signature
+            let mut hashed_subpackets = vec![
+                Subpacket::regular(SubpacketData::SignatureCreationTime(Timestamp::now()))
+                    .map_err(|e| Error::Crypto(e.to_string()))?,
+                Subpacket::regular(SubpacketData::IssuerFingerprint(
+                    secret_key.primary_key.fingerprint(),
+                ))
+                .map_err(|e| Error::Crypto(e.to_string()))?,
+                Subpacket::regular(SubpacketData::KeyFlags(key_flags))
+                    .map_err(|e| Error::Crypto(e.to_string()))?,
+                Subpacket::regular(SubpacketData::KeyExpirationTime(expiry_duration))
+                    .map_err(|e| Error::Crypto(e.to_string()))?,
+            ];
+
+            let mut config = SignatureConfig::from_key(
+                &mut rng,
+                &secret_key.primary_key,
+                SignatureType::SubkeyBinding,
+            )
+            .map_err(|e| Error::Crypto(e.to_string()))?;
+
+            config.hashed_subpackets = hashed_subpackets;
+
+            if secret_key.primary_key.version() <= KeyVersion::V4 {
+                config.unhashed_subpackets = vec![Subpacket::regular(SubpacketData::IssuerKeyId(
+                    secret_key.primary_key.legacy_key_id(),
+                ))
+                .map_err(|e| Error::Crypto(e.to_string()))?];
+            }
+
+            let sig = config
+                .sign_subkey_binding(
+                    &secret_key.primary_key,
+                    &secret_key.primary_key.public_key(),
+                    &password,
+                    &subkey.key,
+                )
+                .map_err(|e| Error::Crypto(e.to_string()))?;
+
+            // Create new subkey with updated signature
+            let mut new_sigs = vec![sig];
+            // Keep any non-binding signatures (like revocations)
+            for existing_sig in &subkey.signatures {
+                if existing_sig.typ() != Some(SignatureType::SubkeyBinding) {
+                    new_sigs.push(existing_sig.clone());
+                }
+            }
+
+            new_public_subkeys.push(pgp::composed::SignedPublicSubKey {
+                key: subkey.key.clone(),
+                signatures: new_sigs,
+            });
+        } else {
+            new_public_subkeys.push(subkey.clone());
+        }
+    }
+
+    // Update secret subkeys similarly
+    let mut new_secret_subkeys = Vec::new();
+    for subkey in &secret_key.secret_subkeys {
+        let subkey_fp = fingerprint_to_hex(&subkey.key);
+        let should_update = normalized_fps.iter().any(|fp| subkey_fp.contains(fp) || fp.contains(&subkey_fp));
+
+        if should_update {
+            // Calculate duration from subkey creation to expiry
+            let creation_systime: SystemTime = subkey.key.created_at().into();
+            let subkey_creation: DateTime<Utc> = creation_systime.into();
+            let duration = expiry_time.signed_duration_since(subkey_creation);
+            if duration.num_seconds() <= 0 {
+                return Err(Error::InvalidInput(
+                    "Expiry time must be after subkey creation time".to_string(),
+                ));
+            }
+            let expiry_duration = pgp::types::Duration::from_secs(duration.num_seconds() as u32);
+
+            // Get existing key flags
+            let key_flags = subkey
+                .signatures
+                .first()
+                .map(|sig| sig.key_flags())
+                .unwrap_or_default();
+
+            // Build new binding signature
+            let mut hashed_subpackets = vec![
+                Subpacket::regular(SubpacketData::SignatureCreationTime(Timestamp::now()))
+                    .map_err(|e| Error::Crypto(e.to_string()))?,
+                Subpacket::regular(SubpacketData::IssuerFingerprint(
+                    secret_key.primary_key.fingerprint(),
+                ))
+                .map_err(|e| Error::Crypto(e.to_string()))?,
+                Subpacket::regular(SubpacketData::KeyFlags(key_flags))
+                    .map_err(|e| Error::Crypto(e.to_string()))?,
+                Subpacket::regular(SubpacketData::KeyExpirationTime(expiry_duration))
+                    .map_err(|e| Error::Crypto(e.to_string()))?,
+            ];
+
+            let mut config = SignatureConfig::from_key(
+                &mut rng,
+                &secret_key.primary_key,
+                SignatureType::SubkeyBinding,
+            )
+            .map_err(|e| Error::Crypto(e.to_string()))?;
+
+            config.hashed_subpackets = hashed_subpackets;
+
+            if secret_key.primary_key.version() <= KeyVersion::V4 {
+                config.unhashed_subpackets = vec![Subpacket::regular(SubpacketData::IssuerKeyId(
+                    secret_key.primary_key.legacy_key_id(),
+                ))
+                .map_err(|e| Error::Crypto(e.to_string()))?];
+            }
+
+            let sig = config
+                .sign_subkey_binding(
+                    &secret_key.primary_key,
+                    &secret_key.primary_key.public_key(),
+                    &password,
+                    &subkey.key.public_key(),
+                )
+                .map_err(|e| Error::Crypto(e.to_string()))?;
+
+            // Create new subkey with updated signature
+            let mut new_sigs = vec![sig];
+            for existing_sig in &subkey.signatures {
+                if existing_sig.typ() != Some(SignatureType::SubkeyBinding) {
+                    new_sigs.push(existing_sig.clone());
+                }
+            }
+
+            new_secret_subkeys.push(pgp::composed::SignedSecretSubKey {
+                key: subkey.key.clone(),
+                signatures: new_sigs,
+            });
+        } else {
+            new_secret_subkeys.push(subkey.clone());
+        }
+    }
+
+    // Rebuild the secret key with updated subkeys
+    let updated_key = SignedSecretKey::new(
+        secret_key.primary_key.clone(),
+        secret_key.details.clone(),
+        new_public_subkeys,
+        new_secret_subkeys,
+    );
+
+    secret_key_to_bytes(&updated_key)
 }
 
 /// Update the primary key expiration time.
 ///
-/// Note: This is a simplified implementation.
+/// This creates new self-certification signatures for all user IDs with
+/// the updated expiration time.
 ///
 /// # Arguments
 /// * `cert_data` - The certificate data (with secret key)
@@ -265,14 +443,100 @@ pub fn update_subkeys_expiry(
 /// # Returns
 /// The updated certificate.
 pub fn update_primary_expiry(
-    _cert_data: &[u8],
-    _expiry_time: DateTime<Utc>,
-    _password: &str,
+    cert_data: &[u8],
+    expiry_time: DateTime<Utc>,
+    password: &str,
 ) -> Result<Vec<u8>> {
-    // TODO: rpgp doesn't have a straightforward API for modifying existing keys
-    Err(Error::InvalidInput(
-        "Primary key expiry update not yet implemented for rpgp".to_string(),
-    ))
+    let mut rng = thread_rng();
+    let secret_key = parse_secret_key(cert_data)?;
+    let password = Password::from(password);
+
+    // Calculate the duration from key creation to expiry
+    let creation_systime: SystemTime = secret_key.primary_key.created_at().into();
+    let key_creation: DateTime<Utc> = creation_systime.into();
+    let duration = expiry_time.signed_duration_since(key_creation);
+    if duration.num_seconds() <= 0 {
+        return Err(Error::InvalidInput(
+            "Expiry time must be after key creation time".to_string(),
+        ));
+    }
+    let expiry_duration = pgp::types::Duration::from_secs(duration.num_seconds() as u32);
+
+    // Create new self-certification signatures for each user ID
+    let mut new_users: Vec<SignedUser> = Vec::new();
+
+    for signed_user in &secret_key.details.users {
+        // Build the hashed subpackets including expiry
+        let mut hashed_subpackets = vec![
+            Subpacket::regular(SubpacketData::SignatureCreationTime(Timestamp::now()))
+                .map_err(|e| Error::Crypto(e.to_string()))?,
+            Subpacket::regular(SubpacketData::IssuerFingerprint(
+                secret_key.primary_key.fingerprint(),
+            ))
+            .map_err(|e| Error::Crypto(e.to_string()))?,
+            Subpacket::regular(SubpacketData::KeyExpirationTime(expiry_duration))
+                .map_err(|e| Error::Crypto(e.to_string()))?,
+        ];
+
+        // Copy key flags from existing signature if present
+        if let Some(existing_sig) = signed_user.signatures.first() {
+            let flags = existing_sig.key_flags();
+            hashed_subpackets.push(
+                Subpacket::regular(SubpacketData::KeyFlags(flags))
+                    .map_err(|e| Error::Crypto(e.to_string()))?,
+            );
+        }
+
+        // Create the signature config
+        let mut config = SignatureConfig::from_key(&mut rng, &secret_key.primary_key, SignatureType::CertPositive)
+            .map_err(|e| Error::Crypto(e.to_string()))?;
+
+        config.hashed_subpackets = hashed_subpackets;
+
+        if secret_key.primary_key.version() <= KeyVersion::V4 {
+            config.unhashed_subpackets = vec![Subpacket::regular(SubpacketData::IssuerKeyId(
+                secret_key.primary_key.legacy_key_id(),
+            ))
+            .map_err(|e| Error::Crypto(e.to_string()))?];
+        }
+
+        // Sign the user ID
+        let sig = config
+            .sign_certification(
+                &secret_key.primary_key,
+                &secret_key.primary_key.public_key(),
+                &password,
+                signed_user.id.tag(),
+                &signed_user.id,
+            )
+            .map_err(|e| Error::Crypto(e.to_string()))?;
+
+        // Combine with existing signatures (add new sig, keep existing third-party certs)
+        let mut combined_sigs = vec![sig];
+        // Keep third-party certifications but not old self-signatures
+        for existing_sig in &signed_user.signatures {
+            if existing_sig.typ() != Some(SignatureType::CertPositive) {
+                combined_sigs.push(existing_sig.clone());
+            }
+        }
+
+        new_users.push(SignedUser::new(signed_user.id.clone(), combined_sigs));
+    }
+
+    // Rebuild the secret key with new signatures
+    let updated_key = SignedSecretKey::new(
+        secret_key.primary_key.clone(),
+        pgp::composed::SignedKeyDetails::new(
+            secret_key.details.revocation_signatures.clone(),
+            secret_key.details.direct_signatures.clone(),
+            new_users,
+            secret_key.details.user_attributes.clone(),
+        ),
+        secret_key.public_subkeys.clone(),
+        secret_key.secret_subkeys.clone(),
+    );
+
+    secret_key_to_bytes(&updated_key)
 }
 
 /// Add a new User ID to a certificate.
