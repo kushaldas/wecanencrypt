@@ -1651,6 +1651,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 [[package]]
 name = "pgp"
 version = "0.18.0"
+source = "git+https://github.com/kushaldas/rpgp?branch=certcasual#6534509f4eb2c1c1b0b4a29dce6cc503dfedb5ce"
 dependencies = [
  "aead",
  "aes",

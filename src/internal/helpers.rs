@@ -4,7 +4,6 @@ use std::io::Cursor;
 
 use pgp::composed::{SignedSecretKey, SignedPublicKey, Deserializable};
 use pgp::ser::Serialize;
-use pgp::armor::BlockType;
 use pgp::types::KeyDetails;
 
 use crate::error::{Error, Result};
@@ -25,18 +24,26 @@ pub(crate) fn parse_secret_key(data: &[u8]) -> Result<SignedSecretKey> {
 }
 
 /// Parse a public key from bytes (armored or binary).
+/// Also handles secret key data by extracting the public key.
 pub(crate) fn parse_public_key(data: &[u8]) -> Result<SignedPublicKey> {
-    // Try armored first, then binary
+    // Try armored public key first
     let cursor = Cursor::new(data);
-    match SignedPublicKey::from_armor_single(cursor) {
-        Ok((key, _headers)) => Ok(key),
-        Err(_) => {
-            // Try binary
-            let cursor = Cursor::new(data);
-            SignedPublicKey::from_bytes(cursor)
-                .map_err(|e| Error::Parse(e.to_string()))
-        }
+    if let Ok((key, _headers)) = SignedPublicKey::from_armor_single(cursor) {
+        return Ok(key);
     }
+
+    // Try binary public key
+    let cursor = Cursor::new(data);
+    if let Ok(key) = SignedPublicKey::from_bytes(cursor) {
+        return Ok(key);
+    }
+
+    // Maybe it's a secret key - try to extract public key from it
+    if let Ok(secret_key) = parse_secret_key(data) {
+        return Ok(secret_key.to_public_key());
+    }
+
+    Err(Error::Parse("no matching packet found".to_string()))
 }
 
 /// Parse a certificate from bytes - tries secret key first, then public.
@@ -53,48 +60,6 @@ pub(crate) fn parse_cert(data: &[u8]) -> Result<(SignedPublicKey, bool)> {
     Ok((public_key, false))
 }
 
-/// Parse a secret key from a file.
-pub(crate) fn parse_secret_key_from_file(path: &std::path::Path) -> Result<SignedSecretKey> {
-    let data = std::fs::read(path)?;
-    parse_secret_key(&data)
-}
-
-/// Parse a public key from a file.
-pub(crate) fn parse_public_key_from_file(path: &std::path::Path) -> Result<SignedPublicKey> {
-    let data = std::fs::read(path)?;
-    parse_public_key(&data)
-}
-
-/// Check if data appears to be ASCII-armored.
-pub(crate) fn is_armored(data: &[u8]) -> bool {
-    data.starts_with(b"-----BEGIN PGP")
-}
-
-/// Dearmor data if it's armored, otherwise return as-is.
-pub(crate) fn dearmor(data: &[u8]) -> Result<Vec<u8>> {
-    use std::io::Read;
-    use std::io::BufReader;
-
-    if is_armored(data) {
-        let cursor = BufReader::new(Cursor::new(data));
-        let mut dearmor = pgp::armor::Dearmor::new(cursor);
-        dearmor.read_header()
-            .map_err(|e| Error::MalformedArmor(e.to_string()))?;
-        let mut dearmored = Vec::new();
-        dearmor.read_to_end(&mut dearmored)
-            .map_err(|e| Error::MalformedArmor(e.to_string()))?;
-        Ok(dearmored)
-    } else {
-        Ok(data.to_vec())
-    }
-}
-
-/// Serialize a public key to binary format.
-pub(crate) fn public_key_to_bytes(key: &SignedPublicKey) -> Result<Vec<u8>> {
-    key.to_bytes()
-        .map_err(|e| Error::Crypto(e.to_string()))
-}
-
 /// Serialize a secret key to binary format.
 pub(crate) fn secret_key_to_bytes(key: &SignedSecretKey) -> Result<Vec<u8>> {
     key.to_bytes()
@@ -103,12 +68,6 @@ pub(crate) fn secret_key_to_bytes(key: &SignedSecretKey) -> Result<Vec<u8>> {
 
 /// Serialize a public key to ASCII-armored format.
 pub(crate) fn public_key_to_armored(key: &SignedPublicKey) -> Result<String> {
-    key.to_armored_string(None.into())
-        .map_err(|e| Error::Crypto(e.to_string()))
-}
-
-/// Serialize a secret key to ASCII-armored format.
-pub(crate) fn secret_key_to_armored(key: &SignedSecretKey) -> Result<String> {
     key.to_armored_string(None.into())
         .map_err(|e| Error::Crypto(e.to_string()))
 }
@@ -126,31 +85,6 @@ pub(crate) fn keyid_to_hex(key: &impl KeyDetails) -> String {
 /// Convert a SystemTime to chrono DateTime.
 pub(crate) fn system_time_to_datetime(st: std::time::SystemTime) -> chrono::DateTime<chrono::Utc> {
     chrono::DateTime::from(st)
-}
-
-/// Convert chrono DateTime to SystemTime.
-pub(crate) fn datetime_to_system_time(dt: chrono::DateTime<chrono::Utc>) -> std::time::SystemTime {
-    std::time::UNIX_EPOCH + std::time::Duration::from_secs(dt.timestamp() as u64)
-}
-
-/// Get armor block type for message.
-pub(crate) fn armor_kind_for_message() -> BlockType {
-    BlockType::Message
-}
-
-/// Get armor block type for signature.
-pub(crate) fn armor_kind_for_signature() -> BlockType {
-    BlockType::Signature
-}
-
-/// Get armor block type for public key.
-pub(crate) fn armor_kind_for_public_key() -> BlockType {
-    BlockType::PublicKey
-}
-
-/// Get armor block type for secret key.
-pub(crate) fn armor_kind_for_secret_key() -> BlockType {
-    BlockType::PrivateKey
 }
 
 /// Get a normalized algorithm name for display.

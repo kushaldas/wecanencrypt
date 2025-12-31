@@ -1,6 +1,6 @@
 //! # WeCanEncrypt
 //!
-//! A pure Rust OpenPGP library for encryption, signing, and key management using [rpgp](https://docs.rs/pgp).
+//! A simple Rust OpenPGP library for encryption, signing, and key management using [rpgp](https://docs.rs/pgp).
 //!
 //! This library provides a functional API for common OpenPGP operations,
 //! including:

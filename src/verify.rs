@@ -24,6 +24,7 @@ use crate::internal::parse_public_key;
 ///
 /// # Example
 /// ```ignore
+/// // Ignored: illustrative example with placeholder file paths
 /// let public_key = std::fs::read("signer.asc")?;
 /// let signed_msg = std::fs::read("message.asc")?;
 /// let valid = verify_bytes(&public_key, &signed_msg)?;
@@ -279,7 +280,5 @@ fn extract_inline_signed(public_key: &SignedPublicKey, signed_message: &[u8]) ->
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     // Tests would require key fixtures
 }

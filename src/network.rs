@@ -19,6 +19,7 @@ use crate::internal::parse_cert;
 ///
 /// # Example
 /// ```ignore
+/// // Ignored: requires network access to WKD servers
 /// let cert = fetch_key_by_email("user@example.com")?;
 /// ```
 #[cfg(feature = "network")]
@@ -72,6 +73,7 @@ pub fn fetch_key_by_email(email: &str) -> Result<Vec<u8>> {
 ///
 /// # Example
 /// ```ignore
+/// // Ignored: requires network access to keyservers
 /// let cert = fetch_key_by_fingerprint(
 ///     "A4F388BBB194925AE301F844C52B42177857DD79",
 ///     None,

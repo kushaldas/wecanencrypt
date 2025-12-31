@@ -256,7 +256,5 @@ fn sign_bytes_internal(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     // Tests would require key fixtures
 }

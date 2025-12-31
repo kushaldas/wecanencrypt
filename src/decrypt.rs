@@ -6,7 +6,7 @@
 use std::io::{Cursor, Read};
 use std::path::Path;
 
-use pgp::composed::{Deserializable, Message, SignedSecretKey};
+use pgp::composed::{Message, SignedSecretKey};
 use pgp::types::Password;
 
 use crate::error::{Error, Result};
@@ -147,7 +147,5 @@ pub fn decrypt_reader_to_file<R: Read>(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     // Tests would require key fixtures
 }

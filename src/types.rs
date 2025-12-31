@@ -27,21 +27,25 @@ pub enum CipherSuite {
     NistP521,
 }
 
-impl CipherSuite {
+impl std::str::FromStr for CipherSuite {
+    type Err = String;
+
     /// Parse cipher suite from string (case-insensitive).
-    pub fn from_str(s: &str) -> Option<Self> {
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "rsa2k" | "rsa2048" => Some(CipherSuite::Rsa2k),
-            "rsa4k" | "rsa4096" => Some(CipherSuite::Rsa4k),
-            "cv25519" | "curve25519" | "ed25519" | "ed25519legacy" => Some(CipherSuite::Cv25519),
-            "cv25519modern" | "curve25519modern" | "x25519" => Some(CipherSuite::Cv25519Modern),
-            "nistp256" | "p256" | "secp256r1" => Some(CipherSuite::NistP256),
-            "nistp384" | "p384" | "secp384r1" => Some(CipherSuite::NistP384),
-            "nistp521" | "p521" | "secp521r1" => Some(CipherSuite::NistP521),
-            _ => None,
+            "rsa2k" | "rsa2048" => Ok(CipherSuite::Rsa2k),
+            "rsa4k" | "rsa4096" => Ok(CipherSuite::Rsa4k),
+            "cv25519" | "curve25519" | "ed25519" | "ed25519legacy" => Ok(CipherSuite::Cv25519),
+            "cv25519modern" | "curve25519modern" | "x25519" => Ok(CipherSuite::Cv25519Modern),
+            "nistp256" | "p256" | "secp256r1" => Ok(CipherSuite::NistP256),
+            "nistp384" | "p384" | "secp384r1" => Ok(CipherSuite::NistP384),
+            "nistp521" | "p521" | "secp521r1" => Ok(CipherSuite::NistP521),
+            _ => Err(format!("unknown cipher suite: {}", s)),
         }
     }
+}
 
+impl CipherSuite {
     /// Get a human-readable name for the cipher suite.
     pub fn name(&self) -> &'static str {
         match self {

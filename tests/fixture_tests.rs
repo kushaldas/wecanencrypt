@@ -1142,20 +1142,20 @@ mod new_cipher_suites {
     /// Test cipher suite name parsing
     #[test]
     fn test_cipher_suite_from_str() {
-        assert_eq!(CipherSuite::from_str("nistp256"), Some(CipherSuite::NistP256));
-        assert_eq!(CipherSuite::from_str("P256"), Some(CipherSuite::NistP256));
-        assert_eq!(CipherSuite::from_str("secp256r1"), Some(CipherSuite::NistP256));
+        assert_eq!("nistp256".parse::<CipherSuite>().unwrap(), CipherSuite::NistP256);
+        assert_eq!("P256".parse::<CipherSuite>().unwrap(), CipherSuite::NistP256);
+        assert_eq!("secp256r1".parse::<CipherSuite>().unwrap(), CipherSuite::NistP256);
 
-        assert_eq!(CipherSuite::from_str("nistp384"), Some(CipherSuite::NistP384));
-        assert_eq!(CipherSuite::from_str("P384"), Some(CipherSuite::NistP384));
+        assert_eq!("nistp384".parse::<CipherSuite>().unwrap(), CipherSuite::NistP384);
+        assert_eq!("P384".parse::<CipherSuite>().unwrap(), CipherSuite::NistP384);
 
-        assert_eq!(CipherSuite::from_str("nistp521"), Some(CipherSuite::NistP521));
-        assert_eq!(CipherSuite::from_str("P521"), Some(CipherSuite::NistP521));
+        assert_eq!("nistp521".parse::<CipherSuite>().unwrap(), CipherSuite::NistP521);
+        assert_eq!("P521".parse::<CipherSuite>().unwrap(), CipherSuite::NistP521);
 
-        assert_eq!(CipherSuite::from_str("cv25519modern"), Some(CipherSuite::Cv25519Modern));
-        assert_eq!(CipherSuite::from_str("x25519"), Some(CipherSuite::Cv25519Modern));
+        assert_eq!("cv25519modern".parse::<CipherSuite>().unwrap(), CipherSuite::Cv25519Modern);
+        assert_eq!("x25519".parse::<CipherSuite>().unwrap(), CipherSuite::Cv25519Modern);
 
-        assert_eq!(CipherSuite::from_str("invalid"), None);
+        assert!("invalid".parse::<CipherSuite>().is_err());
     }
 }
 
@@ -1169,9 +1169,7 @@ mod network_fetch {
 
     /// Test fetching Tor Browser Developers key by fingerprint from keys.openpgp.org
     /// Same test as johnnycanencrypt test_fetch_key_by_fingerprint
-    /// This test requires network access and is ignored by default.
     #[test]
-    #[ignore = "requires network access"]
     fn test_fetch_key_by_fingerprint() {
         // Tor Browser Developers key (same as Python test)
         let fingerprint = "EF6E286DDA85EA2A4BA7DE684E2C6E8793298290";
@@ -1188,27 +1186,25 @@ mod network_fetch {
         assert!(uid.contains("Tor Browser Developers"));
     }
 
-    /// Test fetching Anwesha Das's key by email via WKD
-    /// Same test as johnnycanencrypt test_fetch_key_by_email
-    /// This test requires network access and is ignored by default.
+    /// Test fetching Kushal Das's key by email via WKD
+    /// Uses kushaldas.in which has WKD properly configured.
     #[test]
-    #[ignore = "requires network access"]
     fn test_fetch_key_by_email() {
-        // Anwesha Das's email (same as Python test)
-        let email = "anwesha.srkr@gmail.com";
+        // Kushal Das's email (has WKD configured)
+        let email = "mail@kushaldas.in";
 
         let cert_data = fetch_key_by_email(email).unwrap();
 
         // Verify we got a valid certificate
         let info = parse_cert_bytes(&cert_data, true).unwrap();
-        assert_eq!(info.user_ids.len(), 2);
+        assert!(!info.user_ids.is_empty());
 
         // Check fingerprint matches expected
-        assert_eq!(info.fingerprint.to_uppercase(), "2871635BE3B4E5C04F02B848C353BFE051D06C33");
+        assert_eq!(info.fingerprint.to_uppercase(), "A85FF376759C994A8A1168D8D8219C8C43F6C5E1");
 
         // Check name is present
-        let has_name = info.user_ids.iter().any(|uid| uid.contains("Anwesha Das"));
-        assert!(has_name, "Certificate should contain 'Anwesha Das'");
+        let has_name = info.user_ids.iter().any(|uid| uid.contains("Kushal Das"));
+        assert!(has_name, "Certificate should contain 'Kushal Das'");
     }
 }
 

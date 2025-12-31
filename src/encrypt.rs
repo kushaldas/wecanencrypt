@@ -3,7 +3,7 @@
 //! This module provides functions for encrypting data to one or more
 //! OpenPGP recipients.
 
-use std::io::{BufRead, BufReader, Cursor, Read};
+use std::io::{BufReader, Cursor, Read};
 use std::path::Path;
 
 use pgp::armor::Dearmor;
@@ -322,7 +322,5 @@ fn find_valid_encryption_subkeys(key: &SignedPublicKey) -> Result<Vec<pgp::compo
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     // Tests would require key fixtures
 }

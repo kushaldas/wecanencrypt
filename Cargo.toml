@@ -2,8 +2,9 @@
 name = "wecanencrypt"
 version = "0.1.0"
 edition = "2021"
-license = "GPL-3.0-or-later"
-description = "Pure Rust OpenPGP library for encryption, signing, and key management"
+license = "MIT"
+description = "Simple Rust OpenPGP library for encryption, signing, and key management using the rpgp crate."
+repository = "https://github.com/kushaldas/wecanencrypt"
 keywords = ["openpgp", "encryption", "cryptography", "pgp", "gpg"]
 categories = ["cryptography", "authentication"]
 
@@ -14,7 +15,7 @@ network = ["reqwest", "sha1"]
 
 [dependencies]
 # Core OpenPGP implementation (rpgp)
-pgp = { path = "/home/kdas/code/sources/rpgp", default-features = true }
+pgp = { git = "https://github.com/kushaldas/rpgp", branch = "certcasual", default-features = true }
 
 # Random number generation (required for rpgp)
 rand = "0.8"

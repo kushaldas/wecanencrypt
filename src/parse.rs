@@ -26,6 +26,7 @@ use crate::types::{AvailableSubkey, CertificateInfo, KeyCipherDetails, KeyType, 
 ///
 /// # Example
 /// ```ignore
+/// // Ignored: illustrative example with placeholder file path
 /// let cert_data = std::fs::read("key.asc")?;
 /// let info = parse_cert_bytes(&cert_data, false)?;
 /// println!("Fingerprint: {}", info.fingerprint);
@@ -299,7 +300,5 @@ pub fn has_available_signing_subkey(data: &[u8]) -> Result<bool> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     // Tests would require key fixtures
 }

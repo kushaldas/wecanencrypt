@@ -60,6 +60,7 @@ use crate::types::{CertificationType, CipherSuite, GeneratedKey, SubkeyFlags};
 /// Generate an RSA-4096 key (slow, ~10s in release mode):
 ///
 /// ```ignore
+/// // Ignored: RSA-4096 key generation is slow (~10s release, ~600s debug)
 /// use wecanencrypt::{create_key, CipherSuite, SubkeyFlags};
 ///
 /// let key = create_key(
@@ -72,6 +73,7 @@ use crate::types::{CertificationType, CipherSuite, GeneratedKey, SubkeyFlags};
 ///     true,
 /// ).unwrap();
 /// ```
+#[allow(clippy::too_many_arguments)]
 pub fn create_key(
     password: &str,
     user_ids: &[&str],
@@ -81,7 +83,7 @@ pub fn create_key(
     subkeys_expiration: Option<DateTime<Utc>>,
     which_keys: SubkeyFlags,
     can_primary_sign: bool,
-    _can_primary_expire: bool,
+    can_primary_expire: bool,
 ) -> Result<GeneratedKey> {
     if user_ids.is_empty() {
         return Err(Error::InvalidInput(
@@ -183,8 +185,10 @@ pub fn create_key(
         key_params.user_ids(additional_uids);
     }
 
-    if let Some(exp) = primary_expiration {
-        key_params.expiration(Some(exp));
+    if can_primary_expire {
+        if let Some(exp) = primary_expiration {
+            key_params.expiration(Some(exp));
+        }
     }
 
     if !password.is_empty() {
@@ -360,7 +364,7 @@ pub fn update_subkeys_expiry(
                 .unwrap_or_default();
 
             // Build new binding signature
-            let mut hashed_subpackets = vec![
+            let hashed_subpackets = vec![
                 Subpacket::regular(SubpacketData::SignatureCreationTime(Timestamp::now()))
                     .map_err(|e| Error::Crypto(e.to_string()))?,
                 Subpacket::regular(SubpacketData::IssuerFingerprint(
@@ -442,7 +446,7 @@ pub fn update_subkeys_expiry(
                 .unwrap_or_default();
 
             // Build new binding signature
-            let mut hashed_subpackets = vec![
+            let hashed_subpackets = vec![
                 Subpacket::regular(SubpacketData::SignatureCreationTime(Timestamp::now()))
                     .map_err(|e| Error::Crypto(e.to_string()))?,
                 Subpacket::regular(SubpacketData::IssuerFingerprint(
@@ -939,7 +943,7 @@ pub fn certify_key(
         let uid_str = std::str::from_utf8(signed_user.id.id()).unwrap_or("");
 
         // Check if this user ID should be certified
-        let should_certify = uids_to_certify.iter().any(|&u| u == uid_str);
+        let should_certify = uids_to_certify.contains(&uid_str);
 
         if should_certify {
             // Create a certification signature using UserId::sign_third_party

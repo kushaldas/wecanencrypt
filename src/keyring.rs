@@ -24,6 +24,7 @@ use crate::types::CertificateInfo;
 ///
 /// # Example
 /// ```ignore
+/// // Ignored: illustrative example with placeholder file path
 /// let certs = parse_keyring_file("pubring.gpg")?;
 /// for (info, bytes) in certs {
 ///     println!("Key: {} - {}", info.fingerprint, info.user_ids.first().unwrap_or(&"".to_string()));
@@ -76,6 +77,7 @@ pub fn parse_keyring_bytes(data: &[u8]) -> Result<Vec<(CertificateInfo, Vec<u8>)
 ///
 /// # Example
 /// ```ignore
+/// // Ignored: illustrative example with placeholder file paths
 /// let cert1 = std::fs::read("key1.asc")?;
 /// let cert2 = std::fs::read("key2.asc")?;
 /// export_keyring_file(&[&cert1, &cert2], "combined.gpg")?;
@@ -156,7 +158,5 @@ pub fn merge_keys(cert_data: &[u8], new_cert_data: &[u8], force: bool) -> Result
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     // Tests would require key fixtures
 }

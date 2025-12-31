@@ -915,7 +915,8 @@ fn test_keystore_schema_upgrade() {
     // Verify the store works after upgrade
     // The old database should have keys that are now accessible
     let certs = store.list_certs().unwrap();
+    let count = store.count().unwrap();
 
-    // Verify we can use the store normally after upgrade
-    assert!(store.count().unwrap() >= 0);
+    // Verify count matches list length (store is consistent after upgrade)
+    assert_eq!(certs.len(), count);
 }

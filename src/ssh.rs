@@ -20,6 +20,7 @@ use crate::types::{RsaPublicKey, SigningPublicKey};
 ///
 /// # Example
 /// ```ignore
+/// // Ignored: illustrative example with placeholder file path
 /// let cert = std::fs::read("key.asc")?;
 /// let ssh_key = get_ssh_pubkey(&cert, Some("user@example.com"))?;
 /// println!("{}", ssh_key);
@@ -342,11 +343,6 @@ fn base64_encode(data: &[u8]) -> String {
     result
 }
 
-/// Convert bytes to hexadecimal string.
-fn hex_encode(data: &[u8]) -> String {
-    data.iter().map(|b| format!("{:02x}", b)).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -358,10 +354,5 @@ mod tests {
         assert_eq!(base64_encode(b"fo"), "Zm8=");
         assert_eq!(base64_encode(b"foo"), "Zm9v");
         assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
-    }
-
-    #[test]
-    fn test_hex_encode() {
-        assert_eq!(hex_encode(&[0xde, 0xad, 0xbe, 0xef]), "deadbeef");
     }
 }
