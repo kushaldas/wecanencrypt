@@ -6,8 +6,8 @@
 use std::io::{Cursor, Read};
 use std::path::Path;
 
-use pgp::composed::{Message, SignedSecretKey};
-use pgp::types::Password;
+use crate::pgp::composed::{Message, SignedSecretKey};
+use crate::pgp::types::Password;
 
 use crate::error::{Error, Result};
 use crate::internal::parse_secret_key;

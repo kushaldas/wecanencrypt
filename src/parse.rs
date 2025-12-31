@@ -5,8 +5,8 @@
 
 use std::path::Path;
 
-use pgp::composed::SignedPublicKey;
-use pgp::types::KeyDetails;
+use crate::pgp::composed::SignedPublicKey;
+use crate::pgp::types::KeyDetails;
 
 use crate::error::Result;
 use crate::internal::{
@@ -162,7 +162,7 @@ fn extract_subkey_info(public_key: &SignedPublicKey, allow_expired: bool) -> Vec
 }
 
 /// Determine the key type from subkey binding signature.
-fn determine_key_type(subkey: &pgp::composed::SignedPublicSubKey) -> KeyType {
+fn determine_key_type(subkey: &crate::pgp::composed::SignedPublicSubKey) -> KeyType {
     for sig in &subkey.signatures {
         let flags = sig.key_flags();
         if flags.encrypt_comms() || flags.encrypt_storage() {
@@ -227,7 +227,7 @@ pub fn get_all_available_subkeys(data: &[u8]) -> Result<Vec<AvailableSubkey>> {
 /// Internal function to get available subkeys matching a predicate.
 fn get_available_subkeys_by_type<F>(data: &[u8], predicate: F) -> Result<Vec<AvailableSubkey>>
 where
-    F: Fn(&pgp::packet::KeyFlags) -> bool,
+    F: Fn(&crate::pgp::packet::KeyFlags) -> bool,
 {
     let (public_key, _) = parse_cert(data)?;
     let mut available = Vec::new();

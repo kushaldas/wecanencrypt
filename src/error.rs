@@ -87,7 +87,7 @@ pub enum Error {
 
     /// rpgp OpenPGP error
     #[error("OpenPGP error: {0}")]
-    OpenPgp(#[from] pgp::errors::Error),
+    OpenPgp(#[from] crate::pgp::errors::Error),
 
     /// Generic error from anyhow
     #[error("Error: {0}")]

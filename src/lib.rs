@@ -52,6 +52,9 @@
 //! that take certificate data as `&[u8]`. This provides maximum flexibility
 //! and avoids the overhead of wrapper types.
 
+// Internal OpenPGP implementation (rpgp)
+pub mod pgp;
+
 // Modules
 mod error;
 mod types;

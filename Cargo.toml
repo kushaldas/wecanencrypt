@@ -3,36 +3,117 @@ name = "wecanencrypt"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-description = "Simple Rust OpenPGP library for encryption, signing, and key management using the rpgp crate."
+description = "Simple Rust OpenPGP library for encryption, signing, and key management (includes rpgp)."
 repository = "https://github.com/kushaldas/wecanencrypt"
 keywords = ["openpgp", "encryption", "cryptography", "pgp", "gpg"]
 categories = ["cryptography", "authentication"]
 
 [features]
-default = ["keystore", "network"]
+default = ["keystore", "network", "bzip2"]
 keystore = ["rusqlite"]
-network = ["reqwest", "sha1"]
+network = ["reqwest"]
+
+# rpgp features
+bzip2 = ["dep:bzip2"]
+asm = ["dep:sha1-asm", "sha1/asm", "sha2/asm", "md-5/asm"]
+wasm = ["getrandom", "getrandom/js"]
+draft-pqc = ["dep:ml-kem", "dep:ml-dsa", "dep:slh-dsa"]
+malformed-artifact-compat = []
+draft-wussler-openpgp-forwarding = []
 
 [dependencies]
-# Core OpenPGP implementation (rpgp)
-pgp = { git = "https://github.com/kushaldas/rpgp", branch = "certcasual", default-features = true }
+# ===== rpgp dependencies (internal OpenPGP implementation) =====
 
-# Random number generation (required for rpgp)
-rand = "0.8"
-
-# For smallvec in key generation
-smallvec = "1.11"
-
-# Hex encoding
+# General
+base64 = ">=0.21.7, < 0.23"
+buffer-redux = { version = "1.0.0", default-features = false }
+bitfields = "1.0.0"
+bytes = "1.9.0"
+byteorder = "1.4"
+derive_builder = "0.20.0"
 hex = "0.4"
+nom = "8.0"
+log = "0.4.22"
+smallvec = "1.10.0"
+derive_more = { version = "2.0.1", features = ["debug", "display"] }
+regex = "1.7"
+snafu = { version = "0.8.5", features = ["rust_1_81"] }
 
-# RSA key parameter access (for policy checks and SSH export)
-rsa = "0.9"
+# Compression
+flate2 = { version = "1.1.1", default-features = false, features = ["zlib-rs"] }
+bzip2 = { version = "0.6.0", optional = true }
 
-# Elliptic curve crates for ECDSA key access (SSH export)
-p256 = "0.13"
-p384 = "0.13"
-p521 = "0.13"
+# Crypto
+aes = "0.8.4"
+aead = { version = "0.5", features = ["bytes"] }
+argon2 = { version = "0.5", features = ["zeroize", "std"] }
+block-padding = "0.3"
+blowfish = "0.9"
+camellia = "0.1"
+cast5 = "0.11"
+cfb-mode = "0.8.2"
+cipher = "0.4.2"
+const-oid = "0.9.6"
+crc24 = "0.1.6"
+curve25519-dalek = { version = "4.1.3", default-features = false, features = [
+    "alloc",
+    "precomputed-tables",
+    "zeroize",
+] }
+des = "0.8"
+digest = "0.10.7"
+dsa = "0.6.3"
+ecdsa = "0.16.9"
+ed25519-dalek = { version = "2.1.1", default-features = false, features = ["std", "zeroize", "fast", "rand_core"] }
+elliptic-curve = "0.13"
+generic-array = "0.14.6"
+idea = "0.5"
+md-5 = { version = "0.10.5", features = ["oid"] }
+num_enum = ">=0.5.7, < 0.8"
+num-traits = "0.2.19"
+p256 = { version = "0.13", features = ["ecdsa", "ecdh"] }
+p384 = { version = "0.13", features = ["ecdsa"] }
+p521 = { version = "0.13", features = ["ecdsa", "ecdh"] }
+k256 = { version = "0.13", features = ["ecdsa"] }
+rand = "0.8.5"
+ripemd = { version = "0.1.3", features = ["oid"] }
+rsa = "0.9.9"
+sha1 = { version = "0.10.6", features = ["oid"] }
+sha1-asm = { version = "0.5.3", optional = true }
+sha1-checked = { version = "0.10", features = ["zeroize"] }
+sha2 = { version = "0.10.6", features = ["oid"] }
+sha3 = { version = "0.10.8", features = ["oid"] }
+signature = "2.2"
+twofish = "0.7"
+zeroize = { version = "1.8", features = ["zeroize_derive"] }
+getrandom = { version = "0.2", optional = true }
+hkdf = "0.12.4"
+aes-gcm = "0.10.3"
+eax = "0.5.0"
+ocb3 = "0.1"
+aes-kw = { version = "0.2.1", features = ["std"] }
+cx448 = { version = "0.1.1", features = ["zeroize"] }
+num-bigint = { version = "0.8.4", features = [
+    "rand",
+    "i128",
+    "u64_digit",
+    "prime",
+    "zeroize",
+], package = "num-bigint-dig" }
+x25519-dalek = { version = "2.0.1", default-features = false, features = [
+    "alloc",
+    "precomputed-tables",
+    "zeroize",
+    "static_secrets",
+] }
+
+# PQC (optional)
+ml-kem = { version = "0.2.1", features = ["zeroize", "deterministic"], optional = true }
+ml-dsa = { version = "0.0.4", features = ["zeroize"], optional = true }
+slh-dsa = { version = "0.0.3", optional = true }
+replace_with = "0.1.8"
+
+# ===== wecanencrypt-specific dependencies =====
 
 # SSH key format handling
 sshkeys = "0.3"
@@ -49,7 +130,17 @@ rusqlite = { version = "0.32", features = ["bundled"], optional = true }
 
 # Network key fetching (optional)
 reqwest = { version = "0.12", features = ["blocking"], optional = true }
-sha1 = { version = "0.10", optional = true }
 
 [dev-dependencies]
 tempfile = "3.0"
+# rpgp dev-dependencies for tests
+proptest = { version = "1.6.0", features = ["proptest-macro"] }
+proptest-derive = "0.5.1"
+hex-literal = "0.4"
+pretty_assertions = "1"
+pretty_env_logger = "0.5"
+rand_chacha = "0.3"
+rand_xorshift = "0.3"
+glob = "0.3"
+testresult = "0.4.1"
+escape_string = "0.1.2"

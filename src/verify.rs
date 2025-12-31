@@ -6,7 +6,7 @@
 use std::io::Cursor;
 use std::path::Path;
 
-use pgp::composed::{
+use crate::pgp::composed::{
     CleartextSignedMessage, Deserializable, DetachedSignature, Message, SignedPublicKey,
 };
 

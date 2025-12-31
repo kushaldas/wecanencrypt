@@ -6,8 +6,8 @@
 use std::io::Cursor;
 use std::path::Path;
 
-use pgp::composed::{Deserializable, SignedPublicKey};
-use pgp::ser::Serialize;
+use crate::pgp::composed::{Deserializable, SignedPublicKey};
+use crate::pgp::ser::Serialize;
 
 use crate::error::{Error, Result};
 use crate::internal::{fingerprint_to_hex, parse_cert, public_key_to_armored};

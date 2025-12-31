@@ -6,11 +6,11 @@
 use std::io::{BufReader, Cursor, Read};
 use std::path::Path;
 
-use pgp::armor::Dearmor;
-use pgp::composed::{MessageBuilder, SignedPublicKey};
-use pgp::crypto::sym::SymmetricKeyAlgorithm;
-use pgp::packet::{Packet, PacketParser, PublicKeyEncryptedSessionKey};
-use pgp::types::KeyDetails;
+use crate::pgp::armor::Dearmor;
+use crate::pgp::composed::{MessageBuilder, SignedPublicKey};
+use crate::pgp::crypto::sym::SymmetricKeyAlgorithm;
+use crate::pgp::packet::{Packet, PacketParser, PublicKeyEncryptedSessionKey};
+use crate::pgp::types::KeyDetails;
 use rand::thread_rng;
 
 use crate::error::{Error, Result};
@@ -286,7 +286,7 @@ pub fn file_encrypted_for(path: impl AsRef<Path>) -> Result<Vec<String>> {
 }
 
 /// Helper to find valid encryption subkeys from a public key.
-fn find_valid_encryption_subkeys(key: &SignedPublicKey) -> Result<Vec<pgp::composed::SignedPublicSubKey>> {
+fn find_valid_encryption_subkeys(key: &SignedPublicKey) -> Result<Vec<crate::pgp::composed::SignedPublicSubKey>> {
     let mut valid_keys = Vec::new();
 
     for subkey in &key.public_subkeys {

@@ -2,9 +2,9 @@
 
 use std::io::Cursor;
 
-use pgp::composed::{SignedSecretKey, SignedPublicKey, Deserializable};
-use pgp::ser::Serialize;
-use pgp::types::KeyDetails;
+use crate::pgp::composed::{SignedSecretKey, SignedPublicKey, Deserializable};
+use crate::pgp::ser::Serialize;
+use crate::pgp::types::KeyDetails;
 
 use crate::error::{Error, Result};
 
@@ -90,7 +90,7 @@ pub(crate) fn system_time_to_datetime(st: std::time::SystemTime) -> chrono::Date
 /// Get a normalized algorithm name for display.
 /// Converts rpgp's internal naming to common OpenPGP names.
 pub(crate) fn get_algorithm_name(key: &impl KeyDetails) -> String {
-    use pgp::crypto::public_key::PublicKeyAlgorithm;
+    use crate::pgp::crypto::public_key::PublicKeyAlgorithm;
 
     match key.algorithm() {
         PublicKeyAlgorithm::RSA => "RSA".to_string(),
@@ -111,7 +111,7 @@ pub(crate) fn get_algorithm_name(key: &impl KeyDetails) -> String {
 /// Get the bit size for a key based on its algorithm and parameters.
 /// Returns 0 if the bit size cannot be determined.
 pub(crate) fn get_key_bit_size(key: &impl KeyDetails) -> usize {
-    use pgp::crypto::public_key::PublicKeyAlgorithm;
+    use crate::pgp::crypto::public_key::PublicKeyAlgorithm;
 
     match key.algorithm() {
         PublicKeyAlgorithm::RSA | PublicKeyAlgorithm::RSAEncrypt | PublicKeyAlgorithm::RSASign => {

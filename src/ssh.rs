@@ -3,7 +3,7 @@
 //! This module provides functions for converting OpenPGP authentication
 //! keys to SSH public key format (RFC 4253).
 
-use pgp::types::{KeyDetails, PublicParams};
+use crate::pgp::types::{KeyDetails, PublicParams};
 
 use crate::error::{Error, Result};
 use crate::internal::{is_subkey_valid, parse_public_key};
@@ -87,7 +87,7 @@ fn convert_params_to_ssh(params: &PublicParams) -> Result<(String, Vec<u8>)> {
         }
         // Legacy EdDSA (v4 keys)
         PublicParams::EdDSALegacy(ed_params) => {
-            use pgp::types::EddsaLegacyPublicParams;
+            use crate::pgp::types::EddsaLegacyPublicParams;
 
             match ed_params {
                 EddsaLegacyPublicParams::Ed25519 { key } => {
@@ -110,7 +110,7 @@ fn convert_params_to_ssh(params: &PublicParams) -> Result<(String, Vec<u8>)> {
             ))
         }
         PublicParams::ECDSA(ecdsa_params) => {
-            use pgp::types::EcdsaPublicParams;
+            use crate::pgp::types::EcdsaPublicParams;
 
             match ecdsa_params {
                 EcdsaPublicParams::P256 { key } => {
@@ -159,7 +159,7 @@ fn convert_params_to_ssh(params: &PublicParams) -> Result<(String, Vec<u8>)> {
             }
         }
         PublicParams::ECDH(ecdh_params) => {
-            use pgp::types::EcdhPublicParams;
+            use crate::pgp::types::EcdhPublicParams;
 
             // ECDH keys with Curve25519 can be converted for SSH authentication
             match ecdh_params {
@@ -259,7 +259,7 @@ pub fn get_signing_pubkey(cert_data: &[u8]) -> Result<SigningPublicKey> {
         }
         // Legacy EdDSA (v4 keys)
         PublicParams::EdDSALegacy(ed_params) => {
-            use pgp::types::EddsaLegacyPublicParams;
+            use crate::pgp::types::EddsaLegacyPublicParams;
 
             match ed_params {
                 EddsaLegacyPublicParams::Ed25519 { key } => {
@@ -272,7 +272,7 @@ pub fn get_signing_pubkey(cert_data: &[u8]) -> Result<SigningPublicKey> {
             }
         }
         PublicParams::ECDSA(ecdsa_params) => {
-            use pgp::types::EcdsaPublicParams;
+            use crate::pgp::types::EcdsaPublicParams;
 
             let (curve, point) = match ecdsa_params {
                 EcdsaPublicParams::P256 { key } => {

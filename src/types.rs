@@ -298,41 +298,41 @@ pub struct AvailableSubkey {
 
 impl CipherSuite {
     /// Get the rpgp KeyType for the primary key (signing/certification).
-    pub fn primary_key_type(&self) -> pgp::composed::KeyType {
+    pub fn primary_key_type(&self) -> crate::pgp::composed::KeyType {
         match self {
-            CipherSuite::Rsa2k => pgp::composed::KeyType::Rsa(2048),
-            CipherSuite::Rsa4k => pgp::composed::KeyType::Rsa(4096),
-            CipherSuite::Cv25519 => pgp::composed::KeyType::Ed25519Legacy,
-            CipherSuite::Cv25519Modern => pgp::composed::KeyType::Ed25519,
+            CipherSuite::Rsa2k => crate::pgp::composed::KeyType::Rsa(2048),
+            CipherSuite::Rsa4k => crate::pgp::composed::KeyType::Rsa(4096),
+            CipherSuite::Cv25519 => crate::pgp::composed::KeyType::Ed25519Legacy,
+            CipherSuite::Cv25519Modern => crate::pgp::composed::KeyType::Ed25519,
             CipherSuite::NistP256 => {
-                pgp::composed::KeyType::ECDSA(pgp::crypto::ecc_curve::ECCCurve::P256)
+                crate::pgp::composed::KeyType::ECDSA(crate::pgp::crypto::ecc_curve::ECCCurve::P256)
             }
             CipherSuite::NistP384 => {
-                pgp::composed::KeyType::ECDSA(pgp::crypto::ecc_curve::ECCCurve::P384)
+                crate::pgp::composed::KeyType::ECDSA(crate::pgp::crypto::ecc_curve::ECCCurve::P384)
             }
             CipherSuite::NistP521 => {
-                pgp::composed::KeyType::ECDSA(pgp::crypto::ecc_curve::ECCCurve::P521)
+                crate::pgp::composed::KeyType::ECDSA(crate::pgp::crypto::ecc_curve::ECCCurve::P521)
             }
         }
     }
 
     /// Get the rpgp KeyType for encryption subkeys.
-    pub fn encryption_key_type(&self) -> pgp::composed::KeyType {
+    pub fn encryption_key_type(&self) -> crate::pgp::composed::KeyType {
         match self {
-            CipherSuite::Rsa2k => pgp::composed::KeyType::Rsa(2048),
-            CipherSuite::Rsa4k => pgp::composed::KeyType::Rsa(4096),
+            CipherSuite::Rsa2k => crate::pgp::composed::KeyType::Rsa(2048),
+            CipherSuite::Rsa4k => crate::pgp::composed::KeyType::Rsa(4096),
             CipherSuite::Cv25519 => {
-                pgp::composed::KeyType::ECDH(pgp::crypto::ecc_curve::ECCCurve::Curve25519)
+                crate::pgp::composed::KeyType::ECDH(crate::pgp::crypto::ecc_curve::ECCCurve::Curve25519)
             }
-            CipherSuite::Cv25519Modern => pgp::composed::KeyType::X25519,
+            CipherSuite::Cv25519Modern => crate::pgp::composed::KeyType::X25519,
             CipherSuite::NistP256 => {
-                pgp::composed::KeyType::ECDH(pgp::crypto::ecc_curve::ECCCurve::P256)
+                crate::pgp::composed::KeyType::ECDH(crate::pgp::crypto::ecc_curve::ECCCurve::P256)
             }
             CipherSuite::NistP384 => {
-                pgp::composed::KeyType::ECDH(pgp::crypto::ecc_curve::ECCCurve::P384)
+                crate::pgp::composed::KeyType::ECDH(crate::pgp::crypto::ecc_curve::ECCCurve::P384)
             }
             CipherSuite::NistP521 => {
-                pgp::composed::KeyType::ECDH(pgp::crypto::ecc_curve::ECCCurve::P521)
+                crate::pgp::composed::KeyType::ECDH(crate::pgp::crypto::ecc_curve::ECCCurve::P521)
             }
         }
     }

@@ -4,12 +4,12 @@
 //! and managing existing keys (expiry, UIDs, etc.).
 
 use chrono::{DateTime, Utc};
-use pgp::composed::{
+use crate::pgp::composed::{
     SecretKeyParamsBuilder, SignedKeyDetails, SignedPublicKey, SignedSecretKey,
     SubkeyParamsBuilder,
 };
-use pgp::packet::{PacketTrait, SignatureConfig, SignatureType, Subpacket, SubpacketData, UserId};
-use pgp::types::{KeyDetails, KeyVersion, PacketHeaderVersion, Password, SignedUser, Timestamp};
+use crate::pgp::packet::{PacketTrait, SignatureConfig, SignatureType, Subpacket, SubpacketData, UserId};
+use crate::pgp::types::{KeyDetails, KeyVersion, PacketHeaderVersion, Password, SignedUser, Timestamp};
 use rand::thread_rng;
 use std::time::SystemTime;
 
@@ -101,13 +101,13 @@ pub fn create_key(
     let primary_expiration = expiration_time.map(|exp| {
         let now = Utc::now();
         let duration = exp.signed_duration_since(now);
-        pgp::types::Duration::from_secs(duration.num_seconds().max(0) as u32)
+        crate::pgp::types::Duration::from_secs(duration.num_seconds().max(0) as u32)
     });
 
     let subkey_expiration = subkeys_expiration.map(|exp| {
         let now = Utc::now();
         let duration = exp.signed_duration_since(now);
-        pgp::types::Duration::from_secs(duration.num_seconds().max(0) as u32)
+        crate::pgp::types::Duration::from_secs(duration.num_seconds().max(0) as u32)
     });
 
     // Build subkeys based on flags
@@ -354,7 +354,7 @@ pub fn update_subkeys_expiry(
                     "Expiry time must be after subkey creation time".to_string(),
                 ));
             }
-            let expiry_duration = pgp::types::Duration::from_secs(duration.num_seconds() as u32);
+            let expiry_duration = crate::pgp::types::Duration::from_secs(duration.num_seconds() as u32);
 
             // Get existing key flags
             let key_flags = subkey
@@ -411,7 +411,7 @@ pub fn update_subkeys_expiry(
                 }
             }
 
-            new_public_subkeys.push(pgp::composed::SignedPublicSubKey {
+            new_public_subkeys.push(crate::pgp::composed::SignedPublicSubKey {
                 key: subkey.key.clone(),
                 signatures: new_sigs,
             });
@@ -436,7 +436,7 @@ pub fn update_subkeys_expiry(
                     "Expiry time must be after subkey creation time".to_string(),
                 ));
             }
-            let expiry_duration = pgp::types::Duration::from_secs(duration.num_seconds() as u32);
+            let expiry_duration = crate::pgp::types::Duration::from_secs(duration.num_seconds() as u32);
 
             // Get existing key flags
             let key_flags = subkey
@@ -492,7 +492,7 @@ pub fn update_subkeys_expiry(
                 }
             }
 
-            new_secret_subkeys.push(pgp::composed::SignedSecretSubKey {
+            new_secret_subkeys.push(crate::pgp::composed::SignedSecretSubKey {
                 key: subkey.key.clone(),
                 signatures: new_sigs,
             });
@@ -555,7 +555,7 @@ pub fn update_primary_expiry(
             "Expiry time must be after key creation time".to_string(),
         ));
     }
-    let expiry_duration = pgp::types::Duration::from_secs(duration.num_seconds() as u32);
+    let expiry_duration = crate::pgp::types::Duration::from_secs(duration.num_seconds() as u32);
 
     // Create new self-certification signatures for each user ID
     let mut new_users: Vec<SignedUser> = Vec::new();
@@ -621,7 +621,7 @@ pub fn update_primary_expiry(
     // Rebuild the secret key with new signatures
     let updated_key = SignedSecretKey::new(
         secret_key.primary_key.clone(),
-        pgp::composed::SignedKeyDetails::new(
+        crate::pgp::composed::SignedKeyDetails::new(
             secret_key.details.revocation_signatures.clone(),
             secret_key.details.direct_signatures.clone(),
             new_users,
@@ -969,7 +969,7 @@ pub fn certify_key(
     // Reconstruct the public key with the new certifications
     let certified_key = SignedPublicKey {
         primary_key: target.primary_key.clone(),
-        details: pgp::composed::SignedKeyDetails::new(
+        details: crate::pgp::composed::SignedKeyDetails::new(
             target.details.revocation_signatures.clone(),
             target.details.direct_signatures.clone(),
             new_users,
