@@ -287,17 +287,45 @@ pub fn get_pub_key(cert_data: &[u8]) -> Result<String> {
 
 /// Update the expiration time for specific subkeys.
 ///
-/// Creates new binding signatures for the specified subkeys with
-/// the updated expiration time.
+/// Creates new subkey binding signatures (signature type 0x18) for the
+/// specified subkeys with the updated expiration time.
+///
+/// # Signature Details
+///
+/// Subkey binding signatures are created by the primary key to bind a subkey
+/// to the certificate and define its properties (capabilities, expiration).
+/// This function creates new binding signatures with:
+///
+/// - **Key flags** - Preserved from existing signature to maintain capabilities
+/// - **Signature creation time** - Set to current time
+/// - **Key expiration time** - Set to the specified expiry time
+/// - **Issuer fingerprint** - Set to the primary key fingerprint
+///
+/// Non-binding signatures (like revocations) are preserved unchanged.
+///
+/// # Fingerprint Matching
+///
+/// Fingerprints are matched case-insensitively. Partial fingerprint matches
+/// are supported (useful for matching by short key ID), but providing full
+/// 40-character fingerprints is recommended for accuracy.
 ///
 /// # Arguments
-/// * `cert_data` - The certificate data (with secret key)
+///
+/// * `cert_data` - The certificate data (with secret key, armored or binary)
 /// * `fingerprints` - Fingerprints of subkeys to update (hex strings)
-/// * `expiry_time` - New expiration time
+/// * `expiry_time` - New expiration time as DateTime<Utc>
 /// * `password` - Password to unlock the secret key
 ///
 /// # Returns
-/// The updated certificate with new binding signatures.
+///
+/// The updated certificate with new binding signatures (binary format).
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The secret key password is incorrect
+/// - The expiry time is before the subkey creation time
+/// - A specified subkey fingerprint is not found in the certificate
 ///
 /// # Example
 ///
@@ -514,16 +542,39 @@ pub fn update_subkeys_expiry(
 
 /// Update the primary key expiration time.
 ///
-/// This creates new self-certification signatures for all user IDs with
-/// the updated expiration time.
+/// Updates all signatures that contain key expiration information.
+///
+/// # Signatures Updated
+///
+/// This function updates two types of signatures that can contain key expiration:
+///
+/// 1. **Direct key signatures (signature type 0x1f)** - These are signatures
+///    directly on the primary key itself. GPG uses these as the authoritative
+///    source for primary key expiration when present.
+///
+/// 2. **User ID self-certifications (signature type 0x13)** - These are
+///    self-signatures on each user ID that also contain key expiration.
+///
+/// Both signature types must be updated for GPG to correctly recognize the
+/// new expiration date. Key flags and other important subpackets are preserved
+/// from the existing signatures.
 ///
 /// # Arguments
-/// * `cert_data` - The certificate data (with secret key)
-/// * `expiry_time` - New expiration time
+///
+/// * `cert_data` - The certificate data (with secret key, armored or binary)
+/// * `expiry_time` - New expiration time as DateTime<Utc>
 /// * `password` - Password to unlock the secret key
 ///
 /// # Returns
-/// The updated certificate with new expiration.
+///
+/// The updated certificate with new expiration signatures (binary format).
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The secret key password is incorrect
+/// - The expiry time is before the key creation time
+/// - The certificate has no self-certification signatures
 ///
 /// # Example
 ///
@@ -556,6 +607,77 @@ pub fn update_primary_expiry(
         ));
     }
     let expiry_duration = crate::pgp::types::Duration::from_secs(duration.num_seconds() as u32);
+
+    // Update direct key signatures (sigclass 0x1f) - GPG uses these for expiration
+    let mut new_direct_signatures: Vec<crate::pgp::packet::Signature> = Vec::new();
+    for existing_sig in &secret_key.details.direct_signatures {
+        // Only update direct key signatures (0x1f), not revocations
+        if existing_sig.typ() == Some(SignatureType::Key) {
+            // Preserve existing subpackets, updating only creation time and expiry
+            let existing_config = existing_sig
+                .config()
+                .ok_or_else(|| Error::Crypto("Cannot read existing direct signature config".to_string()))?;
+
+            let mut new_hashed_subpackets: Vec<Subpacket> = Vec::new();
+            let mut has_creation_time = false;
+            let mut has_expiry_time = false;
+
+            for subpacket in existing_config.hashed_subpackets() {
+                match &subpacket.data {
+                    SubpacketData::SignatureCreationTime(_) => {
+                        new_hashed_subpackets.push(
+                            Subpacket::regular(SubpacketData::SignatureCreationTime(Timestamp::now()))
+                                .map_err(|e| Error::Crypto(e.to_string()))?,
+                        );
+                        has_creation_time = true;
+                    }
+                    SubpacketData::KeyExpirationTime(_) => {
+                        new_hashed_subpackets.push(
+                            Subpacket::regular(SubpacketData::KeyExpirationTime(expiry_duration))
+                                .map_err(|e| Error::Crypto(e.to_string()))?,
+                        );
+                        has_expiry_time = true;
+                    }
+                    _ => {
+                        new_hashed_subpackets.push(subpacket.clone());
+                    }
+                }
+            }
+
+            if !has_creation_time {
+                new_hashed_subpackets.push(
+                    Subpacket::regular(SubpacketData::SignatureCreationTime(Timestamp::now()))
+                        .map_err(|e| Error::Crypto(e.to_string()))?,
+                );
+            }
+
+            if !has_expiry_time {
+                new_hashed_subpackets.push(
+                    Subpacket::regular(SubpacketData::KeyExpirationTime(expiry_duration))
+                        .map_err(|e| Error::Crypto(e.to_string()))?,
+                );
+            }
+
+            let new_unhashed_subpackets: Vec<Subpacket> = existing_config
+                .unhashed_subpackets()
+                .cloned()
+                .collect();
+
+            let mut config = SignatureConfig::from_key(&mut rng, &secret_key.primary_key, SignatureType::Key)
+                .map_err(|e| Error::Crypto(e.to_string()))?;
+            config.hashed_subpackets = new_hashed_subpackets;
+            config.unhashed_subpackets = new_unhashed_subpackets;
+
+            let sig = config
+                .sign_key(&secret_key.primary_key, &password, &secret_key.primary_key.public_key())
+                .map_err(|e| Error::Crypto(e.to_string()))?;
+
+            new_direct_signatures.push(sig);
+        } else {
+            // Keep revocation signatures unchanged
+            new_direct_signatures.push(existing_sig.clone());
+        }
+    }
 
     // Create new self-certification signatures for each user ID
     let mut new_users: Vec<SignedUser> = Vec::new();
@@ -623,7 +745,7 @@ pub fn update_primary_expiry(
         secret_key.primary_key.clone(),
         crate::pgp::composed::SignedKeyDetails::new(
             secret_key.details.revocation_signatures.clone(),
-            secret_key.details.direct_signatures.clone(),
+            new_direct_signatures,
             new_users,
             secret_key.details.user_attributes.clone(),
         ),
