@@ -1,6 +1,6 @@
 [package]
 name = "wecanencrypt"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT"
 description = "Simple Rust OpenPGP library for encryption, signing, and key management (includes rpgp)."
@@ -12,6 +12,7 @@ categories = ["cryptography", "authentication"]
 default = ["keystore", "network", "bzip2"]
 keystore = ["rusqlite"]
 network = ["reqwest"]
+card = ["openpgp-card", "card-backend-pcsc", "secrecy", "talktosc"]
 
 # rpgp features
 bzip2 = ["dep:bzip2"]
@@ -130,6 +131,12 @@ rusqlite = { version = "0.32", features = ["bundled"], optional = true }
 
 # Network key fetching (optional)
 reqwest = { version = "0.12", features = ["blocking"], optional = true }
+
+# Smart card support (optional)
+openpgp-card = { version = "0.5", optional = true }
+card-backend-pcsc = { version = "0.5", optional = true }
+secrecy = { version = "0.8", optional = true }
+talktosc = { version = "0.2", optional = true }
 
 [dev-dependencies]
 tempfile = "3.0"

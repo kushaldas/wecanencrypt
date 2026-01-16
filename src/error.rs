@@ -92,6 +92,11 @@ pub enum Error {
     /// Generic error from anyhow
     #[error("Error: {0}")]
     Generic(#[from] anyhow::Error),
+
+    /// Smart card error (card feature)
+    #[cfg(feature = "card")]
+    #[error("Smart card error: {0}")]
+    Card(#[from] crate::card::CardError),
 }
 
 /// A specialized Result type for wecanencrypt operations.

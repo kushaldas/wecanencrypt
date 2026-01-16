@@ -37,10 +37,36 @@ let encrypted = encrypt_bytes(plaintext, &[&key.public_key.as_bytes()])?;
 let decrypted = decrypt_bytes(&encrypted, &key.secret_key.as_bytes(), "passphrase")?;
 ```
 
+## Running Tests
+
+Run the standard test suite:
+
+```bash
+cargo test
+```
+
+Run tests with all default features:
+
+```bash
+cargo test --all-features
+```
+
+### Smart Card Tests
+
+Smart card tests require a physical YubiKey or compatible OpenPGP smart card. These tests are ignored by default:
+
+```bash
+cargo test --features card --test card_tests -- --ignored --test-threads=1
+```
+
+Note: Card tests automatically reset the card to factory defaults before each test.
+
 ## Optional Features
 
 - `keystore` (default): SQLite-backed key storage
 - `network` (default): WKD and HKP key fetching
+- `card`: Smart card support (requires hardware)
+- `draft-pqc`: Post-quantum cryptography support
 
 ## License
 

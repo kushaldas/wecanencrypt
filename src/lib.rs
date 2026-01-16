@@ -72,6 +72,9 @@ mod ssh;
 #[cfg(feature = "network")]
 mod network;
 
+#[cfg(feature = "card")]
+pub mod card;
+
 pub mod keystore;
 
 // Re-export error types
