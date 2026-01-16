@@ -39,16 +39,25 @@ let decrypted = decrypt_bytes(&encrypted, &key.secret_key.as_bytes(), "passphras
 
 ## Running Tests
 
-Run the standard test suite:
+### Run all tests in the tests/ directory
 
 ```bash
-cargo test
+cargo test --features card --test '*'
 ```
 
-Run tests with all default features:
+Or run specific test files:
 
 ```bash
-cargo test --all-features
+# Individual test files
+cargo test --features card --test integration_tests
+cargo test --features card --test keystore_tests
+cargo test --features card --test fixture_tests
+```
+
+Or combine them:
+
+```bash
+cargo test --features card --test integration_tests --test keystore_tests --test fixture_tests
 ```
 
 ### Smart Card Tests
