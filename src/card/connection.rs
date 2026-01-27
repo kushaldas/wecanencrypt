@@ -4,9 +4,10 @@
 
 use card_backend_pcsc::PcscBackend;
 use openpgp_card::Card;
-use secrecy::SecretString;
+use openpgp_card::ocard::{OpenPGP, data::UserInteractionFlag};
+use secrecy::{SecretString, SecretVec};
 
-use super::types::{CardError, CardInfo};
+use super::types::{CardError, CardInfo, KeySlot, TouchMode};
 use crate::error::{Error, Result};
 
 /// Check if an OpenPGP smart card is connected.
@@ -384,6 +385,82 @@ pub fn change_admin_pin(old_pin: &[u8], new_pin: &[u8]) -> Result<()> {
     let new_secret = pin_to_secret(new_pin)?;
     tx.change_admin_pin(old_secret, new_secret)
         .map_err(|e| Error::Card(CardError::from(e)))?;
+
+    Ok(())
+}
+
+/// Set the touch mode (User Interaction Flag) for a specific key slot.
+///
+/// This configures whether physical touch is required for cryptographic operations
+/// on the specified key slot. This feature is available on YubiKey 4.2+ and some
+/// other OpenPGP cards.
+///
+/// # Arguments
+///
+/// * `slot` - Which key slot to configure (Signature, Encryption, Authentication)
+/// * `mode` - The touch policy to set
+/// * `admin_pin` - The admin PIN for the card
+///
+/// # Warning
+///
+/// Setting `TouchMode::Fixed` or `TouchMode::CachedFixed` is **permanent** on some
+/// devices (like YubiKey). It cannot be changed even with a factory reset!
+///
+/// # Example
+///
+/// ```no_run
+/// use wecanencrypt::card::{set_touch_mode, KeySlot, TouchMode};
+///
+/// // Require touch for signing operations (can be changed later)
+/// set_touch_mode(KeySlot::Signature, TouchMode::On, b"12345678").unwrap();
+///
+/// // Permanently require touch for decryption
+/// set_touch_mode(KeySlot::Encryption, TouchMode::Fixed, b"12345678").unwrap();
+/// ```
+pub fn set_touch_mode(slot: KeySlot, mode: TouchMode, admin_pin: &[u8]) -> Result<()> {
+    let backend = get_card_backend()?;
+
+    // Use the low-level OpenPGP API for UIF operations
+    let mut opgp = OpenPGP::new(backend)
+        .map_err(|e: openpgp_card::Error| Error::Card(CardError::CardError(e.to_string())))?;
+    let mut tx = opgp.transaction()
+        .map_err(|e: openpgp_card::Error| Error::Card(CardError::CardError(e.to_string())))?;
+
+    // Verify admin PIN first (PW3 is the admin PIN)
+    let secret_pin = SecretVec::new(admin_pin.to_vec());
+    tx.verify_pw3(secret_pin)
+        .map_err(|e: openpgp_card::Error| Error::Card(CardError::CardError(e.to_string())))?;
+
+    // Create UserInteractionFlag with the policy
+    // UIF format: [policy_byte, features_byte]
+    // Policy: 0=Off, 1=On, 2=Fixed, 3=Cached, 4=CachedFixed
+    // Features: 0x20 = button required
+    let policy_byte: u8 = match mode {
+        TouchMode::Off => 0x00,
+        TouchMode::On => 0x01,
+        TouchMode::Fixed => 0x02,
+        TouchMode::Cached => 0x03,
+        TouchMode::CachedFixed => 0x04,
+    };
+    let uif_bytes = vec![policy_byte, 0x20]; // 0x20 = button feature
+    let uif = UserInteractionFlag::try_from(uif_bytes)
+        .map_err(|e: openpgp_card::Error| Error::Card(CardError::CardError(format!("Failed to create UIF: {}", e))))?;
+
+    // Set touch mode based on slot
+    match slot {
+        KeySlot::Signature => {
+            tx.set_uif_pso_cds(&uif)
+                .map_err(|e: openpgp_card::Error| Error::Card(CardError::CardError(e.to_string())))?;
+        }
+        KeySlot::Encryption => {
+            tx.set_uif_pso_dec(&uif)
+                .map_err(|e: openpgp_card::Error| Error::Card(CardError::CardError(e.to_string())))?;
+        }
+        KeySlot::Authentication => {
+            tx.set_uif_pso_aut(&uif)
+                .map_err(|e: openpgp_card::Error| Error::Card(CardError::CardError(e.to_string())))?;
+        }
+    }
 
     Ok(())
 }
