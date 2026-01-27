@@ -10,7 +10,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! wecanencrypt = { version = "0.1", features = ["card"] }
+//! wecanencrypt = { version = "0.3", features = ["card"] }
 //! ```
 //!
 //! # Requirements
@@ -41,6 +41,28 @@
 //!     ).unwrap();
 //! }
 //! ```
+//!
+//! # Touch Policy (YubiKey 4.2+)
+//!
+//! You can configure touch policies for cryptographic operations using [`set_touch_mode`].
+//! This requires physical touch confirmation before each operation, providing additional
+//! security against remote attackers.
+//!
+//! ```no_run
+//! use wecanencrypt::card::{set_touch_mode, KeySlot, TouchMode};
+//!
+//! // Require touch for signing (can be changed later)
+//! set_touch_mode(KeySlot::Signature, TouchMode::On, b"12345678").unwrap();
+//!
+//! // Permanently require touch for decryption (cannot be changed!)
+//! set_touch_mode(KeySlot::Encryption, TouchMode::Fixed, b"12345678").unwrap();
+//!
+//! // Require touch for authentication
+//! set_touch_mode(KeySlot::Authentication, TouchMode::On, b"12345678").unwrap();
+//! ```
+//!
+//! **Warning**: Setting `TouchMode::Fixed` or `TouchMode::CachedFixed` is permanent
+//! on some devices (like YubiKey) and cannot be changed even with a factory reset!
 
 mod types;
 mod connection;
@@ -59,6 +81,7 @@ pub use connection::{
     reset_card,
     change_user_pin,
     change_admin_pin,
+    set_touch_mode,
 };
 pub use crypto::{
     sign_bytes_detached_on_card,

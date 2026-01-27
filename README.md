@@ -12,6 +12,7 @@ Simple Rust OpenPGP library for encryption, signing, and key management, built o
 - **SSH Key Export**: Convert OpenPGP authentication keys to SSH public key format
 - **Network Operations**: Fetch keys via WKD (Web Key Directory) and HKP keyservers
 - **KeyStore**: SQLite-backed key storage with search and management capabilities
+- **Smart Card Support**: Upload keys to YubiKey/OpenPGP cards, sign and decrypt on-card, configure touch policies
 
 ## Usage
 
@@ -35,6 +36,31 @@ let encrypted = encrypt_bytes(plaintext, &[&key.public_key.as_bytes()])?;
 
 // Decrypt data
 let decrypted = decrypt_bytes(&encrypted, &key.secret_key.as_bytes(), "passphrase")?;
+```
+
+## Smart Card Usage
+
+```rust
+use wecanencrypt::card::{
+    is_card_connected, get_card_details, upload_key_to_card,
+    set_touch_mode, KeySlot, TouchMode, CardKeySlot,
+};
+
+// Check for connected card
+if is_card_connected() {
+    let info = get_card_details()?;
+    println!("Card serial: {}", info.serial_number);
+
+    // Upload a key to the signing slot
+    let secret_key = std::fs::read("secret.asc")?;
+    upload_key_to_card(&secret_key, b"password", CardKeySlot::Signing, b"12345678")?;
+
+    // Configure touch policy (YubiKey 4.2+)
+    // Warning: TouchMode::Fixed is permanent and cannot be changed!
+    set_touch_mode(KeySlot::Signature, TouchMode::Fixed, b"12345678")?;
+    set_touch_mode(KeySlot::Encryption, TouchMode::Fixed, b"12345678")?;
+    set_touch_mode(KeySlot::Authentication, TouchMode::On, b"12345678")?;
+}
 ```
 
 ## Running Tests
