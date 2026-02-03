@@ -7,9 +7,9 @@
 
 use std::time::SystemTime;
 
-use crate::pgp::composed::{SignedPublicKey, SignedPublicSubKey};
-use crate::pgp::packet::SignatureType;
-use crate::pgp::types::KeyDetails;
+use pgp::composed::{SignedPublicKey, SignedPublicSubKey};
+use pgp::packet::SignatureType;
+use pgp::types::KeyDetails;
 
 /// Check if a key has expired based on its creation time and validity period.
 pub(crate) fn is_key_expired(creation_time: SystemTime, validity_seconds: Option<u64>) -> bool {

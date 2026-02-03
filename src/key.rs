@@ -4,12 +4,12 @@
 //! and managing existing keys (expiry, UIDs, etc.).
 
 use chrono::{DateTime, Utc};
-use crate::pgp::composed::{
-    SecretKeyParamsBuilder, SignedKeyDetails, SignedPublicKey, SignedSecretKey,
+use pgp::composed::{
+    EncryptionCaps, SecretKeyParamsBuilder, SignedKeyDetails, SignedPublicKey, SignedSecretKey,
     SubkeyParamsBuilder,
 };
-use crate::pgp::packet::{PacketTrait, SignatureConfig, SignatureType, Subpacket, SubpacketData, UserId};
-use crate::pgp::types::{KeyDetails, KeyVersion, PacketHeaderVersion, Password, SignedUser, Timestamp};
+use pgp::packet::{PacketTrait, SignatureConfig, SignatureType, Subpacket, SubpacketData, UserId};
+use pgp::types::{KeyDetails, KeyVersion, PacketHeaderVersion, Password, SignedUser, Timestamp};
 use rand::thread_rng;
 use std::time::SystemTime;
 
@@ -79,11 +79,11 @@ pub fn create_key(
     user_ids: &[&str],
     cipher: CipherSuite,
     _creation_time: Option<DateTime<Utc>>,
-    expiration_time: Option<DateTime<Utc>>,
-    subkeys_expiration: Option<DateTime<Utc>>,
+    _expiration_time: Option<DateTime<Utc>>,
+    _subkeys_expiration: Option<DateTime<Utc>>,
     which_keys: SubkeyFlags,
     can_primary_sign: bool,
-    can_primary_expire: bool,
+    _can_primary_expire: bool,
 ) -> Result<GeneratedKey> {
     if user_ids.is_empty() {
         return Err(Error::InvalidInput(
@@ -97,18 +97,8 @@ pub fn create_key(
     let primary_key_type = cipher.primary_key_type();
     let encryption_key_type = cipher.encryption_key_type();
 
-    // Calculate expiration duration
-    let primary_expiration = expiration_time.map(|exp| {
-        let now = Utc::now();
-        let duration = exp.signed_duration_since(now);
-        crate::pgp::types::Duration::from_secs(duration.num_seconds().max(0) as u32)
-    });
-
-    let subkey_expiration = subkeys_expiration.map(|exp| {
-        let now = Utc::now();
-        let duration = exp.signed_duration_since(now);
-        crate::pgp::types::Duration::from_secs(duration.num_seconds().max(0) as u32)
-    });
+    // Note: Key expiration is now set via self-signatures after generation in pgp 0.19
+    // The builder no longer supports setting expiration during key creation
 
     // Build subkeys based on flags
     let mut subkeys = Vec::new();
@@ -117,13 +107,9 @@ pub fn create_key(
         let mut enc_builder = SubkeyParamsBuilder::default();
         enc_builder
             .key_type(encryption_key_type)
-            .can_encrypt(true)
+            .can_encrypt(EncryptionCaps::All)
             .can_sign(false)
             .can_authenticate(false);
-
-        if let Some(exp) = subkey_expiration {
-            enc_builder.expiration(Some(exp));
-        }
 
         if !password.is_empty() {
             enc_builder.passphrase(Some(password.to_string()));
@@ -136,13 +122,9 @@ pub fn create_key(
         let mut sign_builder = SubkeyParamsBuilder::default();
         sign_builder
             .key_type(primary_key_type.clone())
-            .can_encrypt(false)
+            .can_encrypt(EncryptionCaps::None)
             .can_sign(true)
             .can_authenticate(false);
-
-        if let Some(exp) = subkey_expiration {
-            sign_builder.expiration(Some(exp));
-        }
 
         if !password.is_empty() {
             sign_builder.passphrase(Some(password.to_string()));
@@ -155,13 +137,9 @@ pub fn create_key(
         let mut auth_builder = SubkeyParamsBuilder::default();
         auth_builder
             .key_type(primary_key_type.clone())
-            .can_encrypt(false)
+            .can_encrypt(EncryptionCaps::None)
             .can_sign(false)
             .can_authenticate(true);
-
-        if let Some(exp) = subkey_expiration {
-            auth_builder.expiration(Some(exp));
-        }
 
         if !password.is_empty() {
             auth_builder.passphrase(Some(password.to_string()));
@@ -176,19 +154,13 @@ pub fn create_key(
         .key_type(primary_key_type)
         .can_certify(true)
         .can_sign(can_primary_sign)
-        .can_encrypt(false)
+        .can_encrypt(EncryptionCaps::None)
         .primary_user_id(user_ids[0].to_string());
 
     // Add additional user IDs
     if user_ids.len() > 1 {
         let additional_uids: Vec<String> = user_ids[1..].iter().map(|s| s.to_string()).collect();
         key_params.user_ids(additional_uids);
-    }
-
-    if can_primary_expire {
-        if let Some(exp) = primary_expiration {
-            key_params.expiration(Some(exp));
-        }
     }
 
     if !password.is_empty() {
@@ -382,7 +354,7 @@ pub fn update_subkeys_expiry(
                     "Expiry time must be after subkey creation time".to_string(),
                 ));
             }
-            let expiry_duration = crate::pgp::types::Duration::from_secs(duration.num_seconds() as u32);
+            let expiry_duration = pgp::types::Duration::from_secs(duration.num_seconds() as u32);
 
             // Get existing key flags
             let key_flags = subkey
@@ -439,7 +411,7 @@ pub fn update_subkeys_expiry(
                 }
             }
 
-            new_public_subkeys.push(crate::pgp::composed::SignedPublicSubKey {
+            new_public_subkeys.push(pgp::composed::SignedPublicSubKey {
                 key: subkey.key.clone(),
                 signatures: new_sigs,
             });
@@ -464,7 +436,7 @@ pub fn update_subkeys_expiry(
                     "Expiry time must be after subkey creation time".to_string(),
                 ));
             }
-            let expiry_duration = crate::pgp::types::Duration::from_secs(duration.num_seconds() as u32);
+            let expiry_duration = pgp::types::Duration::from_secs(duration.num_seconds() as u32);
 
             // Get existing key flags
             let key_flags = subkey
@@ -520,7 +492,7 @@ pub fn update_subkeys_expiry(
                 }
             }
 
-            new_secret_subkeys.push(crate::pgp::composed::SignedSecretSubKey {
+            new_secret_subkeys.push(pgp::composed::SignedSecretSubKey {
                 key: subkey.key.clone(),
                 signatures: new_sigs,
             });
@@ -606,10 +578,10 @@ pub fn update_primary_expiry(
             "Expiry time must be after key creation time".to_string(),
         ));
     }
-    let expiry_duration = crate::pgp::types::Duration::from_secs(duration.num_seconds() as u32);
+    let expiry_duration = pgp::types::Duration::from_secs(duration.num_seconds() as u32);
 
     // Update direct key signatures (sigclass 0x1f) - GPG uses these for expiration
-    let mut new_direct_signatures: Vec<crate::pgp::packet::Signature> = Vec::new();
+    let mut new_direct_signatures: Vec<pgp::packet::Signature> = Vec::new();
     for existing_sig in &secret_key.details.direct_signatures {
         // Only update direct key signatures (0x1f), not revocations
         if existing_sig.typ() == Some(SignatureType::Key) {
@@ -743,7 +715,7 @@ pub fn update_primary_expiry(
     // Rebuild the secret key with new signatures
     let updated_key = SignedSecretKey::new(
         secret_key.primary_key.clone(),
-        crate::pgp::composed::SignedKeyDetails::new(
+        pgp::composed::SignedKeyDetails::new(
             secret_key.details.revocation_signatures.clone(),
             new_direct_signatures,
             new_users,
@@ -1091,7 +1063,7 @@ pub fn certify_key(
     // Reconstruct the public key with the new certifications
     let certified_key = SignedPublicKey {
         primary_key: target.primary_key.clone(),
-        details: crate::pgp::composed::SignedKeyDetails::new(
+        details: pgp::composed::SignedKeyDetails::new(
             target.details.revocation_signatures.clone(),
             target.details.direct_signatures.clone(),
             new_users,

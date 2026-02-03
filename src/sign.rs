@@ -6,9 +6,9 @@
 use std::io::Cursor;
 use std::path::Path;
 
-use crate::pgp::composed::{CleartextSignedMessage, DetachedSignature, MessageBuilder, SignedSecretKey};
-use crate::pgp::crypto::hash::HashAlgorithm;
-use crate::pgp::types::{KeyDetails, Password, PublicParams};
+use pgp::composed::{CleartextSignedMessage, DetachedSignature, MessageBuilder, SignedSecretKey};
+use pgp::crypto::hash::HashAlgorithm;
+use pgp::types::{KeyDetails, Password, PublicParams};
 use rand::thread_rng;
 
 use crate::error::{Error, Result};
@@ -22,7 +22,7 @@ fn select_hash_for_key(secret_key: &SignedSecretKey) -> HashAlgorithm {
     match params {
         PublicParams::ECDSA(ecdsa) => {
             // Match hash size to curve size
-            use crate::pgp::types::EcdsaPublicParams;
+            use pgp::types::EcdsaPublicParams;
             match ecdsa {
                 EcdsaPublicParams::P256 { .. } => HashAlgorithm::Sha256,
                 EcdsaPublicParams::P384 { .. } => HashAlgorithm::Sha384,
