@@ -13,11 +13,11 @@ use secrecy::SecretString;
 use super::types::CardError;
 use crate::error::{Error, Result};
 use crate::internal::parse_public_key;
-use crate::pgp::composed::{DetachedSignature, Esk, Message, PlainSessionKey, RawSessionKey, SignedPublicKey};
-use crate::pgp::crypto::hash::HashAlgorithm;
-use crate::pgp::crypto::sym::SymmetricKeyAlgorithm;
-use crate::pgp::packet::{Signature, SignatureConfig, SignatureType, Subpacket, SubpacketData};
-use crate::pgp::types::{
+use pgp::composed::{DetachedSignature, Esk, Message, PlainSessionKey, RawSessionKey, SignedPublicKey};
+use pgp::crypto::hash::HashAlgorithm;
+use pgp::crypto::sym::SymmetricKeyAlgorithm;
+use pgp::packet::{Signature, SignatureConfig, SignatureType, Subpacket, SubpacketData};
+use pgp::types::{
     EskType, Fingerprint, KeyDetails, Mpi, PkeskBytes, PkeskVersion,
     PublicParams, SignatureBytes, Timestamp,
 };
@@ -84,10 +84,10 @@ fn pin_to_secret(pin: &[u8]) -> Result<SecretString> {
 
 /// Signing key info extracted from a public key
 struct SigningKeyInfo {
-    algorithm: crate::pgp::crypto::public_key::PublicKeyAlgorithm,
+    algorithm: pgp::crypto::public_key::PublicKeyAlgorithm,
     public_params: PublicParams,
     fingerprint: Fingerprint,
-    key_id: crate::pgp::types::KeyId,
+    key_id: pgp::types::KeyId,
     hash_alg: HashAlgorithm,
 }
 
@@ -172,7 +172,7 @@ fn can_sign(params: &PublicParams) -> bool {
 fn select_hash_for_params(params: &PublicParams) -> HashAlgorithm {
     match params {
         PublicParams::ECDSA(ecdsa) => {
-            use crate::pgp::types::EcdsaPublicParams;
+            use pgp::types::EcdsaPublicParams;
             match ecdsa {
                 EcdsaPublicParams::P256 { .. } => HashAlgorithm::Sha256,
                 EcdsaPublicParams::P384 { .. } => HashAlgorithm::Sha384,
@@ -319,7 +319,7 @@ fn create_signature_bytes(
     raw_sig: &[u8],
     public_params: &PublicParams,
 ) -> Result<SignatureBytes> {
-    use bytes::Bytes;
+    use pgp::bytes::Bytes;
 
     match public_params {
         PublicParams::RSA(_) => {
@@ -459,15 +459,15 @@ pub fn decrypt_bytes_on_card(data: &[u8], public_cert: &[u8], pin: &[u8]) -> Res
 struct EncryptionKeyInfo {
     public_params: PublicParams,
     fingerprint: Fingerprint,
-    key_id: crate::pgp::types::KeyId,
+    key_id: pgp::types::KeyId,
 }
 
 impl KeyDetails for EncryptionKeyInfo {
-    fn version(&self) -> crate::pgp::types::KeyVersion {
-        self.fingerprint.version().unwrap_or(crate::pgp::types::KeyVersion::V4)
+    fn version(&self) -> pgp::types::KeyVersion {
+        self.fingerprint.version().unwrap_or(pgp::types::KeyVersion::V4)
     }
 
-    fn legacy_key_id(&self) -> crate::pgp::types::KeyId {
+    fn legacy_key_id(&self) -> pgp::types::KeyId {
         self.key_id
     }
 
@@ -475,13 +475,13 @@ impl KeyDetails for EncryptionKeyInfo {
         self.fingerprint.clone()
     }
 
-    fn algorithm(&self) -> crate::pgp::crypto::public_key::PublicKeyAlgorithm {
+    fn algorithm(&self) -> pgp::crypto::public_key::PublicKeyAlgorithm {
         match &self.public_params {
-            PublicParams::RSA(_) => crate::pgp::crypto::public_key::PublicKeyAlgorithm::RSA,
-            PublicParams::ECDH(_) => crate::pgp::crypto::public_key::PublicKeyAlgorithm::ECDH,
-            PublicParams::X25519(_) => crate::pgp::crypto::public_key::PublicKeyAlgorithm::X25519,
-            PublicParams::X448(_) => crate::pgp::crypto::public_key::PublicKeyAlgorithm::X448,
-            _ => crate::pgp::crypto::public_key::PublicKeyAlgorithm::RSA,
+            PublicParams::RSA(_) => pgp::crypto::public_key::PublicKeyAlgorithm::RSA,
+            PublicParams::ECDH(_) => pgp::crypto::public_key::PublicKeyAlgorithm::ECDH,
+            PublicParams::X25519(_) => pgp::crypto::public_key::PublicKeyAlgorithm::X25519,
+            PublicParams::X448(_) => pgp::crypto::public_key::PublicKeyAlgorithm::X448,
+            _ => pgp::crypto::public_key::PublicKeyAlgorithm::RSA,
         }
     }
 
@@ -489,7 +489,7 @@ impl KeyDetails for EncryptionKeyInfo {
         Timestamp::now()
     }
 
-    fn expiration(&self) -> Option<u16> {
+    fn legacy_v3_expiration_days(&self) -> Option<u16> {
         None
     }
 
@@ -663,8 +663,8 @@ fn decrypt_session_key_on_card(
 }
 
 /// Check if ECDH params indicate a CV25519 key (legacy Curve25519)
-fn is_cv25519_key(params: &crate::pgp::types::EcdhPublicParams) -> bool {
-    use crate::pgp::types::EcdhPublicParams;
+fn is_cv25519_key(params: &pgp::types::EcdhPublicParams) -> bool {
+    use pgp::types::EcdhPublicParams;
     matches!(params, EcdhPublicParams::Curve25519 { .. })
 }
 
@@ -687,13 +687,13 @@ fn strip_cv25519_prefix(point: &[u8]) -> Result<&[u8]> {
 fn ecdh_unwrap_session_key(
     shared_secret: &[u8],
     encrypted_session_key: &[u8],
-    ecdh_params: &crate::pgp::types::EcdhPublicParams,
+    ecdh_params: &pgp::types::EcdhPublicParams,
     fingerprint: &Fingerprint,
 ) -> Result<Vec<u8>> {
-    use crate::pgp::crypto::ecdh::derive_session_key;
-    use crate::pgp::types::EcdhPublicParams;
-    use crate::pgp::crypto::hash::HashAlgorithm;
-    use crate::pgp::crypto::sym::SymmetricKeyAlgorithm;
+    use pgp::crypto::ecdh::derive_session_key;
+    use pgp::types::EcdhPublicParams;
+    use pgp::crypto::hash::HashAlgorithm;
+    use pgp::crypto::sym::SymmetricKeyAlgorithm;
 
     // Get the KDF parameters based on the curve type
     let (hash_algo, sym_algo): (HashAlgorithm, SymmetricKeyAlgorithm) = match ecdh_params {
@@ -712,6 +712,7 @@ fn ecdh_unwrap_session_key(
     let curve = ecdh_params.curve();
 
     // Use rpgp's derive_session_key which handles KDF and AES key unwrap correctly
+    // The function returns Zeroizing<Vec<u8>>, so we convert to Vec<u8>
     derive_session_key(
         shared_secret,
         encrypted_session_key,
@@ -720,7 +721,9 @@ fn ecdh_unwrap_session_key(
         hash_algo,
         sym_algo,
         fingerprint.as_bytes(),
-    ).map_err(|e| Error::Crypto(e.to_string()))
+    )
+    .map(|zeroizing| zeroizing.to_vec())
+    .map_err(|e| Error::Crypto(e.to_string()))
 }
 
 /// X25519 native format session key unwrap (RFC 9580)
@@ -758,11 +761,11 @@ struct CardSigningKey<'a> {
     /// Key fingerprint
     fingerprint: Fingerprint,
     /// Key ID
-    key_id: crate::pgp::types::KeyId,
+    key_id: pgp::types::KeyId,
     /// Key algorithm
-    algorithm: crate::pgp::crypto::public_key::PublicKeyAlgorithm,
+    algorithm: pgp::crypto::public_key::PublicKeyAlgorithm,
     /// Key version
-    version: crate::pgp::types::KeyVersion,
+    version: pgp::types::KeyVersion,
     /// Creation timestamp
     created_at: Timestamp,
     /// Hash algorithm to use
@@ -780,12 +783,12 @@ impl std::fmt::Debug for CardSigningKey<'_> {
     }
 }
 
-impl crate::pgp::types::KeyDetails for CardSigningKey<'_> {
-    fn version(&self) -> crate::pgp::types::KeyVersion {
+impl pgp::types::KeyDetails for CardSigningKey<'_> {
+    fn version(&self) -> pgp::types::KeyVersion {
         self.version
     }
 
-    fn legacy_key_id(&self) -> crate::pgp::types::KeyId {
+    fn legacy_key_id(&self) -> pgp::types::KeyId {
         self.key_id
     }
 
@@ -793,7 +796,7 @@ impl crate::pgp::types::KeyDetails for CardSigningKey<'_> {
         self.fingerprint.clone()
     }
 
-    fn algorithm(&self) -> crate::pgp::crypto::public_key::PublicKeyAlgorithm {
+    fn algorithm(&self) -> pgp::crypto::public_key::PublicKeyAlgorithm {
         self.algorithm
     }
 
@@ -801,7 +804,7 @@ impl crate::pgp::types::KeyDetails for CardSigningKey<'_> {
         self.created_at
     }
 
-    fn expiration(&self) -> Option<u16> {
+    fn legacy_v3_expiration_days(&self) -> Option<u16> {
         None
     }
 
@@ -810,19 +813,19 @@ impl crate::pgp::types::KeyDetails for CardSigningKey<'_> {
     }
 }
 
-impl crate::pgp::types::SigningKey for CardSigningKey<'_> {
+impl pgp::types::SigningKey for CardSigningKey<'_> {
     fn sign(
         &self,
-        _key_pw: &crate::pgp::types::Password,
+        _key_pw: &pgp::types::Password,
         hash: HashAlgorithm,
         data: &[u8],
-    ) -> crate::pgp::errors::Result<crate::pgp::types::SignatureBytes> {
+    ) -> pgp::errors::Result<pgp::types::SignatureBytes> {
         // Sign on the card instead of using software key
         let raw_signature = sign_on_card(data, hash, &self.public_params, self.pin)
             .map_err(|e| -> String { e.to_string() })?;
 
         create_signature_bytes(&raw_signature, &self.public_params)
-            .map_err(|e| -> crate::pgp::errors::Error { e.to_string().into() })
+            .map_err(|e| -> pgp::errors::Error { e.to_string().into() })
     }
 
     fn hash_alg(&self) -> HashAlgorithm {
@@ -924,7 +927,7 @@ pub fn update_primary_expiry_on_card(
     expirytime: u64,
     pin: &[u8],
 ) -> Result<Vec<u8>> {
-    use crate::pgp::types::{Duration as PgpDuration, Tag, KeyDetails};
+    use pgp::types::{Duration as PgpDuration, Tag, KeyDetails};
 
     let public_key = parse_public_key(certdata)?;
     let card_signer = get_primary_key_for_card_signing(&public_key, pin)?;
@@ -939,7 +942,7 @@ pub fn update_primary_expiry_on_card(
     let expiry_secs = now_secs.saturating_sub(creation_secs) + expirytime;
     let expiry_duration = PgpDuration::from_secs(expiry_secs as u32);
 
-    let password = crate::pgp::types::Password::from("");  // Not used for card signing
+    let password = pgp::types::Password::from("");  // Not used for card signing
 
     // Helper closure to update subpackets in a signature
     let update_subpackets = |existing_config: &SignatureConfig| -> Result<(Vec<Subpacket>, Vec<Subpacket>)> {
@@ -992,7 +995,7 @@ pub fn update_primary_expiry_on_card(
     };
 
     // Update direct key signatures (sigclass 0x1f) - these also contain key expiration
-    let mut new_direct_signatures: Vec<crate::pgp::packet::Signature> = Vec::new();
+    let mut new_direct_signatures: Vec<pgp::packet::Signature> = Vec::new();
     for existing_sig in &public_key.details.direct_signatures {
         // Only update direct key signatures (0x1f), not revocations
         if existing_sig.typ() == Some(SignatureType::Key) {
@@ -1023,7 +1026,7 @@ pub fn update_primary_expiry_on_card(
     }
 
     // Update self-certification signatures for each user ID
-    let mut new_users: Vec<crate::pgp::types::SignedUser> = Vec::new();
+    let mut new_users: Vec<pgp::types::SignedUser> = Vec::new();
 
     for signed_user in &public_key.details.users {
         let existing_self_sig = signed_user
@@ -1063,13 +1066,13 @@ pub fn update_primary_expiry_on_card(
             }
         }
 
-        new_users.push(crate::pgp::types::SignedUser::new(signed_user.id.clone(), combined_sigs));
+        new_users.push(pgp::types::SignedUser::new(signed_user.id.clone(), combined_sigs));
     }
 
     // Rebuild the public key with new signatures
     let updated_key = SignedPublicKey {
         primary_key: public_key.primary_key.clone(),
-        details: crate::pgp::composed::SignedKeyDetails::new(
+        details: pgp::composed::SignedKeyDetails::new(
             public_key.details.revocation_signatures.clone(),
             new_direct_signatures,
             new_users,
@@ -1152,12 +1155,12 @@ pub fn update_subkeys_expiry_on_card(
     expirytime: u64,
     pin: &[u8],
 ) -> Result<Vec<u8>> {
-    use crate::pgp::types::{Duration as PgpDuration, KeyDetails};
+    use pgp::types::{Duration as PgpDuration, KeyDetails};
 
     let public_key = parse_public_key(certdata)?;
     let card_signer = get_primary_key_for_card_signing(&public_key, pin)?;
 
-    let password = crate::pgp::types::Password::from("");  // Not used for card signing
+    let password = pgp::types::Password::from("");  // Not used for card signing
 
     // Normalize fingerprints for comparison (uppercase, no spaces)
     let normalized_fps: Vec<String> = fingerprints
@@ -1270,7 +1273,7 @@ pub fn update_subkeys_expiry_on_card(
                 }
             }
 
-            new_public_subkeys.push(crate::pgp::composed::SignedPublicSubKey {
+            new_public_subkeys.push(pgp::composed::SignedPublicSubKey {
                 key: subkey.key.clone(),
                 signatures: new_sigs,
             });

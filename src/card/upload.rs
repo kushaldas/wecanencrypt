@@ -6,8 +6,8 @@
 use std::io::Cursor;
 
 use crate::error::{Error, Result};
-use crate::pgp::composed::{Deserializable, SignedSecretKey};
-use crate::pgp::types::{KeyDetails, Password, PlainSecretParams, PublicParams};
+use pgp::composed::{Deserializable, SignedSecretKey};
+use pgp::types::{KeyDetails, Password, PlainSecretParams, PublicParams};
 
 /// Key slot on the card
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -212,7 +212,7 @@ pub fn upload_subkey_by_fingerprint(
     for subkey in &secret_key.secret_subkeys {
         let subkey_fp = hex::encode(subkey.key.fingerprint().as_bytes());
         if subkey_fp == fp_normalized {
-            let timestamp = subkey.key.created_at().as_secs() as u32;
+            let timestamp = subkey.key.created_at().as_secs();
             let fp_bytes = subkey.key.fingerprint().as_bytes().to_vec();
 
             let key_info = subkey.key.unlock(&password, |pub_p, priv_key| {
@@ -235,7 +235,7 @@ fn extract_primary_key_info(
     password: &Password,
 ) -> Result<KeyUploadInfo> {
     let primary = &secret_key.primary_key;
-    let timestamp = primary.created_at().as_secs() as u32;
+    let timestamp = primary.created_at().as_secs();
     let fingerprint = primary.fingerprint().as_bytes().to_vec();
 
     primary.unlock(password, |pub_p, priv_key| {
@@ -334,7 +334,7 @@ fn find_signing_key(
             continue;
         }
 
-        let timestamp = subkey.key.created_at().as_secs() as u32;
+        let timestamp = subkey.key.created_at().as_secs();
         let fingerprint = subkey.key.fingerprint().as_bytes().to_vec();
 
         let info = subkey.key.unlock(password, |pub_p, priv_key| {
@@ -348,7 +348,7 @@ fn find_signing_key(
     let primary = &secret_key.primary_key;
     let pub_params = primary.public_params();
     if is_signing_algorithm(pub_params) {
-        let timestamp = primary.created_at().as_secs() as u32;
+        let timestamp = primary.created_at().as_secs();
         let fingerprint = primary.fingerprint().as_bytes().to_vec();
 
         let info = primary.unlock(password, |pub_p, priv_key| {
@@ -382,7 +382,7 @@ fn find_encryption_key(
             continue;
         }
 
-        let timestamp = subkey.key.created_at().as_secs() as u32;
+        let timestamp = subkey.key.created_at().as_secs();
         let fingerprint = subkey.key.fingerprint().as_bytes().to_vec();
 
         let info = subkey.key.unlock(password, |pub_p, priv_key| {
@@ -396,7 +396,7 @@ fn find_encryption_key(
     let primary = &secret_key.primary_key;
     let pub_params = primary.public_params();
     if is_encryption_algorithm(pub_params) {
-        let timestamp = primary.created_at().as_secs() as u32;
+        let timestamp = primary.created_at().as_secs();
         let fingerprint = primary.fingerprint().as_bytes().to_vec();
 
         let info = primary.unlock(password, |pub_p, priv_key| {
@@ -414,9 +414,7 @@ fn extract_key_info(
     priv_params: &PlainSecretParams,
     timestamp: u32,
     fingerprint: Vec<u8>,
-) -> crate::pgp::errors::Result<KeyUploadInfo> {
-    use rsa::traits::PublicKeyParts;
-
+) -> pgp::errors::Result<KeyUploadInfo> {
     match (pub_params, priv_params) {
         (PublicParams::EdDSALegacy(_), PlainSecretParams::Ed25519Legacy(ed_priv)) |
         (PublicParams::Ed25519(_), PlainSecretParams::Ed25519(ed_priv)) => {
@@ -433,7 +431,7 @@ fn extract_key_info(
             })
         }
         (PublicParams::ECDH(ecdh_pub), PlainSecretParams::ECDH(ecdh_priv)) => {
-            use crate::pgp::types::EcdhPublicParams;
+            use pgp::types::EcdhPublicParams;
             match ecdh_pub {
                 EcdhPublicParams::Curve25519 { .. } => {
                     // CV25519 scalar needs to be in big-endian format for the card
@@ -491,10 +489,11 @@ fn extract_key_info(
                         q_value: None,
                     })
                 }
-                _ => Err(crate::pgp::errors::format_err!("Unsupported ECDH curve for card")),
+                _ => Err("Unsupported ECDH curve for card".to_string().into()),
             }
         }
         (PublicParams::RSA(rsa_pub), PlainSecretParams::RSA(rsa_priv)) => {
+            use rsa::traits::PublicKeyParts;
             let (d, p, q, _u) = rsa_priv.to_bytes();
             let n = rsa_pub.key.n();
             let e = rsa_pub.key.e();
@@ -512,12 +511,12 @@ fn extract_key_info(
             })
         }
         (PublicParams::ECDSA(ecdsa_pub), PlainSecretParams::ECDSA(ecdsa_priv)) => {
-            use crate::pgp::types::EcdsaPublicParams;
+            use pgp::types::EcdsaPublicParams;
             let key_type = match ecdsa_pub {
                 EcdsaPublicParams::P256 { .. } => KeyType::EcdsaP256,
                 EcdsaPublicParams::P384 { .. } => KeyType::EcdsaP384,
                 EcdsaPublicParams::P521 { .. } => KeyType::EcdsaP521,
-                _ => return Err(crate::pgp::errors::format_err!("Unsupported ECDSA curve for card")),
+                _ => return Err("Unsupported ECDSA curve for card".to_string().into()),
             };
             Ok(KeyUploadInfo {
                 key_type,
@@ -531,9 +530,7 @@ fn extract_key_info(
                 q_value: None,
             })
         }
-        _ => Err(crate::pgp::errors::format_err!(
-            "Unsupported key type for card upload"
-        )),
+        _ => Err("Unsupported key type for card upload".to_string().into()),
     }
 }
 
