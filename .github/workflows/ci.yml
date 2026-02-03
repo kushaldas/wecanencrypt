@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pcscd libpcsclite-dev pcsc-tools
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Install jcecard IFD handler
+        run: |
+          wget https://kushaldas.in/ifd-jcecard.tar.gz
+          echo "74ffae1782ba974549783066045d900200609242ce3c23f38a01e3fae1c1d065  ifd-jcecard.tar.gz" | sha256sum -c -
+          tar xvf ifd-jcecard.tar.gz
+          cd ifd-jcecard
+          sudo ./install-jcecard.sh
+
+      - name: Start pcscd with jcecard
+        run: |
+          mkdir -p $HOME/.jcecard
+          sudo systemctl stop pcscd.socket pcscd.service || true
+          sudo JCECARD_STORAGE_DIR=$HOME/.jcecard pcscd -f -d > /tmp/pcscd_debug.log 2>&1 &
+          sleep 2
+          # Verify card is available
+          pcsc_scan -r
+
+      - name: Build
+        run: cargo build --features card
+
+      - name: Clippy
+        run: cargo clippy --features card -- -D warnings
+
+      - name: Run tests (without card)
+        run: cargo test --features card --test '*'
+
+      - name: Run card tests
+        run: cargo test --features card --test card_tests -- --ignored --test-threads=1
+
+      - name: Run card reset test
+        run: cargo test --features card --test card_reset_test -- --ignored --test-threads=1
+
+      - name: Build with draft-pqc feature
+        run: cargo build --features draft-pqc
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-logs
+          path: /tmp/pcscd_debug.log
+          retention-days: 1
