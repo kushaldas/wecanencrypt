@@ -93,6 +93,8 @@ pub use types::{
     RsaPublicKey,
     SigningPublicKey,
     AvailableSubkey,
+    UserIDInfo,
+    UIDCertification,
 };
 
 // Re-export parsing functions

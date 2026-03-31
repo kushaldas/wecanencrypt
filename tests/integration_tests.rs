@@ -109,8 +109,8 @@ mod key_generation {
 
         let info = parse_cert_bytes(&key.secret_key, true).unwrap();
         assert_eq!(info.user_ids.len(), 2);
-        assert!(info.user_ids.contains(&"Alice <alice@example.com>".to_string()));
-        assert!(info.user_ids.contains(&"Alice Work <alice@work.com>".to_string()));
+        assert!(info.user_ids.iter().any(|u| u.value == "Alice <alice@example.com>"));
+        assert!(info.user_ids.iter().any(|u| u.value == "Alice Work <alice@work.com>"));
     }
 
     #[test]
@@ -158,7 +158,7 @@ mod parsing {
         assert_eq!(info.fingerprint, fingerprint);
         assert!(info.is_secret);
         assert_eq!(info.user_ids.len(), 1);
-        assert_eq!(info.user_ids[0], TEST_UID);
+        assert_eq!(info.user_ids[0].value, TEST_UID);
     }
 
     #[test]
@@ -437,7 +437,7 @@ mod key_management {
 
         let info = parse_cert_bytes(&updated_key, true).unwrap();
         assert_eq!(info.user_ids.len(), 2);
-        assert!(info.user_ids.contains(&new_uid.to_string()));
+        assert!(info.user_ids.iter().any(|u| u.value == new_uid));
     }
 
     #[test]

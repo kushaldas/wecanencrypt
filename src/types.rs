@@ -182,7 +182,7 @@ pub struct SubkeyInfo {
 #[derive(Debug, Clone)]
 pub struct CertificateInfo {
     /// List of User IDs associated with this certificate
-    pub user_ids: Vec<String>,
+    pub user_ids: Vec<UserIDInfo>,
     /// Primary key fingerprint as hex string
     pub fingerprint: String,
     /// Short key ID (last 16 hex characters)
@@ -273,6 +273,29 @@ pub enum SigningPublicKey {
         /// Public point as hex string
         point: String,
     },
+}
+
+/// Information about a certification on a User ID.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UIDCertification {
+    /// Type of certification: "generic", "persona", "casual", "positive"
+    pub certification_type: String,
+    /// Creation time of the certification signature
+    pub creation_time: Option<DateTime<Utc>>,
+    /// Issuers of this certification as (type, value) pairs
+    /// where type is "fingerprint" or "keyid"
+    pub issuers: Vec<(String, String)>,
+}
+
+/// Information about a User ID on a certificate.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UserIDInfo {
+    /// The full UID string (e.g., "Name <email@example.com>")
+    pub value: String,
+    /// Whether this UID has been revoked
+    pub revoked: bool,
+    /// Certifications on this UID by other keys
+    pub certifications: Vec<UIDCertification>,
 }
 
 /// Information about an available (valid, non-expired, non-revoked) subkey.

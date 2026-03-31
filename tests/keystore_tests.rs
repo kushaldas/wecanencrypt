@@ -425,7 +425,7 @@ fn test_keystore_get_cert_info() {
     assert_eq!(info.fingerprint, fingerprint);
     assert!(info.is_secret);
     assert_eq!(info.user_ids.len(), 1);
-    assert!(info.user_ids[0].contains("info@example.com"));
+    assert!(info.user_ids[0].value.contains("info@example.com"));
 }
 
 #[test]

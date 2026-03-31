@@ -582,7 +582,7 @@ mod keystore_fixtures {
 
         let updated_info = parse_cert_bytes(&updated_cert, true).unwrap();
         assert_eq!(updated_info.user_ids.len(), original_uid_count + 1);
-        assert!(updated_info.user_ids.contains(&"New User <new@example.com>".to_string()));
+        assert!(updated_info.user_ids.iter().any(|u| u.value == "New User <new@example.com>"));
     }
 
     #[test]
@@ -1181,7 +1181,7 @@ mod network_fetch {
         assert_eq!(info.user_ids.len(), 1);
 
         // Check UID contains expected values
-        let uid = &info.user_ids[0];
+        let uid = &info.user_ids[0].value;
         assert!(uid.contains("torbrowser@torproject.org"));
         assert!(uid.contains("Tor Browser Developers"));
     }
@@ -1203,7 +1203,7 @@ mod network_fetch {
         assert_eq!(info.fingerprint.to_uppercase(), "A85FF376759C994A8A1168D8D8219C8C43F6C5E1");
 
         // Check name is present
-        let has_name = info.user_ids.iter().any(|uid| uid.contains("Kushal Das"));
+        let has_name = info.user_ids.iter().any(|uid| uid.value.contains("Kushal Das"));
         assert!(has_name, "Certificate should contain 'Kushal Das'");
     }
 
@@ -1288,9 +1288,10 @@ mod sign_verify_fixtures {
 
 mod certification_fixtures {
     use super::*;
-    use wecanencrypt::{certify_key, create_key_simple, CertificationType};
+    use wecanencrypt::{certify_key, create_key_simple, add_uid, revoke_uid, CertificationType};
 
     /// Port of JCE test_keystore.py::test_ks_userid_signing
+    /// Tests certification with PersonaCertification and verifies certification details
     #[test]
     fn test_certify_uid_with_persona_type() {
         let password = "test123";
@@ -1317,6 +1318,104 @@ mod certification_fixtures {
         let info = parse_cert_bytes(&certified, true).unwrap();
         assert_eq!(info.fingerprint, target.fingerprint);
         assert_eq!(info.user_ids.len(), 2);
+
+        // Verify certification details on the certified UID
+        let certified_uid = info.user_ids.iter()
+            .find(|u| u.value == "Target One <target1@example.com>")
+            .expect("Should find certified UID");
+
+        assert!(!certified_uid.certifications.is_empty(),
+                "Certified UID should have certifications");
+
+        let cert = &certified_uid.certifications[0];
+        assert_eq!(cert.certification_type, "persona");
+        assert!(cert.creation_time.is_some());
+
+        // Verify issuer fingerprint matches certifier
+        let has_certifier_fp = cert.issuers.iter()
+            .any(|(typ, val)| typ == "fingerprint" && *val == certifier.fingerprint);
+        assert!(has_certifier_fp, "Certification should have certifier's fingerprint");
+
+        // The non-certified UID should have no third-party certifications
+        let uncertified_uid = info.user_ids.iter()
+            .find(|u| u.value == "Target Two <target2@example.com>")
+            .expect("Should find uncertified UID");
+        assert!(uncertified_uid.certifications.is_empty(),
+                "Uncertified UID should have no certifications");
+    }
+
+    /// Port of JCE test_parse_cert.py::test_uid_certs
+    /// Tests introspection of certification details on a fixture key
+    #[test]
+    fn test_uid_certs() {
+        let keypath = store_dir().join("kushal_updated_key.asc");
+        let key_data = read_file(&keypath);
+
+        let info = parse_cert_bytes(&key_data, true).unwrap();
+
+        // Find the UID "Kushal Das <kushaldas@gmail.com>"
+        let uid = info.user_ids.iter()
+            .find(|u| u.value == "Kushal Das <kushaldas@gmail.com>")
+            .expect("Should find Kushal's Gmail UID");
+
+        // This UID should have multiple certifications
+        assert!(!uid.certifications.is_empty(),
+                "UID should have certifications, found 0");
+
+        // Verify that certifications have both fingerprint and keyid issuers
+        let mut has_fp = false;
+        let mut has_keyid = false;
+        for cert in &uid.certifications {
+            for (typ, _val) in &cert.issuers {
+                if typ == "fingerprint" {
+                    has_fp = true;
+                }
+                if typ == "keyid" {
+                    has_keyid = true;
+                }
+            }
+            // Each certification should have a type
+            assert!(!cert.certification_type.is_empty());
+        }
+        assert!(has_fp, "Should have at least one fingerprint issuer");
+        assert!(has_keyid, "Should have at least one keyid issuer");
+    }
+
+    /// Port of JCE test_keystore.py::test_add_and_revoke_userid
+    /// Tests that revoked UIDs show revoked=true
+    #[test]
+    fn test_uid_revocation_status() {
+        let password = "redhat";
+        let secret_path = store_dir().join("secret.asc");
+        let secret_data = read_file(&secret_path);
+
+        // Check that there is only one userid and it's not revoked
+        let info = parse_cert_bytes(&secret_data, true).unwrap();
+        assert_eq!(info.user_ids.len(), 1);
+        assert!(!info.user_ids[0].revoked);
+
+        // Add a new userid
+        let with_new_uid = add_uid(&secret_data, "Off Spinner <spin@example.com>", password).unwrap();
+
+        let info2 = parse_cert_bytes(&with_new_uid, true).unwrap();
+        assert_eq!(info2.user_ids.len(), 2);
+        // All UIDs should be non-revoked
+        for uid in &info2.user_ids {
+            assert!(!uid.revoked, "UID '{}' should not be revoked", uid.value);
+        }
+
+        // Now revoke the new user id
+        let with_revoked = revoke_uid(&with_new_uid, "Off Spinner <spin@example.com>", password).unwrap();
+
+        let info3 = parse_cert_bytes(&with_revoked, true).unwrap();
+        assert_eq!(info3.user_ids.len(), 2);
+        for uid in &info3.user_ids {
+            if uid.value == "Off Spinner <spin@example.com>" {
+                assert!(uid.revoked, "Revoked UID should show revoked=true");
+            } else {
+                assert!(!uid.revoked, "Other UID should not be revoked");
+            }
+        }
     }
 }
 

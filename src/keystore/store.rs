@@ -1427,7 +1427,7 @@ mod tests {
         assert_eq!(info.fingerprint, fp);
         assert!(info.is_secret);
         assert_eq!(info.user_ids.len(), 1);
-        assert!(info.user_ids[0].contains("Test User"));
+        assert!(info.user_ids[0].value.contains("Test User"));
 
         // Verify the cert_data matches what was imported
         let exported = store.export_cert(&fp).unwrap();

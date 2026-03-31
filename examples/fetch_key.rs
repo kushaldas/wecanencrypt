@@ -43,7 +43,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\nUser IDs:");
     for uid in &info.user_ids {
-        println!("  - {}", uid);
+        println!("  - {}{}", uid.value, if uid.revoked { " [REVOKED]" } else { "" });
     }
 
     println!("\nSubkeys ({}):", info.subkeys.len());
