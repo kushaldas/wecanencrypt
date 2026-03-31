@@ -558,3 +558,57 @@ mod cross_cipher {
         assert!(valid);
     }
 }
+
+// =============================================================================
+// Reader-Based Encryption/Decryption
+// =============================================================================
+
+mod reader_encryption {
+    use wecanencrypt::{
+        create_key_simple, encrypt_reader_to_file, decrypt_reader_to_file, get_pub_key,
+    };
+    use tempfile::tempdir;
+    use std::io::Cursor;
+
+    const TEST_PASSWORD: &str = "test-password-123";
+
+    /// Port of JCE test_encrypt_decrypt.py::test_encryption_of_multiple_keys_of_a_filehandler
+    #[test]
+    fn test_encrypt_decrypt_reader_to_file() {
+        let dir = tempdir().unwrap();
+        let encrypted_path = dir.path().join("encrypted.pgp");
+        let decrypted_path = dir.path().join("decrypted.txt");
+
+        // Create a key
+        let key = create_key_simple(TEST_PASSWORD, &["Reader Test <reader@example.com>"]).unwrap();
+        let public_key = get_pub_key(&key.secret_key).unwrap();
+
+        let plaintext = b"Hello from reader-based encryption!";
+
+        // Encrypt from a reader (Cursor simulates a file handle)
+        let reader = Cursor::new(plaintext);
+        encrypt_reader_to_file(
+            &[public_key.as_bytes()],
+            reader,
+            &encrypted_path,
+            false,
+        ).unwrap();
+
+        // Verify encrypted file exists
+        assert!(encrypted_path.exists());
+
+        // Decrypt from reader to file
+        let encrypted_data = std::fs::read(&encrypted_path).unwrap();
+        let encrypted_reader = Cursor::new(encrypted_data);
+        decrypt_reader_to_file(
+            &key.secret_key,
+            encrypted_reader,
+            &decrypted_path,
+            TEST_PASSWORD,
+        ).unwrap();
+
+        // Verify content matches
+        let decrypted = std::fs::read(&decrypted_path).unwrap();
+        assert_eq!(decrypted, plaintext);
+    }
+}

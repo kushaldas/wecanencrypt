@@ -920,3 +920,48 @@ fn test_keystore_schema_upgrade() {
     // Verify count matches list length (store is consistent after upgrade)
     assert_eq!(certs.len(), count);
 }
+
+/// Port of JCE test_keystore.py::test_keystore_keyids
+#[test]
+fn test_keystore_keyids() {
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("test.db");
+
+    let store = KeyStore::open(&db_path).unwrap();
+
+    // Import Kushal's updated key
+    let key_path = store_dir().join("kushal_updated_key.asc");
+    let fp = store.import_cert_file(&key_path).unwrap();
+
+    // Verify key_id is the last 16 hex chars of the fingerprint
+    let info = store.get_cert_info(&fp).unwrap();
+    assert_eq!(info.key_id, "D8219C8C43F6C5E1");
+}
+
+/// Port of JCE test_keystore.py::test_key_deletion_cleanup
+#[test]
+fn test_keystore_deletion_cleans_subkeys() {
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("test.db");
+
+    let store = KeyStore::open(&db_path).unwrap();
+
+    // Import a key with subkeys
+    let key_path = store_dir().join("public.asc");
+    let key_data = read_file(&key_path);
+    let fp = store.import_cert(&key_data).unwrap();
+
+    // Verify the key is there
+    assert!(store.contains(&fp).unwrap());
+    let info = store.get_cert_info(&fp).unwrap();
+    assert!(!info.subkeys.is_empty(), "Key should have subkeys");
+
+    // Delete the key
+    store.delete_cert(&fp).unwrap();
+
+    // Verify the key is gone
+    assert!(!store.contains(&fp).unwrap());
+
+    // The store should have no keys at all
+    assert_eq!(store.count().unwrap(), 0);
+}

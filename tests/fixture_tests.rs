@@ -1206,5 +1206,117 @@ mod network_fetch {
         let has_name = info.user_ids.iter().any(|uid| uid.contains("Kushal Das"));
         assert!(has_name, "Certificate should contain 'Kushal Das'");
     }
+
+    /// Port of JCE test_keystore.py::test_fetch_nonexistingkey_by_fingerprint
+    #[test]
+    fn test_fetch_nonexistent_key_by_fingerprint() {
+        let result = fetch_key_by_fingerprint("EF6E286DDA85EA2A4BA7DE684E2C6E8793298291", None);
+        assert!(result.is_err());
+    }
+
+    /// Port of JCE test_keystore.py::test_fetch_nonexistingkey_by_email
+    #[test]
+    fn test_fetch_nonexistent_key_by_email() {
+        let result = fetch_key_by_email("doesnotexists@kushaldas.in");
+        assert!(result.is_err());
+    }
+}
+
+// =============================================================================
+// Keyring Export Round-Trip Test (from test_parse_cert.py)
+// =============================================================================
+
+mod keyring_export {
+    use super::*;
+    use tempfile::tempdir;
+    use wecanencrypt::{export_keyring_file, parse_keyring_file};
+
+    /// Port of JCE test_parse_cert.py::test_write_to_keyring
+    #[test]
+    fn test_write_to_keyring() {
+        let ringpath = test_files_dir().join("foo_keyring.asc");
+        let keys = parse_keyring_file(&ringpath).unwrap();
+        assert_eq!(keys.len(), 2);
+
+        // Collect the raw cert bytes
+        let cert_bytes: Vec<Vec<u8>> = keys.into_iter().map(|(_info, data)| data).collect();
+        let cert_refs: Vec<&[u8]> = cert_bytes.iter().map(|v| v.as_slice()).collect();
+
+        // Write to a temporary file
+        let dir = tempdir().unwrap();
+        let output_path = dir.path().join("keyring.asc");
+        export_keyring_file(&cert_refs, &output_path).unwrap();
+
+        // Verify the file exists and re-read
+        assert!(output_path.exists());
+        let new_keys = parse_keyring_file(&output_path).unwrap();
+        assert_eq!(new_keys.len(), 2);
+    }
+}
+
+// =============================================================================
+// Signing Error Cases with Fixture Keys
+// =============================================================================
+
+mod sign_verify_fixtures {
+    use super::*;
+    use wecanencrypt::{sign_bytes_detached, verify_bytes_detached};
+
+    /// Port of JCE test_keystore.py::test_ks_sign_data_fails
+    #[test]
+    fn test_sign_verify_detached_wrong_data_with_fixture() {
+        let secret_path = store_dir().join("hellosecret.asc");
+        let secret = read_file(&secret_path);
+        let public_path = store_dir().join("hellopublic.asc");
+        let public = read_file(&public_path);
+
+        // Sign "hello"
+        let signature = sign_bytes_detached(&secret, b"hello", "redhat").unwrap();
+        assert!(signature.starts_with("-----BEGIN PGP SIGNATURE-----"));
+
+        // Verify with correct data should pass
+        assert!(verify_bytes_detached(&public, b"hello", signature.as_bytes()).unwrap());
+
+        // Verify with modified data should fail
+        assert!(!verify_bytes_detached(&public, b"hello2", signature.as_bytes()).unwrap());
+    }
+}
+
+// =============================================================================
+// UID Certification with PersonaCertification
+// =============================================================================
+
+mod certification_fixtures {
+    use super::*;
+    use wecanencrypt::{certify_key, create_key_simple, CertificationType};
+
+    /// Port of JCE test_keystore.py::test_ks_userid_signing
+    #[test]
+    fn test_certify_uid_with_persona_type() {
+        let password = "test123";
+
+        // Create certifier key
+        let certifier = create_key_simple(password, &["Certifier <certifier@example.com>"]).unwrap();
+
+        // Create target key with multiple UIDs
+        let target = create_key_simple(password, &[
+            "Target One <target1@example.com>",
+            "Target Two <target2@example.com>",
+        ]).unwrap();
+
+        // Certify specific UIDs with PersonaCertification
+        let certified = certify_key(
+            &certifier.secret_key,
+            target.public_key.as_bytes(),
+            CertificationType::Persona,
+            Some(&["Target One <target1@example.com>"]),
+            password,
+        ).unwrap();
+
+        // The certified key should be valid and parseable
+        let info = parse_cert_bytes(&certified, true).unwrap();
+        assert_eq!(info.fingerprint, target.fingerprint);
+        assert_eq!(info.user_ids.len(), 2);
+    }
 }
 
