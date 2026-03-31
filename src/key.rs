@@ -78,12 +78,12 @@ pub fn create_key(
     password: &str,
     user_ids: &[&str],
     cipher: CipherSuite,
-    _creation_time: Option<DateTime<Utc>>,
-    _expiration_time: Option<DateTime<Utc>>,
-    _subkeys_expiration: Option<DateTime<Utc>>,
+    creation_time: Option<DateTime<Utc>>,
+    expiration_time: Option<DateTime<Utc>>,
+    subkeys_expiration: Option<DateTime<Utc>>,
     which_keys: SubkeyFlags,
     can_primary_sign: bool,
-    _can_primary_expire: bool,
+    can_primary_expire: bool,
 ) -> Result<GeneratedKey> {
     if user_ids.is_empty() {
         return Err(Error::InvalidInput(
@@ -97,8 +97,17 @@ pub fn create_key(
     let primary_key_type = cipher.primary_key_type();
     let encryption_key_type = cipher.encryption_key_type();
 
-    // Note: Key expiration is now set via self-signatures after generation in pgp 0.19
-    // The builder no longer supports setting expiration during key creation
+    // Note: Key expiration is set via self-signatures after generation in pgp 0.19.
+    // The builder does not support setting expiration during key creation,
+    // but creation time CAN be set via the created_at field.
+    let creation_timestamp = match creation_time {
+        Some(dt) => {
+            let systime: SystemTime = dt.into();
+            Some(Timestamp::try_from(systime)
+                .map_err(|e| Error::InvalidInput(format!("Invalid creation time: {}", e)))?)
+        }
+        None => None,
+    };
 
     // Build subkeys based on flags
     let mut subkeys = Vec::new();
@@ -110,6 +119,10 @@ pub fn create_key(
             .can_encrypt(EncryptionCaps::All)
             .can_sign(false)
             .can_authenticate(false);
+
+        if let Some(ts) = creation_timestamp {
+            enc_builder.created_at(ts);
+        }
 
         if !password.is_empty() {
             enc_builder.passphrase(Some(password.to_string()));
@@ -126,6 +139,10 @@ pub fn create_key(
             .can_sign(true)
             .can_authenticate(false);
 
+        if let Some(ts) = creation_timestamp {
+            sign_builder.created_at(ts);
+        }
+
         if !password.is_empty() {
             sign_builder.passphrase(Some(password.to_string()));
         }
@@ -140,6 +157,10 @@ pub fn create_key(
             .can_encrypt(EncryptionCaps::None)
             .can_sign(false)
             .can_authenticate(true);
+
+        if let Some(ts) = creation_timestamp {
+            auth_builder.created_at(ts);
+        }
 
         if !password.is_empty() {
             auth_builder.passphrase(Some(password.to_string()));
@@ -156,6 +177,10 @@ pub fn create_key(
         .can_sign(can_primary_sign)
         .can_encrypt(EncryptionCaps::None)
         .primary_user_id(user_ids[0].to_string());
+
+    if let Some(ts) = creation_timestamp {
+        key_params.created_at(ts);
+    }
 
     // Add additional user IDs
     if user_ids.len() > 1 {
@@ -176,19 +201,43 @@ pub fn create_key(
         .generate(&mut rng)
         .map_err(|e| Error::Crypto(e.to_string()))?;
 
-    // Export public key (armored)
-    let public_key = secret_key.to_public_key();
-    let public_key_armored = public_key_to_armored(&public_key)?;
-
     // Get fingerprint from the public key's primary key
+    let public_key = secret_key.to_public_key();
     let fingerprint = fingerprint_to_hex(&public_key.primary_key);
 
     // Export secret key (binary)
-    let secret_key_bytes = secret_key_to_bytes(&secret_key)?;
+    let mut final_secret_key_bytes = secret_key_to_bytes(&secret_key)?;
+
+    // Apply primary key expiration if requested
+    if can_primary_expire {
+        if let Some(exp_time) = expiration_time {
+            final_secret_key_bytes = update_primary_expiry(&final_secret_key_bytes, exp_time, password)?;
+        }
+    }
+
+    // Apply subkey expiration if requested
+    if let Some(subkey_exp_time) = subkeys_expiration {
+        let current_info = crate::parse::parse_cert_bytes(&final_secret_key_bytes, true)?;
+        let subkey_fps: Vec<String> = current_info.subkeys.iter()
+            .map(|s| s.fingerprint.clone())
+            .collect();
+        let subkey_fp_refs: Vec<&str> = subkey_fps.iter()
+            .map(|s| s.as_str())
+            .collect();
+        if !subkey_fp_refs.is_empty() {
+            final_secret_key_bytes = update_subkeys_expiry(
+                &final_secret_key_bytes, &subkey_fp_refs, subkey_exp_time, password)?;
+        }
+    }
+
+    // Re-derive public key from potentially-updated secret key
+    let final_secret = parse_secret_key(&final_secret_key_bytes)?;
+    let final_public = final_secret.to_public_key();
+    let public_key_armored = public_key_to_armored(&final_public)?;
 
     Ok(GeneratedKey {
         public_key: public_key_armored,
-        secret_key: secret_key_bytes,
+        secret_key: final_secret_key_bytes,
         fingerprint,
     })
 }

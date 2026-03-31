@@ -13,7 +13,10 @@ use crate::internal::{
     fingerprint_to_hex, get_algorithm_name, get_key_bit_size, is_subkey_revoked, is_subkey_valid,
     keyid_to_hex, parse_cert, system_time_to_datetime,
 };
-use crate::types::{AvailableSubkey, CertificateInfo, KeyCipherDetails, KeyType, SubkeyInfo};
+use crate::types::{
+    AvailableSubkey, CertificateInfo, KeyCipherDetails, KeyType, SubkeyInfo,
+    UIDCertification, UserIDInfo,
+};
 
 /// Parse a certificate from bytes and extract its information.
 ///
@@ -85,12 +88,68 @@ fn extract_cert_info(
     is_secret: bool,
     allow_expired: bool,
 ) -> Result<CertificateInfo> {
-    // Get user IDs
-    let user_ids: Vec<String> = public_key
+    // Get user IDs with certification details
+    let primary_fp = fingerprint_to_hex(&public_key.primary_key);
+    let user_ids: Vec<UserIDInfo> = public_key
         .details
         .users
         .iter()
-        .map(|u| String::from_utf8_lossy(u.id.id()).to_string())
+        .map(|u| {
+            let value = String::from_utf8_lossy(u.id.id()).to_string();
+
+            // Check revocation: any CertRevocation signature on this UID
+            let revoked = u.signatures.iter().any(|sig| {
+                sig.typ() == Some(pgp::packet::SignatureType::CertRevocation)
+            });
+
+            // Collect third-party certifications (exclude self-signatures)
+            let certifications = u.signatures.iter().filter_map(|sig| {
+                let sig_type = sig.typ()?;
+                let cert_type_str = match sig_type {
+                    pgp::packet::SignatureType::CertGeneric => "generic",
+                    pgp::packet::SignatureType::CertPersona => "persona",
+                    pgp::packet::SignatureType::CertCasual => "casual",
+                    pgp::packet::SignatureType::CertPositive => "positive",
+                    _ => return None,
+                };
+
+                // Collect issuer info
+                let mut issuers: Vec<(String, String)> = Vec::new();
+                for fp in sig.issuer_fingerprint() {
+                    let fp_hex = hex::encode_upper(fp.as_bytes());
+                    // Skip self-signatures (issuer == primary key)
+                    if fp_hex == primary_fp {
+                        return None;
+                    }
+                    issuers.push(("fingerprint".to_string(), fp_hex));
+                }
+                for kid in sig.issuer_key_id() {
+                    issuers.push(("keyid".to_string(), hex::encode_upper(kid.as_ref())));
+                }
+
+                // If no issuers found, it might still be a self-sig without fingerprint subpacket
+                if issuers.is_empty() {
+                    return None;
+                }
+
+                let creation_time = sig.created().map(|ts| {
+                    let st: std::time::SystemTime = ts.into();
+                    system_time_to_datetime(st)
+                });
+
+                Some(UIDCertification {
+                    certification_type: cert_type_str.to_string(),
+                    creation_time,
+                    issuers,
+                })
+            }).collect();
+
+            UserIDInfo {
+                value,
+                revoked,
+                certifications,
+            }
+        })
         .collect();
 
     // Primary key info
