@@ -1,6 +1,6 @@
 [package]
 name = "wecanencrypt"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 license = "MIT"
 description = "Simple Rust OpenPGP library for encryption, signing, and key management."
@@ -58,7 +58,7 @@ reqwest = { version = "0.12", features = ["blocking"], optional = true }
 openpgp-card = { version = "0.5", optional = true }
 card-backend-pcsc = { version = "0.5", optional = true }
 secrecy = { version = "0.8", optional = true }
-talktosc = { version = "0.2", optional = true }
+talktosc = { version = "0.3", optional = true }
 
 [dev-dependencies]
 tempfile = "3.0"
