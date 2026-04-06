@@ -128,18 +128,18 @@ mod card_tests {
 
         // Block admin PIN by entering it wrong 3 times
         for i in 1..=3 {
-            let _ = verify_admin_pin(b"00000000");
+            let _ = verify_admin_pin(b"00000000", None);
             println!("  Wrong PIN attempt {}/3", i);
         }
 
         // Reset the card
-        reset_card().expect("Failed to reset card");
+        reset_card(None).expect("Failed to reset card");
         println!("Card reset successful. PINs restored to defaults.");
     }
 
     /// Verify that the fingerprint on the card matches expected
     fn verify_card_fingerprint(slot: &str, expected_fp: &str) {
-        let info = get_card_details().expect("Failed to get card details");
+        let info = get_card_details(None).expect("Failed to get card details");
 
         let actual_fp = match slot {
             "signature" => info.signature_fingerprint,
@@ -178,7 +178,7 @@ mod card_tests {
     #[test]
     #[ignore = "requires physical smart card"]
     fn test_get_card_details() {
-        let info = get_card_details().expect("Failed to get card details");
+        let info = get_card_details(None).expect("Failed to get card details");
 
         println!("Card Details:");
         println!("  Serial: {}", info.serial_number);
@@ -198,7 +198,7 @@ mod card_tests {
     #[test]
     #[ignore = "requires physical smart card"]
     fn test_get_card_version() {
-        let version = get_card_version().expect("Failed to get card version");
+        let version = get_card_version(None).expect("Failed to get card version");
         println!("Card version: {}", version);
         assert!(!version.is_empty(), "Version should not be empty");
     }
@@ -206,7 +206,7 @@ mod card_tests {
     #[test]
     #[ignore = "requires physical smart card"]
     fn test_get_card_serial() {
-        let serial = get_card_serial().expect("Failed to get card serial");
+        let serial = get_card_serial(None).expect("Failed to get card serial");
         println!("Card serial: {}", serial);
         assert!(!serial.is_empty(), "Serial should not be empty");
         assert_eq!(serial.len(), 8, "Serial should be 8 hex characters");
@@ -215,7 +215,7 @@ mod card_tests {
     #[test]
     #[ignore = "requires physical smart card"]
     fn test_get_pin_retry_counters() {
-        let (user, reset, admin) = get_pin_retry_counters().expect("Failed to get PIN counters");
+        let (user, reset, admin) = get_pin_retry_counters(None).expect("Failed to get PIN counters");
 
         println!("PIN retry counters:");
         println!("  User PIN: {}", user);
@@ -231,7 +231,7 @@ mod card_tests {
     #[test]
     #[ignore = "requires physical smart card with default PIN"]
     fn test_verify_user_pin() {
-        let result = verify_user_pin(USER_PIN);
+        let result = verify_user_pin(USER_PIN, None);
         assert!(result.is_ok(), "User PIN verification failed: {:?}", result.err());
         assert!(result.unwrap(), "User PIN should be verified");
     }
@@ -239,7 +239,7 @@ mod card_tests {
     #[test]
     #[ignore = "requires physical smart card with default PIN"]
     fn test_verify_admin_pin() {
-        let result = verify_admin_pin(ADMIN_PIN);
+        let result = verify_admin_pin(ADMIN_PIN, None);
         assert!(result.is_ok(), "Admin PIN verification failed: {:?}", result.err());
         assert!(result.unwrap(), "Admin PIN should be verified");
     }
@@ -927,7 +927,7 @@ mod card_tests {
     #[test]
     #[ignore = "requires physical smart card"]
     fn test_wrong_pin_error() {
-        let result = verify_user_pin(b"000000");
+        let result = verify_user_pin(b"000000", None);
 
         match result {
             Ok(_) => panic!("Should have failed with wrong PIN"),
@@ -952,7 +952,7 @@ mod card_tests {
         if !connected {
             println!("No card connected - testing error handling");
 
-            let result = get_card_details();
+            let result = get_card_details(None);
             assert!(result.is_err(), "Should return error when no card connected");
 
             let error = result.unwrap_err();

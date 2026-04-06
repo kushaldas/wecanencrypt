@@ -1,13 +1,16 @@
 //! Smart card connection and management functions.
 //!
 //! This module provides functions for connecting to and managing OpenPGP smart cards.
+//! All functions accept an optional `ident` parameter to select a specific card
+//! when multiple cards are connected. The ident format is `"MANUFACTURER:SERIAL"`
+//! (e.g. `"0006:00000001"` for a Yubico card). If `None`, the first available card is used.
 
 use card_backend_pcsc::PcscBackend;
 use openpgp_card::Card;
 use openpgp_card::ocard::{OpenPGP, data::UserInteractionFlag};
 use secrecy::{SecretString, SecretVec};
 
-use super::types::{CardError, CardInfo, KeySlot, TouchMode};
+use super::types::{CardError, CardInfo, CardSummary, KeySlot, TouchMode};
 use crate::error::{Error, Result};
 
 /// Check if an OpenPGP smart card is connected.
@@ -32,14 +35,150 @@ pub fn is_card_connected() -> bool {
     }
 }
 
-/// Get the first available card backend.
-fn get_card_backend() -> Result<PcscBackend> {
-    let mut cards = PcscBackend::cards(None)
+/// List all connected OpenPGP smart cards.
+///
+/// Returns a summary for each connected card including the ident
+/// (manufacturer:serial), manufacturer name, and serial number.
+///
+/// # Example
+///
+/// ```no_run
+/// use wecanencrypt::card::list_all_cards;
+///
+/// let cards = list_all_cards().unwrap();
+/// for card in &cards {
+///     println!("{} ({})", card.manufacturer_name, card.ident);
+/// }
+/// ```
+pub fn list_all_cards() -> Result<Vec<CardSummary>> {
+    let cards = PcscBackend::cards(None)
         .map_err(|e| Error::Card(CardError::CommunicationError(e.to_string())))?;
 
-    cards.next()
-        .ok_or(Error::Card(CardError::NotConnected))?
-        .map_err(|e| Error::Card(CardError::CommunicationError(e.to_string())))
+    let mut result = Vec::new();
+
+    for backend in cards {
+        let backend = match backend {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+
+        let mut card = match Card::new(backend) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        let mut tx = match card.transaction() {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+
+        if let Ok(aid) = tx.application_identifier() {
+            let ident = aid.ident();
+            let manufacturer_name = aid.manufacturer_name().to_string();
+            let serial_number = format!("{:08X}", aid.serial());
+            let cardholder_name = tx.cardholder_name().ok()
+                .filter(|n| !n.is_empty());
+
+            result.push(CardSummary {
+                ident,
+                manufacturer_name,
+                serial_number,
+                cardholder_name,
+            });
+        }
+    }
+
+    Ok(result)
+}
+
+/// Get a card backend, optionally selecting by ident.
+///
+/// If `ident` is `None`, returns the first available card.
+/// If `ident` is `Some`, finds the card matching the given ident string.
+pub(crate) fn get_card_backend(ident: Option<&str>) -> Result<PcscBackend> {
+    match ident {
+        None => {
+            let mut cards = PcscBackend::cards(None)
+                .map_err(|e| Error::Card(CardError::CommunicationError(e.to_string())))?;
+            cards.next()
+                .ok_or(Error::Card(CardError::NotConnected))?
+                .map_err(|e| Error::Card(CardError::CommunicationError(e.to_string())))
+        }
+        Some(target_ident) => {
+            // Use PcscBackend::cards with ident filter
+            // Iterate all cards, find the one with matching ident
+            let target = target_ident.to_ascii_uppercase();
+            let cards = PcscBackend::cards(None)
+                .map_err(|e| Error::Card(CardError::CommunicationError(e.to_string())))?;
+
+            for backend in cards {
+                let backend = match backend {
+                    Ok(b) => b,
+                    Err(_) => continue,
+                };
+
+                // Probe this backend to check its ident
+                let mut card = match Card::new(backend) {
+                    Ok(c) => c,
+                    Err(_) => continue,
+                };
+
+                let card_ident = {
+                    let tx = match card.transaction() {
+                        Ok(t) => t,
+                        Err(_) => continue,
+                    };
+                    match tx.application_identifier() {
+                        Ok(aid) => aid.ident(),
+                        Err(_) => continue,
+                    }
+                };
+
+                if card_ident == target {
+                    // Found the matching card. Drop and re-open to get a fresh backend.
+                    drop(card);
+                    // Re-enumerate and find the same card
+                    let cards2 = PcscBackend::cards(None)
+                        .map_err(|e| Error::Card(CardError::CommunicationError(e.to_string())))?;
+                    for b2 in cards2 {
+                        let b2 = match b2 {
+                            Ok(b) => b,
+                            Err(_) => continue,
+                        };
+                        // Check this is the right one
+                        let mut c2 = match Card::new(b2) {
+                            Ok(c) => c,
+                            Err(_) => continue,
+                        };
+                        let matches = {
+                            let tx2 = match c2.transaction() {
+                                Ok(t) => t,
+                                Err(_) => continue,
+                            };
+                            tx2.application_identifier()
+                                .map(|aid| aid.ident() == target)
+                                .unwrap_or(false)
+                        };
+                        if matches {
+                            // Drop Card so the backend is free, re-open one more time
+                            drop(c2);
+                            let cards3 = PcscBackend::cards(None)
+                                .map_err(|e| Error::Card(CardError::CommunicationError(e.to_string())))?;
+                            for b3 in cards3 {
+                                if let Ok(b3) = b3 {
+                                    return Ok(b3);
+                                }
+                            }
+                        }
+                    }
+                    return Err(Error::Card(CardError::NotConnected));
+                }
+            }
+            Err(Error::Card(CardError::CommunicationError(
+                format!("Card with ident '{}' not found", target_ident)
+            )))
+        }
+    }
 }
 
 /// Convert a PIN byte slice to SecretString.
@@ -49,29 +188,26 @@ fn pin_to_secret(pin: &[u8]) -> Result<SecretString> {
     Ok(SecretString::new(pin_str.to_string()))
 }
 
-/// Get detailed information about the connected smart card.
+/// Get detailed information about a connected smart card.
 ///
-/// # Returns
+/// # Arguments
 ///
-/// A [`CardInfo`] struct containing card details like serial number,
-/// fingerprints, and retry counters.
-///
-/// # Errors
-///
-/// * [`CardError::NotConnected`] - If no card is connected
-/// * [`CardError::SelectFailed`] - If the OpenPGP applet cannot be selected
+/// * `ident` - Optional card identifier (e.g. "0006:00000001"). If None, uses the first card.
 ///
 /// # Example
 ///
 /// ```no_run
 /// use wecanencrypt::card::get_card_details;
 ///
-/// let info = get_card_details().unwrap();
-/// println!("Card serial: {}", info.serial_number);
-/// println!("PIN retries: {}", info.pin_retry_counter);
+/// // First card
+/// let info = get_card_details(None).unwrap();
+/// println!("Card: {}", info.ident);
+///
+/// // Specific card
+/// let info = get_card_details(Some("0006:00000001")).unwrap();
 /// ```
-pub fn get_card_details() -> Result<CardInfo> {
-    let backend = get_card_backend()?;
+pub fn get_card_details(ident: Option<&str>) -> Result<CardInfo> {
+    let backend = get_card_backend(ident)?;
     let mut card = Card::new(backend)
         .map_err(|e| Error::Card(CardError::from(e)))?;
 
@@ -80,13 +216,13 @@ pub fn get_card_details() -> Result<CardInfo> {
 
     let mut info = CardInfo::default();
 
-    // Get application identifier (serial number and manufacturer)
     if let Ok(aid) = tx.application_identifier() {
         info.serial_number = format!("{:08X}", aid.serial());
         info.manufacturer = Some(format!("{:04X}", aid.manufacturer()));
+        info.manufacturer_name = Some(aid.manufacturer_name().to_string());
+        info.ident = aid.ident();
     }
 
-    // Key fingerprints
     if let Ok(fps) = tx.fingerprints() {
         if let Some(fp) = fps.signature() {
             info.signature_fingerprint = Some(hex::encode(fp.as_bytes()));
@@ -99,21 +235,18 @@ pub fn get_card_details() -> Result<CardInfo> {
         }
     }
 
-    // PIN retry counters
     if let Ok(status) = tx.pw_status_bytes() {
         info.pin_retry_counter = status.err_count_pw1();
         info.reset_code_retry_counter = status.err_count_rc();
         info.admin_pin_retry_counter = status.err_count_pw3();
     }
 
-    // Cardholder name (may return empty string)
     if let Ok(name) = tx.cardholder_name() {
         if !name.is_empty() {
             info.cardholder_name = Some(name);
         }
     }
 
-    // Public key URL (may return empty string)
     if let Ok(url) = tx.url() {
         if !url.is_empty() {
             info.public_key_url = Some(url);
@@ -123,7 +256,11 @@ pub fn get_card_details() -> Result<CardInfo> {
     Ok(info)
 }
 
-/// Get the firmware version of the connected card.
+/// Get the firmware version of a connected card.
+///
+/// # Arguments
+///
+/// * `ident` - Optional card identifier. If None, uses the first card.
 ///
 /// # Returns
 ///
@@ -134,11 +271,11 @@ pub fn get_card_details() -> Result<CardInfo> {
 /// ```no_run
 /// use wecanencrypt::card::get_card_version;
 ///
-/// let version = get_card_version().unwrap();
+/// let version = get_card_version(None).unwrap();
 /// println!("Firmware: {}", version);
 /// ```
-pub fn get_card_version() -> Result<String> {
-    let backend = get_card_backend()?;
+pub fn get_card_version(ident: Option<&str>) -> Result<String> {
+    let backend = get_card_backend(ident)?;
     let mut card = Card::new(backend)
         .map_err(|e| Error::Card(CardError::from(e)))?;
 
@@ -148,14 +285,17 @@ pub fn get_card_version() -> Result<String> {
     let aid = tx.application_identifier()
         .map_err(|e| Error::Card(CardError::from(e)))?;
 
-    // Version is packed as major.minor in a u16 (major in upper byte, minor in lower)
     let version = aid.version();
     let major = version >> 8;
     let minor = version & 0xFF;
     Ok(format!("{}.{}", major, minor))
 }
 
-/// Get the serial number of the connected card.
+/// Get the serial number of a connected card.
+///
+/// # Arguments
+///
+/// * `ident` - Optional card identifier. If None, uses the first card.
 ///
 /// # Returns
 ///
@@ -166,11 +306,11 @@ pub fn get_card_version() -> Result<String> {
 /// ```no_run
 /// use wecanencrypt::card::get_card_serial;
 ///
-/// let serial = get_card_serial().unwrap();
+/// let serial = get_card_serial(None).unwrap();
 /// println!("Serial: {}", serial);
 /// ```
-pub fn get_card_serial() -> Result<String> {
-    let backend = get_card_backend()?;
+pub fn get_card_serial(ident: Option<&str>) -> Result<String> {
+    let backend = get_card_backend(ident)?;
     let mut card = Card::new(backend)
         .map_err(|e| Error::Card(CardError::from(e)))?;
 
@@ -188,6 +328,7 @@ pub fn get_card_serial() -> Result<String> {
 /// # Arguments
 ///
 /// * `pin` - The user PIN (typically 6-8 digits)
+/// * `ident` - Optional card identifier. If None, uses the first card.
 ///
 /// # Returns
 ///
@@ -203,14 +344,14 @@ pub fn get_card_serial() -> Result<String> {
 /// ```no_run
 /// use wecanencrypt::card::verify_user_pin;
 ///
-/// match verify_user_pin(b"123456") {
+/// match verify_user_pin(b"123456", None) {
 ///     Ok(true) => println!("PIN verified"),
 ///     Err(e) => println!("PIN error: {}", e),
 ///     _ => {}
 /// }
 /// ```
-pub fn verify_user_pin(pin: &[u8]) -> Result<bool> {
-    let backend = get_card_backend()?;
+pub fn verify_user_pin(pin: &[u8], ident: Option<&str>) -> Result<bool> {
+    let backend = get_card_backend(ident)?;
     let mut card = Card::new(backend)
         .map_err(|e| Error::Card(CardError::from(e)))?;
 
@@ -229,6 +370,7 @@ pub fn verify_user_pin(pin: &[u8]) -> Result<bool> {
 /// # Arguments
 ///
 /// * `pin` - The admin PIN (typically 8 digits, default "12345678")
+/// * `ident` - Optional card identifier. If None, uses the first card.
 ///
 /// # Returns
 ///
@@ -244,14 +386,14 @@ pub fn verify_user_pin(pin: &[u8]) -> Result<bool> {
 /// ```no_run
 /// use wecanencrypt::card::verify_admin_pin;
 ///
-/// match verify_admin_pin(b"12345678") {
+/// match verify_admin_pin(b"12345678", None) {
 ///     Ok(true) => println!("Admin PIN verified"),
 ///     Err(e) => println!("Admin PIN error: {}", e),
 ///     _ => {}
 /// }
 /// ```
-pub fn verify_admin_pin(pin: &[u8]) -> Result<bool> {
-    let backend = get_card_backend()?;
+pub fn verify_admin_pin(pin: &[u8], ident: Option<&str>) -> Result<bool> {
+    let backend = get_card_backend(ident)?;
     let mut card = Card::new(backend)
         .map_err(|e| Error::Card(CardError::from(e)))?;
 
@@ -267,6 +409,10 @@ pub fn verify_admin_pin(pin: &[u8]) -> Result<bool> {
 
 /// Get the current PIN retry counters.
 ///
+/// # Arguments
+///
+/// * `ident` - Optional card identifier. If None, uses the first card.
+///
 /// # Returns
 ///
 /// A tuple of (user_pin_retries, reset_code_retries, admin_pin_retries).
@@ -276,12 +422,12 @@ pub fn verify_admin_pin(pin: &[u8]) -> Result<bool> {
 /// ```no_run
 /// use wecanencrypt::card::get_pin_retry_counters;
 ///
-/// let (user, reset, admin) = get_pin_retry_counters().unwrap();
+/// let (user, reset, admin) = get_pin_retry_counters(None).unwrap();
 /// println!("User PIN retries: {}", user);
 /// println!("Admin PIN retries: {}", admin);
 /// ```
-pub fn get_pin_retry_counters() -> Result<(u8, u8, u8)> {
-    let backend = get_card_backend()?;
+pub fn get_pin_retry_counters(ident: Option<&str>) -> Result<(u8, u8, u8)> {
+    let backend = get_card_backend(ident)?;
     let mut card = Card::new(backend)
         .map_err(|e| Error::Card(CardError::from(e)))?;
 
@@ -300,8 +446,9 @@ pub fn get_pin_retry_counters() -> Result<(u8, u8, u8)> {
 
 /// Reset the card to factory defaults.
 ///
-/// This operation requires the admin PIN to be blocked first (by entering
-/// it incorrectly 3 times), then the reset code or a factory reset command.
+/// # Arguments
+///
+/// * `ident` - Optional card identifier. If None, uses the first card.
 ///
 /// # Warning
 ///
@@ -312,11 +459,10 @@ pub fn get_pin_retry_counters() -> Result<(u8, u8, u8)> {
 /// ```no_run
 /// use wecanencrypt::card::reset_card;
 ///
-/// // Only works if admin PIN is blocked
-/// reset_card().unwrap();
+/// reset_card(None).unwrap();
 /// ```
-pub fn reset_card() -> Result<()> {
-    let backend = get_card_backend()?;
+pub fn reset_card(ident: Option<&str>) -> Result<()> {
+    let backend = get_card_backend(ident)?;
     let mut card = Card::new(backend)
         .map_err(|e| Error::Card(CardError::from(e)))?;
 
@@ -335,16 +481,17 @@ pub fn reset_card() -> Result<()> {
 ///
 /// * `old_pin` - The current user PIN
 /// * `new_pin` - The new user PIN (must be 6-127 bytes)
+/// * `ident` - Optional card identifier. If None, uses the first card.
 ///
 /// # Example
 ///
 /// ```no_run
 /// use wecanencrypt::card::change_user_pin;
 ///
-/// change_user_pin(b"123456", b"654321").unwrap();
+/// change_user_pin(b"123456", b"654321", None).unwrap();
 /// ```
-pub fn change_user_pin(old_pin: &[u8], new_pin: &[u8]) -> Result<()> {
-    let backend = get_card_backend()?;
+pub fn change_user_pin(old_pin: &[u8], new_pin: &[u8], ident: Option<&str>) -> Result<()> {
+    let backend = get_card_backend(ident)?;
     let mut card = Card::new(backend)
         .map_err(|e| Error::Card(CardError::from(e)))?;
 
@@ -365,16 +512,17 @@ pub fn change_user_pin(old_pin: &[u8], new_pin: &[u8]) -> Result<()> {
 ///
 /// * `old_pin` - The current admin PIN
 /// * `new_pin` - The new admin PIN (must be 8-127 bytes)
+/// * `ident` - Optional card identifier. If None, uses the first card.
 ///
 /// # Example
 ///
 /// ```no_run
 /// use wecanencrypt::card::change_admin_pin;
 ///
-/// change_admin_pin(b"12345678", b"87654321").unwrap();
+/// change_admin_pin(b"12345678", b"87654321", None).unwrap();
 /// ```
-pub fn change_admin_pin(old_pin: &[u8], new_pin: &[u8]) -> Result<()> {
-    let backend = get_card_backend()?;
+pub fn change_admin_pin(old_pin: &[u8], new_pin: &[u8], ident: Option<&str>) -> Result<()> {
+    let backend = get_card_backend(ident)?;
     let mut card = Card::new(backend)
         .map_err(|e| Error::Card(CardError::from(e)))?;
 
@@ -400,6 +548,7 @@ pub fn change_admin_pin(old_pin: &[u8], new_pin: &[u8]) -> Result<()> {
 /// * `slot` - Which key slot to configure (Signature, Encryption, Authentication)
 /// * `mode` - The touch policy to set
 /// * `admin_pin` - The admin PIN for the card
+/// * `ident` - Optional card identifier. If None, uses the first card.
 ///
 /// # Warning
 ///
@@ -412,29 +561,23 @@ pub fn change_admin_pin(old_pin: &[u8], new_pin: &[u8]) -> Result<()> {
 /// use wecanencrypt::card::{set_touch_mode, KeySlot, TouchMode};
 ///
 /// // Require touch for signing operations (can be changed later)
-/// set_touch_mode(KeySlot::Signature, TouchMode::On, b"12345678").unwrap();
+/// set_touch_mode(KeySlot::Signature, TouchMode::On, b"12345678", None).unwrap();
 ///
 /// // Permanently require touch for decryption
-/// set_touch_mode(KeySlot::Encryption, TouchMode::Fixed, b"12345678").unwrap();
+/// set_touch_mode(KeySlot::Encryption, TouchMode::Fixed, b"12345678", None).unwrap();
 /// ```
-pub fn set_touch_mode(slot: KeySlot, mode: TouchMode, admin_pin: &[u8]) -> Result<()> {
-    let backend = get_card_backend()?;
+pub fn set_touch_mode(slot: KeySlot, mode: TouchMode, admin_pin: &[u8], ident: Option<&str>) -> Result<()> {
+    let backend = get_card_backend(ident)?;
 
-    // Use the low-level OpenPGP API for UIF operations
     let mut opgp = OpenPGP::new(backend)
         .map_err(|e: openpgp_card::Error| Error::Card(CardError::CardError(e.to_string())))?;
     let mut tx = opgp.transaction()
         .map_err(|e: openpgp_card::Error| Error::Card(CardError::CardError(e.to_string())))?;
 
-    // Verify admin PIN first (PW3 is the admin PIN)
     let secret_pin = SecretVec::new(admin_pin.to_vec());
     tx.verify_pw3(secret_pin)
         .map_err(|e: openpgp_card::Error| Error::Card(CardError::CardError(e.to_string())))?;
 
-    // Create UserInteractionFlag with the policy
-    // UIF format: [policy_byte, features_byte]
-    // Policy: 0=Off, 1=On, 2=Fixed, 3=Cached, 4=CachedFixed
-    // Features: 0x20 = button required
     let policy_byte: u8 = match mode {
         TouchMode::Off => 0x00,
         TouchMode::On => 0x01,
@@ -442,11 +585,10 @@ pub fn set_touch_mode(slot: KeySlot, mode: TouchMode, admin_pin: &[u8]) -> Resul
         TouchMode::Cached => 0x03,
         TouchMode::CachedFixed => 0x04,
     };
-    let uif_bytes = vec![policy_byte, 0x20]; // 0x20 = button feature
+    let uif_bytes = vec![policy_byte, 0x20];
     let uif = UserInteractionFlag::try_from(uif_bytes)
         .map_err(|e: openpgp_card::Error| Error::Card(CardError::CardError(format!("Failed to create UIF: {}", e))))?;
 
-    // Set touch mode based on slot
     match slot {
         KeySlot::Signature => {
             tx.set_uif_pso_cds(&uif)
@@ -461,6 +603,79 @@ pub fn set_touch_mode(slot: KeySlot, mode: TouchMode, admin_pin: &[u8]) -> Resul
                 .map_err(|e: openpgp_card::Error| Error::Card(CardError::CardError(e.to_string())))?;
         }
     }
+
+    Ok(())
+}
+
+/// Set the cardholder name on the card.
+///
+/// The name must be ASCII only and less than 40 characters.
+///
+/// Note: The OpenPGP card spec uses the format "Last<<First" for names,
+/// but this function takes the raw name string. The caller is responsible
+/// for any encoding if needed.
+///
+/// # Arguments
+///
+/// * `name` - The cardholder name (ASCII, max 39 chars)
+/// * `admin_pin` - The admin PIN for the card
+/// * `ident` - Optional card identifier. If None, uses the first card.
+///
+/// # Example
+///
+/// ```no_run
+/// use wecanencrypt::card::set_cardholder_name;
+///
+/// set_cardholder_name("Doe<<Jane", b"12345678", None).unwrap();
+/// ```
+pub fn set_cardholder_name(name: &str, admin_pin: &[u8], ident: Option<&str>) -> Result<()> {
+    let backend = get_card_backend(ident)?;
+    let mut opgp = OpenPGP::new(backend)
+        .map_err(|e: openpgp_card::Error| Error::Card(CardError::CardError(e.to_string())))?;
+    let mut tx = opgp.transaction()
+        .map_err(|e: openpgp_card::Error| Error::Card(CardError::CardError(e.to_string())))?;
+
+    let secret_pin = SecretVec::new(admin_pin.to_vec());
+    tx.verify_pw3(secret_pin)
+        .map_err(|e: openpgp_card::Error| Error::Card(CardError::CardError(e.to_string())))?;
+
+    tx.set_name(name.as_bytes())
+        .map_err(|e: openpgp_card::Error| Error::Card(CardError::CardError(e.to_string())))?;
+
+    Ok(())
+}
+
+/// Set the public key URL on the card.
+///
+/// The URL must be ASCII only. The maximum length depends on the card's
+/// extended capabilities.
+///
+/// # Arguments
+///
+/// * `url` - The public key URL (ASCII)
+/// * `admin_pin` - The admin PIN for the card
+/// * `ident` - Optional card identifier. If None, uses the first card.
+///
+/// # Example
+///
+/// ```no_run
+/// use wecanencrypt::card::set_public_key_url;
+///
+/// set_public_key_url("https://keys.openpgp.org/vks/v1/by-fingerprint/ABCD1234", b"12345678", None).unwrap();
+/// ```
+pub fn set_public_key_url(url: &str, admin_pin: &[u8], ident: Option<&str>) -> Result<()> {
+    let backend = get_card_backend(ident)?;
+    let mut opgp = OpenPGP::new(backend)
+        .map_err(|e: openpgp_card::Error| Error::Card(CardError::CardError(e.to_string())))?;
+    let mut tx = opgp.transaction()
+        .map_err(|e: openpgp_card::Error| Error::Card(CardError::CardError(e.to_string())))?;
+
+    let secret_pin = SecretVec::new(admin_pin.to_vec());
+    tx.verify_pw3(secret_pin)
+        .map_err(|e: openpgp_card::Error| Error::Card(CardError::CardError(e.to_string())))?;
+
+    tx.set_url(url.as_bytes())
+        .map_err(|e: openpgp_card::Error| Error::Card(CardError::CardError(e.to_string())))?;
 
     Ok(())
 }

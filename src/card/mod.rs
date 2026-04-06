@@ -29,7 +29,7 @@
 //! // Check if a card is connected
 //! if is_card_connected() {
 //!     // Get card details
-//!     let info = get_card_details().unwrap();
+//!     let info = get_card_details(None).unwrap();
 //!     println!("Card serial: {}", info.serial_number);
 //!
 //!     // Sign data using the card
@@ -52,13 +52,13 @@
 //! use wecanencrypt::card::{set_touch_mode, KeySlot, TouchMode};
 //!
 //! // Require touch for signing (can be changed later)
-//! set_touch_mode(KeySlot::Signature, TouchMode::On, b"12345678").unwrap();
+//! set_touch_mode(KeySlot::Signature, TouchMode::On, b"12345678", None).unwrap();
 //!
 //! // Permanently require touch for decryption (cannot be changed!)
-//! set_touch_mode(KeySlot::Encryption, TouchMode::Fixed, b"12345678").unwrap();
+//! set_touch_mode(KeySlot::Encryption, TouchMode::Fixed, b"12345678", None).unwrap();
 //!
 //! // Require touch for authentication
-//! set_touch_mode(KeySlot::Authentication, TouchMode::On, b"12345678").unwrap();
+//! set_touch_mode(KeySlot::Authentication, TouchMode::On, b"12345678", None).unwrap();
 //! ```
 //!
 //! **Warning**: Setting `TouchMode::Fixed` or `TouchMode::CachedFixed` is permanent
@@ -69,9 +69,10 @@ mod connection;
 mod crypto;
 pub mod upload;
 
-pub use types::{KeySlot, TouchMode, CardInfo, CardError};
+pub use types::{KeySlot, TouchMode, CardInfo, CardSummary, CardError};
 pub use connection::{
     is_card_connected,
+    list_all_cards,
     get_card_details,
     get_card_version,
     get_card_serial,
@@ -82,7 +83,11 @@ pub use connection::{
     change_user_pin,
     change_admin_pin,
     set_touch_mode,
+    set_cardholder_name,
+    set_public_key_url,
 };
+// Re-export get_card_backend for use by crypto module
+pub(crate) use connection::get_card_backend;
 pub use crypto::{
     sign_bytes_detached_on_card,
     decrypt_bytes_on_card,

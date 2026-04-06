@@ -117,7 +117,7 @@ fn main() {
 
     // Verify PIN
     println!("\nVerifying the user PIN...");
-    match verify_user_pin(pin_bytes) {
+    match verify_user_pin(pin_bytes, None) {
         Ok(true) => println!("User PIN verified.\n"),
         Ok(false) => {
             eprintln!("Error: PIN verification returned false.");

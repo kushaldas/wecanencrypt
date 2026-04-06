@@ -27,14 +27,14 @@ mod card_reset_test {
         // (This is required for factory reset to work on most cards)
         println!("Step 1: Blocking admin PIN...");
         for i in 1..=3 {
-            let _ = verify_admin_pin(b"00000000");
+            let _ = verify_admin_pin(b"00000000", None);
             println!("  Wrong PIN attempt {}/3", i);
         }
 
         // Now reset the card
         println!();
         println!("Step 2: Resetting card...");
-        let result = reset_card();
+        let result = reset_card(None);
 
         match result {
             Ok(()) => {

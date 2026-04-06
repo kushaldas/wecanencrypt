@@ -153,6 +153,59 @@ pub fn fetch_key_by_keyid(
     Ok(bytes.to_vec())
 }
 
+/// Fetch a key from a VKS keyserver by email address.
+///
+/// This queries keyservers that implement the VKS (Verifying Key Server)
+/// protocol, such as keys.openpgp.org, using the `/vks/v1/by-email/` endpoint.
+///
+/// Unlike [`fetch_key_by_email`] which uses WKD (querying the email domain),
+/// this function queries a centralized keyserver directly.
+///
+/// # Arguments
+/// * `email` - Email address to look up
+/// * `keyserver` - Optional keyserver URL (defaults to keys.openpgp.org)
+///
+/// # Returns
+/// The certificate data if found.
+///
+/// # Example
+/// ```ignore
+/// // Ignored: requires network access to keyservers
+/// let cert = fetch_key_by_email_from_keyserver("user@example.com", None)?;
+/// ```
+#[cfg(feature = "network")]
+pub fn fetch_key_by_email_from_keyserver(
+    email: &str,
+    keyserver: Option<&str>,
+) -> Result<Vec<u8>> {
+    let server = keyserver.unwrap_or("https://keys.openpgp.org");
+    let url = format!("{}/vks/v1/by-email/{}", server, email);
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| Error::Network(e.to_string()))?;
+
+    let response = client.get(&url)
+        .send()
+        .map_err(|e| Error::Network(e.to_string()))?;
+
+    if !response.status().is_success() {
+        return Err(Error::KeyNotFound(format!(
+            "Key not found on keyserver for email: {}",
+            email
+        )));
+    }
+
+    let bytes = response.bytes()
+        .map_err(|e| Error::Network(e.to_string()))?;
+
+    // Verify it's a valid certificate
+    let _ = parse_cert(&bytes)?;
+
+    Ok(bytes.to_vec())
+}
+
 /// Parse email into local part and domain.
 fn parse_email(email: &str) -> Result<(String, String)> {
     let parts: Vec<&str> = email.split('@').collect();

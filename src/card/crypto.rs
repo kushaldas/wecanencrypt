@@ -5,12 +5,12 @@
 
 use std::io::Cursor;
 
-use card_backend_pcsc::PcscBackend;
 use openpgp_card::ocard::crypto::{Cryptogram, Hash};
 use openpgp_card::Card;
 use secrecy::SecretString;
 
 use super::types::CardError;
+use super::get_card_backend;
 use crate::error::{Error, Result};
 use crate::internal::parse_public_key;
 use pgp::composed::{DetachedSignature, Esk, Message, PlainSessionKey, RawSessionKey, SignedPublicKey};
@@ -63,16 +63,6 @@ pub fn sign_bytes_detached_on_card(data: &[u8], public_cert: &[u8], pin: &[u8]) 
     detached
         .to_armored_string(None.into())
         .map_err(|e| Error::Crypto(e.to_string()))
-}
-
-/// Get the first available card backend.
-fn get_card_backend() -> Result<PcscBackend> {
-    let mut cards = PcscBackend::cards(None)
-        .map_err(|e| Error::Card(CardError::CommunicationError(e.to_string())))?;
-
-    cards.next()
-        .ok_or(Error::Card(CardError::NotConnected))?
-        .map_err(|e| Error::Card(CardError::CommunicationError(e.to_string())))
 }
 
 /// Convert a PIN byte slice to SecretString.
@@ -139,7 +129,7 @@ fn get_signing_key_info(public_key: &SignedPublicKey) -> Result<SigningKeyInfo> 
 
 /// Get the fingerprint of the key currently in the card's signing slot.
 fn get_card_signing_fingerprint() -> Result<String> {
-    let backend = get_card_backend()?;
+    let backend = get_card_backend(None)?;
     let mut card = Card::new(backend)
         .map_err(|e| Error::Card(CardError::from(e)))?;
 
@@ -268,7 +258,7 @@ fn sign_on_card(
     public_params: &PublicParams,
     pin: &[u8],
 ) -> Result<Vec<u8>> {
-    let backend = get_card_backend()?;
+    let backend = get_card_backend(None)?;
     let mut card = Card::new(backend)
         .map_err(|e| Error::Card(CardError::from(e)))?;
 
@@ -552,7 +542,7 @@ fn decrypt_session_key_on_card(
     pin: &[u8],
     esk_type: EskType,
 ) -> Result<PlainSessionKey> {
-    let backend = get_card_backend()?;
+    let backend = get_card_backend(None)?;
     let mut card = Card::new(backend)
         .map_err(|e| Error::Card(CardError::from(e)))?;
 

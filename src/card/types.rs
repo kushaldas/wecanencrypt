@@ -32,9 +32,24 @@ pub enum TouchMode {
     CachedFixed,
 }
 
+/// Brief summary of a connected card, returned by `list_all_cards()`.
+#[derive(Debug, Clone)]
+pub struct CardSummary {
+    /// Unique identifier: "MANUFACTURER:SERIAL" (e.g. "0006:00000001")
+    pub ident: String,
+    /// Human-readable manufacturer name (e.g. "Yubico AB")
+    pub manufacturer_name: String,
+    /// Serial number as hex string
+    pub serial_number: String,
+    /// Cardholder name if set
+    pub cardholder_name: Option<String>,
+}
+
 /// Information about a connected OpenPGP smart card.
 #[derive(Debug, Clone, Default)]
 pub struct CardInfo {
+    /// Unique identifier: "MANUFACTURER:SERIAL" (e.g. "0006:00000001")
+    pub ident: String,
     /// Serial number of the card
     pub serial_number: String,
     /// Cardholder name (if set)
@@ -55,8 +70,10 @@ pub struct CardInfo {
     pub reset_code_retry_counter: u8,
     /// Remaining PIN retry attempts for admin PIN (PW3)
     pub admin_pin_retry_counter: u8,
-    /// Card manufacturer
+    /// Card manufacturer code (hex)
     pub manufacturer: Option<String>,
+    /// Human-readable manufacturer name
+    pub manufacturer_name: Option<String>,
 }
 
 /// Errors specific to smart card operations.

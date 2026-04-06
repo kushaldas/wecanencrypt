@@ -202,6 +202,7 @@ pub use keystore::{
 #[cfg(feature = "network")]
 pub use network::{
     fetch_key_by_email,
+    fetch_key_by_email_from_keyserver,
     fetch_key_by_fingerprint,
     fetch_key_by_keyid,
 };
