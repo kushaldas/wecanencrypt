@@ -82,6 +82,7 @@ pub use connection::{
     reset_card,
     change_user_pin,
     change_admin_pin,
+    get_touch_modes,
     set_touch_mode,
     set_cardholder_name,
     set_public_key_url,

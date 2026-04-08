@@ -537,6 +537,61 @@ pub fn change_admin_pin(old_pin: &[u8], new_pin: &[u8], ident: Option<&str>) -> 
     Ok(())
 }
 
+/// Get the current touch mode for all key slots.
+///
+/// Returns the touch policy for the Signature, Encryption, and Authentication
+/// slots. Returns `None` for a slot if the card does not support UIF for that slot.
+///
+/// # Arguments
+///
+/// * `ident` - Optional card identifier. If None, uses the first card.
+///
+/// # Returns
+///
+/// A tuple of (signature, encryption, authentication) touch modes.
+///
+/// # Example
+///
+/// ```no_run
+/// use wecanencrypt::card::get_touch_modes;
+///
+/// let (sig, enc, auth) = get_touch_modes(None).unwrap();
+/// println!("Signature: {:?}, Encryption: {:?}, Auth: {:?}", sig, enc, auth);
+/// ```
+pub fn get_touch_modes(ident: Option<&str>) -> Result<(Option<TouchMode>, Option<TouchMode>, Option<TouchMode>)> {
+    let backend = get_card_backend(ident)?;
+    let mut card = Card::new(backend)
+        .map_err(|e| Error::Card(CardError::from(e)))?;
+
+    let mut tx = card.transaction()
+        .map_err(|e| Error::Card(CardError::from(e)))?;
+
+    let convert = |policy: openpgp_card::ocard::data::TouchPolicy| -> TouchMode {
+        match policy {
+            openpgp_card::ocard::data::TouchPolicy::Off => TouchMode::Off,
+            openpgp_card::ocard::data::TouchPolicy::On => TouchMode::On,
+            openpgp_card::ocard::data::TouchPolicy::Fixed => TouchMode::Fixed,
+            openpgp_card::ocard::data::TouchPolicy::Cached => TouchMode::Cached,
+            openpgp_card::ocard::data::TouchPolicy::CachedFixed => TouchMode::CachedFixed,
+            openpgp_card::ocard::data::TouchPolicy::Unknown(_) => TouchMode::Off,
+        }
+    };
+
+    let sig = tx.user_interaction_flag(openpgp_card::ocard::KeyType::Signing)
+        .ok().flatten()
+        .map(|uif| convert(uif.touch_policy()));
+
+    let enc = tx.user_interaction_flag(openpgp_card::ocard::KeyType::Decryption)
+        .ok().flatten()
+        .map(|uif| convert(uif.touch_policy()));
+
+    let auth = tx.user_interaction_flag(openpgp_card::ocard::KeyType::Authentication)
+        .ok().flatten()
+        .map(|uif| convert(uif.touch_policy()));
+
+    Ok((sig, enc, auth))
+}
+
 /// Set the touch mode (User Interaction Flag) for a specific key slot.
 ///
 /// This configures whether physical touch is required for cryptographic operations
