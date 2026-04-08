@@ -156,6 +156,7 @@ pub use key::{
     update_primary_expiry,
     add_uid,
     revoke_uid,
+    revoke_key,
     update_password,
     certify_key,
     get_pub_key,

@@ -98,9 +98,16 @@ fn extract_cert_info(
             let value = String::from_utf8_lossy(u.id.id()).to_string();
 
             // Check revocation: any CertRevocation signature on this UID
-            let revoked = u.signatures.iter().any(|sig| {
+            let revocation_sig = u.signatures.iter().find(|sig| {
                 sig.typ() == Some(pgp::packet::SignatureType::CertRevocation)
             });
+            let revoked = revocation_sig.is_some();
+            let revocation_time = revocation_sig
+                .and_then(|sig| sig.created())
+                .map(|ts| {
+                    let st: std::time::SystemTime = ts.into();
+                    system_time_to_datetime(st)
+                });
 
             // Collect third-party certifications (exclude self-signatures)
             let certifications = u.signatures.iter().filter_map(|sig| {
@@ -147,6 +154,7 @@ fn extract_cert_info(
             UserIDInfo {
                 value,
                 revoked,
+                revocation_time,
                 certifications,
             }
         })
@@ -163,6 +171,18 @@ fn extract_cert_info(
     // Check if primary can sign
     let can_primary_sign = crate::internal::can_primary_sign(public_key);
 
+    // Check key revocation
+    let revocation_sig = public_key.details.revocation_signatures.iter().find(|sig| {
+        sig.typ() == Some(pgp::packet::SignatureType::KeyRevocation)
+    });
+    let is_revoked = revocation_sig.is_some();
+    let revocation_time = revocation_sig
+        .and_then(|sig| sig.created())
+        .map(|ts| {
+            let st: std::time::SystemTime = ts.into();
+            system_time_to_datetime(st)
+        });
+
     // Get subkey info
     let subkeys = extract_subkey_info(public_key, allow_expired);
 
@@ -174,6 +194,8 @@ fn extract_cert_info(
         creation_time,
         expiration_time,
         can_primary_sign,
+        is_revoked,
+        revocation_time,
         subkeys,
     })
 }

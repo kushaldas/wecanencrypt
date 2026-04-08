@@ -932,6 +932,75 @@ pub fn revoke_uid(cert_data: &[u8], uid: &str, password: &str) -> Result<Vec<u8>
     secret_key_to_bytes(&new_secret_key)
 }
 
+/// Revoke the entire key.
+///
+/// Creates a key revocation signature on the primary key. Once revoked,
+/// the key should not be used for any new operations. The revocation
+/// is permanent and cannot be undone.
+///
+/// # Arguments
+/// * `cert_data` - The certificate data (with secret key)
+/// * `password` - Password for the secret key
+///
+/// # Returns
+/// The certificate with the revocation signature added.
+///
+/// # Example
+///
+/// ```no_run
+/// use wecanencrypt::{create_key_simple, revoke_key, parse_cert_bytes};
+///
+/// let key = create_key_simple("password", &["Alice <alice@example.com>"]).unwrap();
+/// let revoked = revoke_key(&key.secret_key, "password").unwrap();
+/// ```
+pub fn revoke_key(cert_data: &[u8], password: &str) -> Result<Vec<u8>> {
+    let mut rng = thread_rng();
+    let secret_key = parse_secret_key(cert_data)?;
+    let password = Password::from(password);
+
+    // Create a key revocation signature
+    let mut config = SignatureConfig::from_key(&mut rng, &secret_key.primary_key, SignatureType::KeyRevocation)
+        .map_err(|e| Error::Crypto(e.to_string()))?;
+
+    config.hashed_subpackets = vec![
+        Subpacket::regular(SubpacketData::SignatureCreationTime(Timestamp::now()))
+            .map_err(|e| Error::Crypto(e.to_string()))?,
+        Subpacket::regular(SubpacketData::IssuerFingerprint(secret_key.primary_key.fingerprint()))
+            .map_err(|e| Error::Crypto(e.to_string()))?,
+    ];
+
+    if secret_key.primary_key.version() <= KeyVersion::V4 {
+        config.unhashed_subpackets = vec![Subpacket::regular(SubpacketData::IssuerKeyId(
+            secret_key.primary_key.legacy_key_id(),
+        ))
+        .map_err(|e| Error::Crypto(e.to_string()))?];
+    }
+
+    let revocation_sig = config
+        .sign_key(&secret_key.primary_key, &password, secret_key.primary_key.public_key())
+        .map_err(|e| Error::Crypto(e.to_string()))?;
+
+    // Add the revocation signature to the key's revocation signatures
+    let mut revocation_sigs = secret_key.details.revocation_signatures.clone();
+    revocation_sigs.push(revocation_sig);
+
+    let new_details = SignedKeyDetails::new(
+        revocation_sigs,
+        secret_key.details.direct_signatures.clone(),
+        secret_key.details.users.clone(),
+        secret_key.details.user_attributes.clone(),
+    );
+
+    let new_secret_key = SignedSecretKey::new(
+        secret_key.primary_key.clone(),
+        new_details,
+        secret_key.public_subkeys.clone(),
+        secret_key.secret_subkeys.clone(),
+    );
+
+    secret_key_to_bytes(&new_secret_key)
+}
+
 /// Change the password on a secret key.
 ///
 /// Decrypts the secret key material with the old password and re-encrypts

@@ -195,6 +195,10 @@ pub struct CertificateInfo {
     pub expiration_time: Option<DateTime<Utc>>,
     /// Whether the primary key can sign
     pub can_primary_sign: bool,
+    /// Whether the key has been revoked
+    pub is_revoked: bool,
+    /// When the key was revoked (if revoked)
+    pub revocation_time: Option<DateTime<Utc>>,
     /// Information about all subkeys
     pub subkeys: Vec<SubkeyInfo>,
 }
@@ -294,6 +298,8 @@ pub struct UserIDInfo {
     pub value: String,
     /// Whether this UID has been revoked
     pub revoked: bool,
+    /// When the UID was revoked (from the revocation signature's creation time)
+    pub revocation_time: Option<DateTime<Utc>>,
     /// Certifications on this UID by other keys
     pub certifications: Vec<UIDCertification>,
 }
