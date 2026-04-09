@@ -72,7 +72,8 @@ pub fn decrypt_with_key(
             .map_err(|e| Error::Parse(e.to_string()))?,
     };
 
-    // Try standard decrypt first, then legacy mode
+    // Try standard decrypt first, then legacy mode.
+    // Return a uniform error to avoid leaking which phase failed (oracle prevention).
     let decrypted = message.decrypt(&password, secret_key)
         .or_else(|_| {
             // Try parsing again for legacy decrypt
@@ -84,14 +85,7 @@ pub fn decrypt_with_key(
             msg.decrypt_legacy(&password, secret_key)
                 .map_err(|e| Error::Crypto(e.to_string()))
         })
-        .map_err(|e: Error| {
-            // Check if it's a password issue
-            if e.to_string().contains("password") || e.to_string().contains("decrypt") {
-                Error::InvalidPassword
-            } else {
-                e
-            }
-        })?;
+        .map_err(|_| Error::Crypto("Decryption failed".to_string()))?;
 
     // Handle compression if present
     let mut decompressed = if decrypted.is_compressed() {
