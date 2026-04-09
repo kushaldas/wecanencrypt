@@ -4,6 +4,7 @@
 //! for representing certificates, keys, and their properties.
 
 use chrono::{DateTime, Utc};
+use zeroize::Zeroizing;
 
 /// Cipher suite options for key generation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -215,12 +216,15 @@ pub struct KeyCipherDetails {
 }
 
 /// Result of key generation.
+///
+/// The `secret_key` field is wrapped in `Zeroizing` to ensure the secret
+/// key material is securely erased from memory when dropped.
 #[derive(Debug)]
 pub struct GeneratedKey {
     /// ASCII-armored public key
     pub public_key: String,
-    /// Binary secret key data
-    pub secret_key: Vec<u8>,
+    /// Binary secret key data (passphrase-encrypted OpenPGP format, zeroized on drop)
+    pub secret_key: Zeroizing<Vec<u8>>,
     /// Key fingerprint as hex string
     pub fingerprint: String,
 }

@@ -28,7 +28,8 @@ const TEST_UID: &str = "Test User <test@example.com>";
 /// Helper to generate a test key with default settings.
 fn generate_test_key() -> (Vec<u8>, String) {
     let key = create_key_simple(TEST_PASSWORD, &[TEST_UID]).unwrap();
-    (key.secret_key, key.fingerprint)
+    // Convert Zeroizing<Vec<u8>> to Vec<u8> for test convenience
+    (key.secret_key.to_vec(), key.fingerprint)
 }
 
 /// Helper to generate a test key with specific cipher suite.
@@ -45,7 +46,7 @@ fn generate_test_key_with_cipher(cipher: CipherSuite) -> (Vec<u8>, String) {
         true,
     )
     .unwrap();
-    (key.secret_key, key.fingerprint)
+    (key.secret_key.to_vec(), key.fingerprint)
 }
 
 // =============================================================================

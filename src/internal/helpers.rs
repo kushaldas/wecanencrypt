@@ -6,6 +6,8 @@ use pgp::composed::{SignedSecretKey, SignedPublicKey, Deserializable};
 use pgp::ser::Serialize;
 use pgp::types::KeyDetails;
 
+use zeroize::Zeroizing;
+
 use crate::error::{Error, Result};
 
 /// Parse a secret key from bytes (armored or binary).
@@ -61,8 +63,12 @@ pub(crate) fn parse_cert(data: &[u8]) -> Result<(SignedPublicKey, bool)> {
 }
 
 /// Serialize a secret key to binary format.
-pub(crate) fn secret_key_to_bytes(key: &SignedSecretKey) -> Result<Vec<u8>> {
+///
+/// Returns `Zeroizing<Vec<u8>>` so the secret key material is securely
+/// erased from memory when the value is dropped.
+pub(crate) fn secret_key_to_bytes(key: &SignedSecretKey) -> Result<Zeroizing<Vec<u8>>> {
     key.to_bytes()
+        .map(Zeroizing::new)
         .map_err(|e| Error::Crypto(e.to_string()))
 }
 

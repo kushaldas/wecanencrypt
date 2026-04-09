@@ -5,6 +5,8 @@
 
 use std::io::Cursor;
 
+use zeroize::Zeroizing;
+
 use crate::error::{Error, Result};
 use pgp::composed::{Deserializable, SignedSecretKey};
 use pgp::types::{KeyDetails, Password, PlainSecretParams, PublicParams};
@@ -246,15 +248,15 @@ fn extract_primary_key_info(
 
 struct KeyUploadInfo {
     key_type: KeyType,
-    scalar: Vec<u8>,       // Private key scalar (for ECC) or components (for RSA)
+    scalar: Zeroizing<Vec<u8>>,       // Private key scalar (zeroized on drop)
     fingerprint: Vec<u8>,
     timestamp: u32,
     // RSA-specific
     n_bits: Option<u16>,
     e_bits: Option<u16>,
     e_value: Option<Vec<u8>>,
-    p_value: Option<Vec<u8>>,
-    q_value: Option<Vec<u8>>,
+    p_value: Option<Zeroizing<Vec<u8>>>,  // RSA prime p (zeroized on drop)
+    q_value: Option<Zeroizing<Vec<u8>>>,  // RSA prime q (zeroized on drop)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -420,7 +422,7 @@ fn extract_key_info(
         (PublicParams::Ed25519(_), PlainSecretParams::Ed25519(ed_priv)) => {
             Ok(KeyUploadInfo {
                 key_type: KeyType::Ed25519,
-                scalar: ed_priv.to_bytes().to_vec(),
+                scalar: Zeroizing::new(ed_priv.to_bytes().to_vec()),
                 fingerprint,
                 timestamp,
                 n_bits: None,
@@ -440,7 +442,7 @@ fn extract_key_info(
                     let scalar_be: Vec<u8> = scalar_le.iter().rev().copied().collect();
                     Ok(KeyUploadInfo {
                         key_type: KeyType::Cv25519,
-                        scalar: scalar_be,
+                        scalar: Zeroizing::new(scalar_be),
                         fingerprint,
                         timestamp,
                         n_bits: None,
@@ -453,7 +455,7 @@ fn extract_key_info(
                 EcdhPublicParams::P256 { .. } => {
                     Ok(KeyUploadInfo {
                         key_type: KeyType::EcdhP256,
-                        scalar: ecdh_priv.to_bytes(),
+                        scalar: Zeroizing::new(ecdh_priv.to_bytes()),
                         fingerprint,
                         timestamp,
                         n_bits: None,
@@ -466,7 +468,7 @@ fn extract_key_info(
                 EcdhPublicParams::P384 { .. } => {
                     Ok(KeyUploadInfo {
                         key_type: KeyType::EcdhP384,
-                        scalar: ecdh_priv.to_bytes(),
+                        scalar: Zeroizing::new(ecdh_priv.to_bytes()),
                         fingerprint,
                         timestamp,
                         n_bits: None,
@@ -479,7 +481,7 @@ fn extract_key_info(
                 EcdhPublicParams::P521 { .. } => {
                     Ok(KeyUploadInfo {
                         key_type: KeyType::EcdhP521,
-                        scalar: ecdh_priv.to_bytes(),
+                        scalar: Zeroizing::new(ecdh_priv.to_bytes()),
                         fingerprint,
                         timestamp,
                         n_bits: None,
@@ -500,14 +502,14 @@ fn extract_key_info(
 
             Ok(KeyUploadInfo {
                 key_type: KeyType::Rsa,
-                scalar: d, // d for RSA
+                scalar: Zeroizing::new(d), // d for RSA
                 fingerprint,
                 timestamp,
                 n_bits: Some(n.bits() as u16),
                 e_bits: Some(e.bits() as u16),
                 e_value: Some(e.to_bytes_be()),
-                p_value: Some(p),
-                q_value: Some(q),
+                p_value: Some(Zeroizing::new(p)),
+                q_value: Some(Zeroizing::new(q)),
             })
         }
         (PublicParams::ECDSA(ecdsa_pub), PlainSecretParams::ECDSA(ecdsa_priv)) => {
@@ -520,7 +522,7 @@ fn extract_key_info(
             };
             Ok(KeyUploadInfo {
                 key_type,
-                scalar: ecdsa_priv.to_bytes(),
+                scalar: Zeroizing::new(ecdsa_priv.to_bytes()),
                 fingerprint,
                 timestamp,
                 n_bits: None,
@@ -560,8 +562,9 @@ fn upload_with_talktosc(
         )));
     }
 
-    // Verify admin PIN (PW3)
-    let pw3_apdu = talktosc::apdus::create_apdu_verify_pw3(admin_pin.to_vec());
+    // Verify admin PIN (PW3) — use Zeroizing for the PIN copy
+    let pin_buf = Zeroizing::new(admin_pin.to_vec());
+    let pw3_apdu = talktosc::apdus::create_apdu_verify_pw3(pin_buf.to_vec());
     let resp = send_and_parse(&card, pw3_apdu);
     if resp.is_err() {
         disconnect(card);
@@ -582,7 +585,8 @@ fn upload_with_talktosc(
     }
 
     // Verify admin PIN again (required by some cards)
-    let pw3_apdu = talktosc::apdus::create_apdu_verify_pw3(admin_pin.to_vec());
+    let pw3_apdu = talktosc::apdus::create_apdu_verify_pw3(pin_buf.to_vec());
+    drop(pin_buf); // Explicitly zeroize PIN buffer
     let _ = send_and_parse(&card, pw3_apdu);
 
     // Build and send key import data
@@ -697,7 +701,7 @@ fn build_key_import_data(key_info: &KeyUploadInfo, slot: CardKeySlot) -> Result<
             } else {
                 for5f48.push(scalar_len as u8);
             }
-            for5f48.extend(&key_info.scalar);
+            for5f48.extend(key_info.scalar.as_slice());
 
             // Build 7F48 TLV (template)
             let mut for7f48 = vec![0x7F, 0x48];
@@ -727,10 +731,10 @@ fn build_key_import_data(key_info: &KeyUploadInfo, slot: CardKeySlot) -> Result<
                 result.extend(e);
             }
             if let Some(ref p) = key_info.p_value {
-                result.extend(p);
+                result.extend(p.as_slice());
             }
             if let Some(ref q) = key_info.q_value {
-                result.extend(q);
+                result.extend(q.as_slice());
             }
 
             // Build 5F48 TLV

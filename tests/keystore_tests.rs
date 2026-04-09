@@ -36,7 +36,7 @@ fn read_file(path: &PathBuf) -> Vec<u8> {
 
 fn create_test_key(uid: &str) -> (Vec<u8>, String) {
     let key = create_key_simple(TEST_PASSWORD, &[uid]).unwrap();
-    (key.secret_key, key.fingerprint)
+    (key.secret_key.to_vec(), key.fingerprint)
 }
 
 #[test]

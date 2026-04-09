@@ -12,6 +12,7 @@ use pgp::packet::{PacketTrait, SignatureConfig, SignatureType, Subpacket, Subpac
 use pgp::types::{KeyDetails, KeyVersion, PacketHeaderVersion, Password, SignedUser, Timestamp};
 use rand::thread_rng;
 use std::time::SystemTime;
+use zeroize::Zeroizing;
 
 use crate::error::{Error, Result};
 use crate::internal::{
@@ -205,13 +206,14 @@ pub fn create_key(
     let public_key = secret_key.to_public_key();
     let fingerprint = fingerprint_to_hex(&public_key.primary_key);
 
-    // Export secret key (binary)
-    let mut final_secret_key_bytes = secret_key_to_bytes(&secret_key)?;
+    // Export secret key (binary, zeroized on drop)
+    let mut final_secret_key_bytes: Zeroizing<Vec<u8>> = secret_key_to_bytes(&secret_key)?;
 
     // Apply primary key expiration if requested
     if can_primary_expire {
         if let Some(exp_time) = expiration_time {
-            final_secret_key_bytes = update_primary_expiry(&final_secret_key_bytes, exp_time, password)?;
+            final_secret_key_bytes = Zeroizing::new(
+                update_primary_expiry(&final_secret_key_bytes, exp_time, password)?);
         }
     }
 
@@ -225,8 +227,9 @@ pub fn create_key(
             .map(|s| s.as_str())
             .collect();
         if !subkey_fp_refs.is_empty() {
-            final_secret_key_bytes = update_subkeys_expiry(
-                &final_secret_key_bytes, &subkey_fp_refs, subkey_exp_time, password)?;
+            final_secret_key_bytes = Zeroizing::new(
+                update_subkeys_expiry(
+                    &final_secret_key_bytes, &subkey_fp_refs, subkey_exp_time, password)?);
         }
     }
 
@@ -558,7 +561,7 @@ pub fn update_subkeys_expiry(
         new_secret_subkeys,
     );
 
-    secret_key_to_bytes(&updated_key)
+    Ok(secret_key_to_bytes(&updated_key)?.to_vec())
 }
 
 /// Update the primary key expiration time.
@@ -774,7 +777,7 @@ pub fn update_primary_expiry(
         secret_key.secret_subkeys.clone(),
     );
 
-    secret_key_to_bytes(&updated_key)
+    Ok(secret_key_to_bytes(&updated_key)?.to_vec())
 }
 
 /// Add a new User ID to a certificate.
@@ -841,7 +844,7 @@ pub fn add_uid(cert_data: &[u8], uid: &str, password: &str) -> Result<Vec<u8>> {
         secret_key.secret_subkeys.clone(),
     );
 
-    secret_key_to_bytes(&new_secret_key)
+    Ok(secret_key_to_bytes(&new_secret_key)?.to_vec())
 }
 
 /// Revoke a User ID on a certificate.
@@ -929,7 +932,7 @@ pub fn revoke_uid(cert_data: &[u8], uid: &str, password: &str) -> Result<Vec<u8>
         secret_key.secret_subkeys.clone(),
     );
 
-    secret_key_to_bytes(&new_secret_key)
+    Ok(secret_key_to_bytes(&new_secret_key)?.to_vec())
 }
 
 /// Revoke the entire key.
@@ -998,7 +1001,7 @@ pub fn revoke_key(cert_data: &[u8], password: &str) -> Result<Vec<u8>> {
         secret_key.secret_subkeys.clone(),
     );
 
-    secret_key_to_bytes(&new_secret_key)
+    Ok(secret_key_to_bytes(&new_secret_key)?.to_vec())
 }
 
 /// Change the password on a secret key.
@@ -1072,7 +1075,7 @@ pub fn update_password(
         new_secret_subkeys,
     );
 
-    secret_key_to_bytes(&new_secret_key)
+    Ok(secret_key_to_bytes(&new_secret_key)?.to_vec())
 }
 
 /// Certify another key with this key (key signing).

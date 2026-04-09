@@ -164,10 +164,8 @@ pub(crate) fn get_card_backend(ident: Option<&str>) -> Result<PcscBackend> {
                             drop(c2);
                             let cards3 = PcscBackend::cards(None)
                                 .map_err(|e| Error::Card(CardError::CommunicationError(e.to_string())))?;
-                            for b3 in cards3 {
-                                if let Ok(b3) = b3 {
-                                    return Ok(b3);
-                                }
+                            if let Some(b3) = cards3.flatten().next() {
+                                return Ok(b3);
                             }
                         }
                     }
