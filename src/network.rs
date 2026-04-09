@@ -4,7 +4,7 @@
 //! using Web Key Directory (WKD) and HKP keyservers.
 
 use crate::error::{Error, Result};
-use crate::internal::parse_cert;
+use crate::internal::{fingerprint_to_hex, keyid_to_hex, parse_cert};
 
 /// Fetch a key from Web Key Directory (WKD) by email address.
 ///
@@ -106,8 +106,15 @@ pub fn fetch_key_by_fingerprint(
     let bytes = response.bytes()
         .map_err(|e| Error::Network(e.to_string()))?;
 
-    // Verify it's a valid certificate
-    let _ = parse_cert(&bytes)?;
+    // Verify it's a valid certificate and matches the requested fingerprint
+    let (public_key, _) = parse_cert(&bytes)?;
+    let fetched_fp = fingerprint_to_hex(&public_key.primary_key);
+    if fetched_fp != fingerprint.to_uppercase() {
+        return Err(Error::KeyNotFound(format!(
+            "Fetched key fingerprint {} does not match requested {}",
+            fetched_fp, fingerprint
+        )));
+    }
 
     Ok(bytes.to_vec())
 }
@@ -147,8 +154,21 @@ pub fn fetch_key_by_keyid(
     let bytes = response.bytes()
         .map_err(|e| Error::Network(e.to_string()))?;
 
-    // Verify it's a valid certificate
-    let _ = parse_cert(&bytes)?;
+    // Verify it's a valid certificate and matches the requested key ID
+    let (public_key, _) = parse_cert(&bytes)?;
+    let fetched_keyid = keyid_to_hex(&public_key.primary_key);
+    if fetched_keyid != key_id.to_uppercase() {
+        // Also check subkey IDs — the key ID might refer to a subkey
+        let subkey_match = public_key.public_subkeys.iter().any(|sk| {
+            keyid_to_hex(&sk.key) == key_id.to_uppercase()
+        });
+        if !subkey_match {
+            return Err(Error::KeyNotFound(format!(
+                "Fetched key ID {} does not match requested {}",
+                fetched_keyid, key_id
+            )));
+        }
+    }
 
     Ok(bytes.to_vec())
 }
