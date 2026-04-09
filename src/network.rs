@@ -6,6 +6,9 @@
 use crate::error::{Error, Result};
 use crate::internal::{fingerprint_to_hex, keyid_to_hex, parse_cert};
 
+/// Maximum response size for key fetches (10 MB).
+const MAX_KEY_RESPONSE_SIZE: u64 = 10 * 1024 * 1024;
+
 /// Fetch a key from Web Key Directory (WKD) by email address.
 ///
 /// WKD is a standard for distributing OpenPGP keys via HTTPS. It uses the
@@ -40,13 +43,12 @@ pub fn fetch_key_by_email(email: &str) -> Result<Vec<u8>> {
         match client.get(&url).send() {
             Ok(response) => {
                 if response.status().is_success() {
-                    let bytes = response.bytes()
-                        .map_err(|e| Error::Network(e.to_string()))?;
+                    let bytes = read_response_limited(response)?;
 
                     // Verify it's a valid certificate
                     let _ = parse_cert(&bytes)?;
 
-                    return Ok(bytes.to_vec());
+                    return Ok(bytes);
                 }
             }
             Err(e) => {
@@ -103,8 +105,7 @@ pub fn fetch_key_by_fingerprint(
         )));
     }
 
-    let bytes = response.bytes()
-        .map_err(|e| Error::Network(e.to_string()))?;
+    let bytes = read_response_limited(response)?;
 
     // Verify it's a valid certificate and matches the requested fingerprint
     let (public_key, _) = parse_cert(&bytes)?;
@@ -116,7 +117,7 @@ pub fn fetch_key_by_fingerprint(
         )));
     }
 
-    Ok(bytes.to_vec())
+    Ok(bytes)
 }
 
 /// Fetch a key from an HKP keyserver by key ID.
@@ -151,8 +152,7 @@ pub fn fetch_key_by_keyid(
         )));
     }
 
-    let bytes = response.bytes()
-        .map_err(|e| Error::Network(e.to_string()))?;
+    let bytes = read_response_limited(response)?;
 
     // Verify it's a valid certificate and matches the requested key ID
     let (public_key, _) = parse_cert(&bytes)?;
@@ -170,7 +170,7 @@ pub fn fetch_key_by_keyid(
         }
     }
 
-    Ok(bytes.to_vec())
+    Ok(bytes)
 }
 
 /// Fetch a key from a VKS keyserver by email address.
@@ -217,11 +217,36 @@ pub fn fetch_key_by_email_from_keyserver(
         )));
     }
 
-    let bytes = response.bytes()
-        .map_err(|e| Error::Network(e.to_string()))?;
+    let bytes = read_response_limited(response)?;
 
     // Verify it's a valid certificate
     let _ = parse_cert(&bytes)?;
+
+    Ok(bytes)
+}
+
+/// Read response bytes with a size limit to prevent DoS from oversized responses.
+#[cfg(feature = "network")]
+fn read_response_limited(response: reqwest::blocking::Response) -> Result<Vec<u8>> {
+    // Check Content-Length header if available
+    if let Some(len) = response.content_length() {
+        if len > MAX_KEY_RESPONSE_SIZE {
+            return Err(Error::Network(format!(
+                "Response too large: {} bytes (max {})",
+                len, MAX_KEY_RESPONSE_SIZE
+            )));
+        }
+    }
+
+    let bytes = response.bytes()
+        .map_err(|e| Error::Network(e.to_string()))?;
+
+    if bytes.len() as u64 > MAX_KEY_RESPONSE_SIZE {
+        return Err(Error::Network(format!(
+            "Response too large: {} bytes (max {})",
+            bytes.len(), MAX_KEY_RESPONSE_SIZE
+        )));
+    }
 
     Ok(bytes.to_vec())
 }
