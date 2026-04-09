@@ -84,15 +84,34 @@ pub(crate) fn is_primary_key_valid_for_verification(key: &SignedPublicKey) -> bo
     !is_primary_key_revoked(key)
 }
 
-/// Get the expiration time for a key (from first user binding signature).
+/// Get the expiration time for a key from the most recent self-signature.
+///
+/// Per RFC 4880, newer self-signatures supersede older ones. We find
+/// the self-signature with the latest creation timestamp that contains
+/// a key expiration subpacket.
 pub(crate) fn get_key_expiration(key: &SignedPublicKey) -> Option<SystemTime> {
+    let creation_time: SystemTime = key.primary_key.created_at().into();
+    let mut newest_created: Option<SystemTime> = None;
+    let mut newest_expiration = None;
+
     for user in &key.details.users {
         for sig in &user.signatures {
             if let Some(validity) = sig.key_expiration_time() {
-                let creation_time: SystemTime = key.primary_key.created_at().into();
-                return Some(creation_time + validity.into());
+                let sig_created: Option<SystemTime> = sig.created().map(|ts| ts.into());
+                // Pick the signature with the latest creation timestamp
+                let is_newer = match (&newest_created, &sig_created) {
+                    (Some(prev), Some(cur)) => cur > prev,
+                    (None, Some(_)) => true,
+                    (None, None) => newest_expiration.is_none(),
+                    _ => false,
+                };
+                if is_newer {
+                    newest_created = sig_created;
+                    newest_expiration = Some(creation_time + validity.into());
+                }
             }
         }
     }
-    None
+
+    newest_expiration
 }
