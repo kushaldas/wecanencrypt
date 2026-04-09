@@ -17,6 +17,10 @@ use crate::internal::parse_secret_key;
 /// Decrypts an OpenPGP encrypted message using the recipient's secret key.
 /// The message must have been encrypted to this key.
 ///
+/// Only decrypts integrity-protected messages (SEIPDv1 with MDC, SEIPDv2 with AEAD).
+/// Legacy SED packets (no integrity protection) are rejected by default.
+/// Use [`decrypt_bytes_legacy`] to opt into decrypting legacy messages.
+///
 /// # Arguments
 /// * `secret_cert` - The recipient's secret key (armored or binary)
 /// * `ciphertext` - The encrypted data (armored or binary)
@@ -46,7 +50,25 @@ use crate::internal::parse_secret_key;
 /// ```
 pub fn decrypt_bytes(secret_cert: &[u8], ciphertext: &[u8], password: &str) -> Result<Vec<u8>> {
     let secret_key = parse_secret_key(secret_cert)?;
-    decrypt_with_key(&secret_key, ciphertext, password)
+    decrypt_with_key(&secret_key, ciphertext, password, false)
+}
+
+/// Decrypt bytes, allowing legacy SED (no integrity protection) messages.
+///
+/// **WARNING**: Legacy SED packets (packet type 9) have no integrity protection.
+/// An attacker can modify the ciphertext without detection. Only use this for
+/// historical data encrypted before 2007 that cannot be re-encrypted.
+///
+/// # Arguments
+/// * `secret_cert` - The recipient's secret key (armored or binary)
+/// * `ciphertext` - The encrypted data (armored or binary)
+/// * `password` - Password to unlock the secret key
+///
+/// # Returns
+/// The decrypted plaintext bytes.
+pub fn decrypt_bytes_legacy(secret_cert: &[u8], ciphertext: &[u8], password: &str) -> Result<Vec<u8>> {
+    let secret_key = parse_secret_key(secret_cert)?;
+    decrypt_with_key(&secret_key, ciphertext, password, true)
 }
 
 /// Decrypt bytes using an already-parsed secret key.
@@ -55,6 +77,7 @@ pub fn decrypt_bytes(secret_cert: &[u8], ciphertext: &[u8], password: &str) -> R
 /// * `secret_key` - The parsed secret key
 /// * `ciphertext` - The encrypted data
 /// * `password` - Password to unlock the secret key
+/// * `allow_legacy` - If true, allows decryption of legacy SED packets (no integrity protection)
 ///
 /// # Returns
 /// The decrypted plaintext.
@@ -62,6 +85,7 @@ pub fn decrypt_with_key(
     secret_key: &SignedSecretKey,
     ciphertext: &[u8],
     password: &str,
+    allow_legacy: bool,
 ) -> Result<Vec<u8>> {
     let password: Password = password.into();
 
@@ -72,11 +96,14 @@ pub fn decrypt_with_key(
             .map_err(|e| Error::Parse(e.to_string()))?,
     };
 
-    // Try standard decrypt first, then legacy mode.
+    // Try standard decrypt first (integrity-protected: SEIPDv1/MDC or SEIPDv2/AEAD).
     // Return a uniform error to avoid leaking which phase failed (oracle prevention).
     let decrypted = message.decrypt(&password, secret_key)
         .or_else(|_| {
-            // Try parsing again for legacy decrypt
+            if !allow_legacy {
+                return Err(Error::Crypto("Decryption failed".to_string()));
+            }
+            // Legacy fallback: allows SED packets (no integrity protection).
             let msg = match Message::from_armor(Cursor::new(ciphertext)) {
                 Ok((m, _headers)) => m,
                 Err(_) => Message::from_bytes(ciphertext)

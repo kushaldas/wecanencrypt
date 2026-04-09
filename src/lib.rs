@@ -124,6 +124,7 @@ pub use encrypt::{
 // Re-export decryption functions
 pub use decrypt::{
     decrypt_bytes,
+    decrypt_bytes_legacy,
     decrypt_file,
     decrypt_reader_to_file,
 };
