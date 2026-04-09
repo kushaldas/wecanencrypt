@@ -68,6 +68,22 @@ pub(crate) fn can_primary_sign(key: &SignedPublicKey) -> bool {
     false
 }
 
+/// Check if the primary key is revoked.
+pub(crate) fn is_primary_key_revoked(key: &SignedPublicKey) -> bool {
+    key.details.revocation_signatures.iter().any(|sig| {
+        sig.typ() == Some(SignatureType::KeyRevocation)
+    })
+}
+
+/// Check if the primary key is valid for verification (not revoked).
+///
+/// Note: Expiry is NOT checked here because expired keys should still
+/// verify old signatures — expiry means "don't create new signatures",
+/// not "existing signatures are invalid".
+pub(crate) fn is_primary_key_valid_for_verification(key: &SignedPublicKey) -> bool {
+    !is_primary_key_revoked(key)
+}
+
 /// Get the expiration time for a key (from first user binding signature).
 pub(crate) fn get_key_expiration(key: &SignedPublicKey) -> Option<SystemTime> {
     for user in &key.details.users {
