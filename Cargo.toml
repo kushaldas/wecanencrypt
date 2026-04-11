@@ -5,8 +5,16 @@ edition = "2021"
 license = "MIT"
 description = "Simple Rust OpenPGP library for encryption, signing, and key management."
 repository = "https://github.com/kushaldas/wecanencrypt"
+readme = "README.md"
 keywords = ["openpgp", "encryption", "cryptography", "pgp", "gpg"]
 categories = ["cryptography", "authentication"]
+include = [
+	"/Cargo.toml",
+	"/README.md",
+	"/src/**",
+	"/examples/**",
+	"/tests/**",
+]
 
 [features]
 default = ["keystore", "network"]
@@ -67,5 +75,5 @@ pretty_assertions = "1"
 testresult = "0.4.1"
 
 [package.metadata.docs.rs]
-all-features = true
+features = ["keystore", "network", "card"]
 rustdoc-args = ["--cfg", "docsrs"]

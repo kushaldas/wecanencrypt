@@ -103,6 +103,30 @@ Note: Card tests automatically reset the card to factory defaults before each te
 - `card`: Smart card support (requires hardware)
 - `draft-pqc`: Post-quantum cryptography support
 
+## Release
+
+GitHub publishing is wired through the tag-driven workflow in `.github/workflows/publish.yml`.
+
+Before tagging a release, run:
+
+```bash
+cargo fmt --check
+cargo clippy --all-targets --features card -- -D warnings
+cargo test --features card --test '*'
+cargo publish --dry-run
+```
+
+Then:
+
+1. Update `version` in `Cargo.toml`.
+2. Push the version commit.
+3. Create and push a tag like `v0.6.1`.
+
+The publish workflow verifies that the tag matches the crate version, runs `cargo publish --dry-run`, and then publishes via crates.io trusted publishing.
+The repository must be configured as a trusted publisher in crates.io before the first tagged release.
+
+The docs.rs build is configured to document `keystore`, `network`, and `card`, while leaving `draft-pqc` out of the default published docs because it is experimental.
+
 ## License
 
 MIT

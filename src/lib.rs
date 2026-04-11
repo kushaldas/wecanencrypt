@@ -11,6 +11,31 @@
 //! - **Certificate Management**: Parse, modify, and export certificates
 //! - **Key Storage**: SQLite-backed keystore (optional feature)
 //!
+//! ## Migrating to 0.6.0
+//!
+//! ### Breaking changes
+//!
+//! - **`GeneratedKey.secret_key`** is now `Zeroizing<Vec<u8>>` (was `Vec<u8>`).
+//!   Secret key bytes are securely erased from memory on drop. `Zeroizing`
+//!   implements `Deref<Target = Vec<u8>>`, so most code works unchanged.
+//!   If you need a `Vec<u8>`, call `.to_vec()`.
+//!
+//! - **`CertificateInfo.user_ids`** is now `Vec<UserIDInfo>` (was `Vec<String>`).
+//!   Each UID now includes `value` (the string), `revoked` (bool), and
+//!   `certifications` (third-party signatures). Access the UID string via
+//!   `.value` (e.g., `info.user_ids[0].value`).
+//!
+//! - **`decrypt_with_key()`** now takes an `allow_legacy: bool` parameter.
+//!   Pass `false` to reject integrity-unprotected SED packets (recommended).
+//!   Pass `true` only for historical pre-2007 data.
+//!
+//! - **`decrypt_bytes()`** no longer decrypts legacy SED packets by default.
+//!   Use [`decrypt_bytes_legacy()`] for messages without integrity protection.
+//!
+//! - **Verification now rejects revoked keys.** Signatures from revoked
+//!   keys or subkeys return `false`. Expired keys can still verify old
+//!   signatures (by design, per OpenPGP semantics).
+//!
 //! ## Quick Start
 //!
 //! ```no_run
