@@ -10,7 +10,7 @@ use openpgp_card::Card;
 use openpgp_card::ocard::{OpenPGP, data::UserInteractionFlag};
 use secrecy::{SecretString, SecretVec};
 
-use super::types::{CardError, CardInfo, CardSummary, KeySlot, TouchMode};
+use super::types::{CardError, CardInfo, CardKeyMatch, CardSummary, KeySlot, SlotMatch, TouchMode};
 use crate::error::{Error, Result};
 
 /// Check if an OpenPGP smart card is connected.
@@ -731,6 +731,144 @@ pub fn set_public_key_url(url: &str, admin_pin: &[u8], ident: Option<&str>) -> R
         .map_err(|e: openpgp_card::Error| Error::Card(CardError::CardError(e.to_string())))?;
 
     Ok(())
+}
+
+/// Find all connected smart cards that hold subkeys belonging to a given OpenPGP key.
+///
+/// Parses the certificate, enumerates all connected cards, and checks each card's
+/// three key slots (signature, encryption, authentication) against the certificate's
+/// primary key fingerprint and all subkey fingerprints.
+///
+/// # Arguments
+///
+/// * `cert_data` - The public certificate data (armored or binary)
+///
+/// # Returns
+///
+/// A list of `CardKeyMatch` entries, one for each card that has at least one
+/// matching fingerprint. Returns an empty vector if no cards are connected
+/// or no cards match the key.
+///
+/// # Example
+///
+/// ```no_run
+/// use wecanencrypt::card::find_cards_for_key;
+///
+/// let cert = std::fs::read("pubkey.asc").unwrap();
+/// let matches = find_cards_for_key(&cert).unwrap();
+/// for m in &matches {
+///     println!("Card {} has {} matching slots", m.card.ident, m.matching_slots.len());
+///     for slot in &m.matching_slots {
+///         println!("  {:?} slot: {}", slot.slot, slot.fingerprint);
+///     }
+/// }
+/// ```
+pub fn find_cards_for_key(cert_data: &[u8]) -> Result<Vec<CardKeyMatch>> {
+    // Parse the certificate to extract all fingerprints
+    let cert_info = crate::parse_cert_bytes(cert_data, true)?;
+
+    // Build a list of all fingerprints (primary + subkeys), normalized to lowercase
+    let mut key_fingerprints: Vec<String> = Vec::new();
+    key_fingerprints.push(cert_info.fingerprint.to_lowercase());
+    for subkey in &cert_info.subkeys {
+        key_fingerprints.push(subkey.fingerprint.to_lowercase());
+    }
+
+    // Enumerate all connected cards
+    let cards = PcscBackend::cards(None)
+        .map_err(|e| Error::Card(CardError::CommunicationError(e.to_string())))?;
+
+    let mut results = Vec::new();
+
+    for backend in cards {
+        let backend = match backend {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+
+        let mut card = match Card::new(backend) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        let mut tx = match card.transaction() {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+
+        let mut info = CardInfo::default();
+
+        if let Ok(aid) = tx.application_identifier() {
+            info.serial_number = format!("{:08X}", aid.serial());
+            info.manufacturer = Some(format!("{:04X}", aid.manufacturer()));
+            info.manufacturer_name = Some(aid.manufacturer_name().to_string());
+            info.ident = aid.ident();
+        }
+
+        let mut matching_slots = Vec::new();
+
+        if let Ok(fps) = tx.fingerprints() {
+            if let Some(fp) = fps.signature() {
+                let fp_hex = hex::encode(fp.as_bytes());
+                info.signature_fingerprint = Some(fp_hex.clone());
+                if key_fingerprints.contains(&fp_hex) {
+                    matching_slots.push(SlotMatch {
+                        slot: KeySlot::Signature,
+                        fingerprint: fp_hex,
+                    });
+                }
+            }
+            if let Some(fp) = fps.decryption() {
+                let fp_hex = hex::encode(fp.as_bytes());
+                info.encryption_fingerprint = Some(fp_hex.clone());
+                if key_fingerprints.contains(&fp_hex) {
+                    matching_slots.push(SlotMatch {
+                        slot: KeySlot::Encryption,
+                        fingerprint: fp_hex,
+                    });
+                }
+            }
+            if let Some(fp) = fps.authentication() {
+                let fp_hex = hex::encode(fp.as_bytes());
+                info.authentication_fingerprint = Some(fp_hex.clone());
+                if key_fingerprints.contains(&fp_hex) {
+                    matching_slots.push(SlotMatch {
+                        slot: KeySlot::Authentication,
+                        fingerprint: fp_hex,
+                    });
+                }
+            }
+        }
+
+        // Fill remaining CardInfo fields
+        if let Ok(status) = tx.pw_status_bytes() {
+            info.pin_retry_counter = status.err_count_pw1();
+            info.reset_code_retry_counter = status.err_count_rc();
+            info.admin_pin_retry_counter = status.err_count_pw3();
+        }
+
+        if let Ok(name) = tx.cardholder_name() {
+            if !name.is_empty() {
+                info.cardholder_name = Some(name);
+            }
+        }
+
+        if let Ok(url) = tx.url() {
+            if !url.is_empty() {
+                info.public_key_url = Some(url);
+            }
+        }
+
+        // Only include cards with at least one match
+        if !matching_slots.is_empty() {
+            results.push(CardKeyMatch {
+                card: info,
+                matching_slots,
+            });
+        }
+    }
+
+    Ok(results)
 }
 
 #[cfg(test)]

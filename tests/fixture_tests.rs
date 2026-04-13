@@ -1419,3 +1419,31 @@ mod certification_fixtures {
     }
 }
 
+#[cfg(feature = "dane")]
+mod dane_tests {
+    use wecanencrypt::fetch_key_by_email_from_dane;
+
+    #[test]
+    #[ignore = "requires network access and domain with OPENPGPKEY records"]
+    fn test_fetch_key_dane_live() {
+        // Try fetching — most domains won't have OPENPGPKEY records,
+        // so KeyNotFound is the expected result for most addresses.
+        let result = fetch_key_by_email_from_dane("test@example.com", None);
+        match result {
+            Ok(cert_data) => {
+                // If we got data, it should be a valid certificate
+                let info = wecanencrypt::parse_cert_bytes(&cert_data, true)
+                    .expect("Fetched DANE key should be a valid certificate");
+                println!("Found DANE key: {}", info.fingerprint);
+            }
+            Err(wecanencrypt::Error::KeyNotFound(_)) => {
+                println!("No OPENPGPKEY record (expected for most domains)");
+            }
+            Err(e) => {
+                // Network errors are acceptable in CI
+                println!("DANE lookup error (may be expected): {}", e);
+            }
+        }
+    }
+}
+

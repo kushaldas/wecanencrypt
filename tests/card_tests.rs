@@ -1166,4 +1166,59 @@ mod card_tests {
 
         println!("\n✓ Full key expiry update successful!");
     }
+
+    // ==================== Card Discovery Tests ====================
+
+    #[test]
+    #[ignore = "requires physical smart card with CV25519 keys uploaded"]
+    fn test_find_cards_for_key() {
+        reset_card_to_defaults();
+
+        let secret_key = std::fs::read(CV25519_SECRET_KEY)
+            .expect("Failed to read CV25519 secret key");
+        let public_key = std::fs::read(CV25519_PUBLIC_KEY)
+            .expect("Failed to read CV25519 public key");
+
+        // Upload signing and encryption subkeys
+        upload_key_to_card(&secret_key, KEY_PASSWORD, CardKeySlot::Signing, ADMIN_PIN)
+            .expect("Failed to upload signing key");
+        upload_key_to_card(&secret_key, KEY_PASSWORD, CardKeySlot::Decryption, ADMIN_PIN)
+            .expect("Failed to upload encryption key");
+
+        // Find cards for this key
+        let matches = find_cards_for_key(&public_key)
+            .expect("Failed to find cards for key");
+
+        assert!(!matches.is_empty(), "Should find at least one matching card");
+
+        let m = &matches[0];
+        println!("Card {} has {} matching slots", m.card.ident, m.matching_slots.len());
+        assert!(m.matching_slots.len() >= 2, "Should match signing + encryption slots");
+
+        for slot in &m.matching_slots {
+            println!("  {:?} slot: {}", slot.slot, slot.fingerprint);
+            match slot.slot {
+                KeySlot::Signature => {
+                    assert_eq!(slot.fingerprint, CV25519_SIGNING_FP);
+                }
+                KeySlot::Encryption => {
+                    assert_eq!(slot.fingerprint, CV25519_ENCRYPT_FP);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "requires physical smart card"]
+    fn test_find_cards_for_key_no_match() {
+        // Generate a fresh key that won't match any card
+        let key = wecanencrypt::create_key_simple("test", &["test@test.com"])
+            .expect("Failed to create key");
+
+        let matches = find_cards_for_key(key.public_key.as_bytes())
+            .expect("find_cards_for_key should not error even with no match");
+
+        assert!(matches.is_empty(), "Fresh key should not match any card");
+    }
 }

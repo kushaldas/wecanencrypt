@@ -69,7 +69,7 @@ mod connection;
 mod crypto;
 pub mod upload;
 
-pub use types::{KeySlot, TouchMode, CardInfo, CardSummary, CardError};
+pub use types::{KeySlot, TouchMode, CardInfo, CardSummary, CardError, SlotMatch, CardKeyMatch};
 pub use connection::{
     is_card_connected,
     list_all_cards,
@@ -86,6 +86,7 @@ pub use connection::{
     set_touch_mode,
     set_cardholder_name,
     set_public_key_url,
+    find_cards_for_key,
 };
 // Re-export get_card_backend for use by crypto module
 pub(crate) use connection::get_card_backend;

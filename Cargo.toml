@@ -21,6 +21,7 @@ default = ["keystore", "network"]
 keystore = ["rusqlite"]
 network = ["reqwest", "sha1"]
 card = ["openpgp-card", "card-backend-pcsc", "secrecy", "talktosc", "digest", "aes", "aes-kw", "hkdf", "sha2"]
+dane = ["hickory-proto", "sha2"]
 draft-pqc = ["pgp/draft-pqc"]
 
 [dependencies]
@@ -62,6 +63,9 @@ rusqlite = { version = "0.32", features = ["bundled"], optional = true }
 # Network key fetching (optional)
 reqwest = { version = "0.12", features = ["blocking"], optional = true }
 
+# DNS DANE OPENPGPKEY support (optional)
+hickory-proto = { version = "0.25", default-features = false, optional = true }
+
 # Smart card support (optional)
 openpgp-card = { version = "0.5", optional = true }
 card-backend-pcsc = { version = "0.5", optional = true }
@@ -75,5 +79,5 @@ pretty_assertions = "1"
 testresult = "0.4.1"
 
 [package.metadata.docs.rs]
-features = ["keystore", "network", "card"]
+features = ["keystore", "network", "card", "dane"]
 rustdoc-args = ["--cfg", "docsrs"]

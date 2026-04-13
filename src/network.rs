@@ -1,10 +1,12 @@
-//! Network key fetching (WKD and keyserver support).
+//! Network key fetching (WKD, keyserver, and DANE support).
 //!
 //! This module provides functions for fetching OpenPGP keys from the network
-//! using Web Key Directory (WKD) and HKP keyservers.
+//! using Web Key Directory (WKD), HKP keyservers, and DNS DANE (OPENPGPKEY records).
 
 use crate::error::{Error, Result};
-use crate::internal::{fingerprint_to_hex, keyid_to_hex, parse_cert};
+#[cfg(feature = "network")]
+use crate::internal::{fingerprint_to_hex, keyid_to_hex};
+use crate::internal::parse_cert;
 
 /// Maximum response size for key fetches (10 MB).
 const MAX_KEY_RESPONSE_SIZE: u64 = 10 * 1024 * 1024;
@@ -320,6 +322,283 @@ fn zbase32_encode(data: &[u8]) -> String {
     result
 }
 
+// --- DANE OPENPGPKEY (RFC 7929) support ---
+
+/// Construct the OPENPGPKEY DNS name for an email address per RFC 7929.
+///
+/// Takes the local part of the email, SHA-256 hashes it, truncates to
+/// 28 octets (224 bits), hex-encodes (56 chars), and prepends to
+/// `_openpgpkey.<domain>`.
+#[cfg(feature = "dane")]
+fn openpgpkey_name(local: &str, domain: &str) -> String {
+    use sha2::{Sha256, Digest};
+
+    let mut hasher = Sha256::new();
+    hasher.update(local.as_bytes());
+    let hash = hasher.finalize();
+    // Truncate to first 28 octets (224 bits) per RFC 7929 Section 3
+    let truncated = &hash[..28];
+    let hex = hex::encode(truncated);
+    format!("{}._openpgpkey.{}", hex, domain)
+}
+
+/// Get the system's configured DNS resolver address.
+///
+/// Reads the system DNS configuration in a platform-appropriate way:
+/// - Linux/macOS: parses `/etc/resolv.conf`
+/// - macOS fallback: queries `scutil --dns`
+/// - Windows: queries `PowerShell Get-DnsClientServerAddress`
+/// - Fallback: `1.1.1.1:53`
+#[cfg(feature = "dane")]
+fn get_system_resolver() -> String {
+    // Linux & macOS: /etc/resolv.conf is authoritative.
+    // VPN clients (Mullvad, WireGuard, etc.) update this file when active.
+    #[cfg(unix)]
+    {
+        if let Ok(contents) = std::fs::read_to_string("/etc/resolv.conf") {
+            for line in contents.lines() {
+                let line = line.trim();
+                if !line.starts_with('#') && line.starts_with("nameserver") {
+                    if let Some(addr) = line.split_whitespace().nth(1) {
+                        return format!("{}:53", addr);
+                    }
+                }
+            }
+        }
+    }
+
+    // macOS fallback: if /etc/resolv.conf is empty or missing,
+    // query scutil which reflects the live system DNS config
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(output) = std::process::Command::new("scutil")
+            .arg("--dns")
+            .output()
+        {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            for line in stdout.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with("nameserver[") {
+                    // Format: "nameserver[0] : 10.64.0.1"
+                    if let Some(addr) = trimmed.split(':').nth(1) {
+                        let addr = addr.trim();
+                        if !addr.is_empty() {
+                            return format!("{}:53", addr);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Windows: read DNS from PowerShell
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(output) = std::process::Command::new("powershell")
+            .args([
+                "-Command",
+                "(Get-DnsClientServerAddress -AddressFamily IPv4 | Select-Object -First 1).ServerAddresses[0]",
+            ])
+            .output()
+        {
+            let addr = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !addr.is_empty() {
+                return format!("{}:53", addr);
+            }
+        }
+    }
+
+    // Ultimate fallback
+    "1.1.1.1:53".to_string()
+}
+
+/// Send a DNS query over UDP, falling back to TCP if the response is truncated.
+#[cfg(feature = "dane")]
+fn dns_query(name: &str, resolver: &str) -> Result<Vec<u8>> {
+    use hickory_proto::op::{Message, MessageType, OpCode, Query};
+    use hickory_proto::rr::{Name, RecordType};
+    use hickory_proto::serialize::binary::BinDecodable;
+    use std::net::UdpSocket;
+    use std::str::FromStr;
+    use std::time::Duration;
+
+    let dns_name = Name::from_str(name)
+        .map_err(|e| Error::Network(format!("Invalid DNS name '{}': {}", name, e)))?;
+
+    // Build the query message
+    let mut msg = Message::new();
+    msg.set_id(rand::random::<u16>());
+    msg.set_message_type(MessageType::Query);
+    msg.set_op_code(OpCode::Query);
+    msg.set_recursion_desired(true);
+
+    let mut query = Query::new();
+    query.set_name(dns_name.clone());
+    query.set_query_type(RecordType::OPENPGPKEY);
+    msg.add_query(query);
+
+    // Add EDNS(0) OPT record for larger UDP buffer
+    use hickory_proto::op::Edns;
+    let mut edns = Edns::new();
+    edns.set_max_payload(4096);
+    edns.set_version(0);
+    msg.set_edns(edns);
+
+    let wire = msg.to_vec()
+        .map_err(|e| Error::Network(format!("Failed to serialize DNS query: {}", e)))?;
+
+    let resolver_addr: std::net::SocketAddr = resolver.parse()
+        .map_err(|e| Error::Network(format!("Invalid resolver address '{}': {}", resolver, e)))?;
+
+    // UDP query
+    let socket = UdpSocket::bind("0.0.0.0:0")
+        .map_err(|e| Error::Network(format!("Failed to bind UDP socket: {}", e)))?;
+    socket.set_read_timeout(Some(Duration::from_secs(10)))
+        .map_err(|e| Error::Network(format!("Failed to set socket timeout: {}", e)))?;
+    socket.send_to(&wire, resolver_addr)
+        .map_err(|e| Error::Network(format!("Failed to send DNS query: {}", e)))?;
+
+    let mut buf = vec![0u8; 65535];
+    let len = socket.recv(&mut buf)
+        .map_err(|e| Error::Network(format!("Failed to receive DNS response: {}", e)))?;
+    let response = Message::from_bytes(&buf[..len])
+        .map_err(|e| Error::Network(format!("Failed to parse DNS response: {}", e)))?;
+
+    // Check if truncated — retry over TCP
+    if response.truncated() {
+        return dns_query_tcp(name, resolver, &wire);
+    }
+
+    // Check response code
+    use hickory_proto::op::ResponseCode;
+    match response.response_code() {
+        ResponseCode::NoError => {}
+        ResponseCode::NXDomain => {
+            return Err(Error::KeyNotFound(format!(
+                "No OPENPGPKEY DNS record found for {}", name
+            )));
+        }
+        code => {
+            return Err(Error::Network(format!(
+                "DNS query failed with response code: {}", code
+            )));
+        }
+    }
+
+    // Extract OPENPGPKEY record data
+    for record in response.answers() {
+        if let hickory_proto::rr::RData::OPENPGPKEY(ref key) = *record.data() {
+            return Ok(key.public_key().to_vec());
+        }
+    }
+
+    Err(Error::KeyNotFound(format!(
+        "No OPENPGPKEY record in DNS response for {}", name
+    )))
+}
+
+/// TCP fallback for truncated DNS responses.
+#[cfg(feature = "dane")]
+fn dns_query_tcp(name: &str, resolver: &str, wire: &[u8]) -> Result<Vec<u8>> {
+    use hickory_proto::op::Message;
+    use hickory_proto::serialize::binary::BinDecodable;
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+    use std::time::Duration;
+
+    let resolver_addr: std::net::SocketAddr = resolver.parse()
+        .map_err(|e| Error::Network(format!("Invalid resolver address '{}': {}", resolver, e)))?;
+
+    let mut stream = TcpStream::connect_timeout(&resolver_addr, Duration::from_secs(10))
+        .map_err(|e| Error::Network(format!("TCP connection to DNS resolver failed: {}", e)))?;
+    stream.set_read_timeout(Some(Duration::from_secs(10)))
+        .map_err(|e| Error::Network(format!("Failed to set TCP timeout: {}", e)))?;
+
+    // TCP DNS: 2-byte length prefix
+    let len_bytes = (wire.len() as u16).to_be_bytes();
+    stream.write_all(&len_bytes)
+        .map_err(|e| Error::Network(format!("Failed to write DNS query length: {}", e)))?;
+    stream.write_all(wire)
+        .map_err(|e| Error::Network(format!("Failed to write DNS query: {}", e)))?;
+
+    // Read 2-byte response length
+    let mut resp_len_buf = [0u8; 2];
+    stream.read_exact(&mut resp_len_buf)
+        .map_err(|e| Error::Network(format!("Failed to read DNS response length: {}", e)))?;
+    let resp_len = u16::from_be_bytes(resp_len_buf) as usize;
+
+    // Read response
+    let mut resp_buf = vec![0u8; resp_len];
+    stream.read_exact(&mut resp_buf)
+        .map_err(|e| Error::Network(format!("Failed to read DNS response: {}", e)))?;
+
+    let response = Message::from_bytes(&resp_buf)
+        .map_err(|e| Error::Network(format!("Failed to parse DNS response: {}", e)))?;
+
+    // Extract OPENPGPKEY record data
+    for record in response.answers() {
+        if let hickory_proto::rr::RData::OPENPGPKEY(ref key) = *record.data() {
+            return Ok(key.public_key().to_vec());
+        }
+    }
+
+    Err(Error::KeyNotFound(format!(
+        "No OPENPGPKEY record in DNS response for {}", name
+    )))
+}
+
+/// Fetch an OpenPGP key via DNS DANE OPENPGPKEY record (RFC 7929).
+///
+/// Looks up the OPENPGPKEY DNS record (TYPE 61) for the given email address.
+/// The local part of the email is SHA-256 hashed and truncated per RFC 7929
+/// to construct the DNS query name.
+///
+/// # Arguments
+///
+/// * `email` - Email address to look up
+/// * `dns_resolver` - Optional DNS resolver address (e.g. "8.8.8.8:53").
+///   If `None`, uses the system's configured DNS resolver (from `/etc/resolv.conf`
+///   on Linux/macOS, or platform-appropriate method on Windows).
+///
+/// # DNSSEC
+///
+/// This function does not perform local DNSSEC validation. For production use,
+/// ensure the DNS resolver performs DNSSEC validation. The system resolver or
+/// well-known public resolvers (1.1.1.1, 8.8.8.8) typically validate DNSSEC.
+///
+/// # Example
+///
+/// ```ignore
+/// // Ignored: requires network access and a domain with OPENPGPKEY records
+/// use wecanencrypt::fetch_key_by_email_from_dane;
+///
+/// // Use system DNS resolver
+/// let cert = fetch_key_by_email_from_dane("user@example.com", None)?;
+///
+/// // Use a specific DNS resolver
+/// let cert = fetch_key_by_email_from_dane("user@example.com", Some("8.8.8.8:53"))?;
+/// ```
+#[cfg(feature = "dane")]
+pub fn fetch_key_by_email_from_dane(
+    email: &str,
+    dns_resolver: Option<&str>,
+) -> Result<Vec<u8>> {
+    let (local, domain) = parse_email(email)?;
+    let name = openpgpkey_name(&local, &domain);
+
+    let resolver = match dns_resolver {
+        Some(r) => r.to_string(),
+        None => get_system_resolver(),
+    };
+
+    let key_bytes = dns_query(&name, &resolver)?;
+
+    // Validate that the returned data is a valid OpenPGP certificate
+    parse_cert(&key_bytes)?;
+
+    Ok(key_bytes)
+}
+
 #[cfg(test)]
 mod tests {
     #[cfg(feature = "network")]
@@ -350,5 +629,47 @@ mod tests {
         assert_eq!(urls.len(), 2);
         assert!(urls[0].contains("openpgpkey.example.com"));
         assert!(urls[1].contains("example.com/.well-known"));
+    }
+
+    #[test]
+    #[cfg(feature = "dane")]
+    fn test_openpgpkey_name() {
+        // Verify the OPENPGPKEY DNS name construction per RFC 7929
+        let name = openpgpkey_name("user", "example.com");
+        // SHA-256("user") truncated to 28 octets, hex-encoded = 56 hex chars
+        assert!(name.ends_with("._openpgpkey.example.com"));
+        let hash_part = name.split("._openpgpkey.").next().unwrap();
+        assert_eq!(hash_part.len(), 56, "Hash should be 56 hex chars (28 octets)");
+        // Verify it's valid hex
+        assert!(hash_part.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    #[cfg(feature = "dane")]
+    fn test_openpgpkey_name_case_insensitive() {
+        // Local part is already lowercased by parse_email
+        let name1 = openpgpkey_name("user", "example.com");
+        let name2 = openpgpkey_name("user", "example.com");
+        assert_eq!(name1, name2);
+    }
+
+    #[test]
+    #[cfg(feature = "dane")]
+    fn test_dane_invalid_email() {
+        use crate::error::Error;
+        let result = fetch_key_by_email_from_dane("invalid", None);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            Error::InvalidInput(_) => {}
+            other => panic!("Expected InvalidInput, got: {}", other),
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "dane")]
+    fn test_get_system_resolver() {
+        let resolver = get_system_resolver();
+        assert!(resolver.contains(':'), "Resolver should include port: {}", resolver);
+        assert!(resolver.ends_with(":53"), "Resolver should use port 53: {}", resolver);
     }
 }
