@@ -352,7 +352,7 @@ fn base64_encode(data: &[u8]) -> String {
 pub enum SshSignResult {
     /// Ed25519 signature (64 bytes).
     Ed25519(Vec<u8>),
-    /// ECDSA signature with named curve. Contains raw (r, s) concatenated.
+    /// ECDSA signature with named curve. Contains raw (r, s) scalars.
     Ecdsa {
         curve: String,
         r: Vec<u8>,
@@ -360,6 +360,17 @@ pub enum SshSignResult {
     },
     /// RSA signature bytes.
     Rsa(Vec<u8>),
+}
+
+/// Hash algorithm for SSH signing operations.
+///
+/// This tells `ssh_sign_raw` which PKCS#1v15 hash to use for RSA signing.
+/// For Ed25519 and ECDSA the hash is determined by the key type, so this
+/// value is only consulted for RSA.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SshHashAlgorithm {
+    Sha256,
+    Sha512,
 }
 
 /// Perform a raw SSH signature using a software authentication subkey.
@@ -372,10 +383,16 @@ pub enum SshSignResult {
 /// * `secret_cert` - The secret certificate data (armored or binary)
 /// * `data` - The data to sign (for Ed25519: the raw message; for ECDSA/RSA: the pre-hashed digest)
 /// * `password` - Password to unlock the secret key
+/// * `hash_alg` - Hash algorithm hint (used for RSA PKCS#1v15 signing)
 ///
 /// # Returns
 /// An `SshSignResult` containing the algorithm-specific signature.
-pub fn ssh_sign_raw(secret_cert: &[u8], data: &[u8], password: &str) -> Result<SshSignResult> {
+pub fn ssh_sign_raw(
+    secret_cert: &[u8],
+    data: &[u8],
+    password: &str,
+    hash_alg: SshHashAlgorithm,
+) -> Result<SshSignResult> {
     let secret_key = parse_secret_key(secret_cert)?;
     let pw: Password = password.into();
 
@@ -410,7 +427,7 @@ pub fn ssh_sign_raw(secret_cert: &[u8], data: &[u8], password: &str) -> Result<S
 
         // Unlock the subkey and perform raw signing
         let result = subkey.key.unlock(&pw, |pub_params, secret_params| {
-            ssh_raw_sign_with_params(pub_params, secret_params, data)
+            ssh_raw_sign_with_params(pub_params, secret_params, data, hash_alg)
                 .map_err(|e| pgp::errors::Error::Message {
                     message: e.to_string(),
                     backtrace: Some(std::backtrace::Backtrace::capture()),
@@ -432,19 +449,17 @@ fn ssh_raw_sign_with_params(
     pub_params: &PublicParams,
     secret_params: &PlainSecretParams,
     data: &[u8],
+    hash_alg: SshHashAlgorithm,
 ) -> Result<SshSignResult> {
     match secret_params {
         // Ed25519 (RFC 9580) or legacy EdDSA
-        // The pgp ed25519::SecretKey Derefs to ed25519_dalek::SigningKey
         PlainSecretParams::Ed25519(sk) | PlainSecretParams::Ed25519Legacy(sk) => {
-            // Reconstruct signing key from raw bytes and sign
             let key_bytes = sk.as_bytes();
             let signing_key = pgp::crypto::ed25519::SecretKey::try_from_bytes(
                 *key_bytes,
                 pgp::crypto::ed25519::Mode::Ed25519,
             )
             .map_err(|e| Error::Crypto(e.to_string()))?;
-            // Use the Deref to ed25519_dalek::SigningKey for signing
             use std::ops::Deref;
             let dalek_key: &ed25519_dalek::SigningKey = signing_key.deref();
             use ed25519_dalek::Signer;
@@ -452,13 +467,14 @@ fn ssh_raw_sign_with_params(
             Ok(SshSignResult::Ed25519(signature.to_bytes().to_vec()))
         }
 
-        // ECDSA - use the raw scalar bytes from the pgp ECDSA secret key
+        // ECDSA - determine curve from pub_params, not scalar length
         PlainSecretParams::ECDSA(ecdsa_sk) => {
+            use pgp::types::EcdsaPublicParams;
+
             let scalar_bytes = Zeroizing::new(ecdsa_sk.to_bytes());
 
-            // Determine curve from scalar size and sign pre-hashed digest
-            match scalar_bytes.len() {
-                32 => {
+            match pub_params {
+                PublicParams::ECDSA(EcdsaPublicParams::P256 { .. }) => {
                     use p256::ecdsa::{signature::hazmat::PrehashSigner, Signature, SigningKey};
                     let signing_key = SigningKey::from_bytes(
                         p256::FieldBytes::from_slice(&scalar_bytes),
@@ -473,7 +489,7 @@ fn ssh_raw_sign_with_params(
                         s: s.to_vec(),
                     })
                 }
-                48 => {
+                PublicParams::ECDSA(EcdsaPublicParams::P384 { .. }) => {
                     use p384::ecdsa::{signature::hazmat::PrehashSigner, Signature, SigningKey};
                     let signing_key = SigningKey::from_bytes(
                         p384::FieldBytes::from_slice(&scalar_bytes),
@@ -488,7 +504,7 @@ fn ssh_raw_sign_with_params(
                         s: s.to_vec(),
                     })
                 }
-                66 => {
+                PublicParams::ECDSA(EcdsaPublicParams::P521 { .. }) => {
                     use p521::ecdsa::{signature::hazmat::PrehashSigner, Signature, SigningKey};
                     let signing_key = SigningKey::from_bytes(
                         p521::FieldBytes::from_slice(&scalar_bytes),
@@ -504,7 +520,7 @@ fn ssh_raw_sign_with_params(
                     })
                 }
                 _ => Err(Error::UnsupportedAlgorithm(
-                    format!("Unsupported ECDSA scalar size {} for SSH signing", scalar_bytes.len()),
+                    "Unsupported ECDSA curve for SSH signing (only P-256, P-384, P-521)".to_string(),
                 )),
             }
         }
@@ -513,17 +529,18 @@ fn ssh_raw_sign_with_params(
         PlainSecretParams::RSA(rsa_sk) => {
             use rsa::pkcs1v15::SigningKey as RsaSigningKey;
             use rsa::signature::{hazmat::PrehashSigner, SignatureEncoding};
-            use rsa::traits::PublicKeyParts;
 
-            // Get d, p, q from the secret key (zeroized on drop)
-            let (d_bytes, p_bytes, q_bytes, _u_bytes) = rsa_sk.to_bytes();
+            // Get d, p, q, u from the secret key (all zeroized on drop)
+            let (d_bytes, p_bytes, q_bytes, u_bytes) = rsa_sk.to_bytes();
             let d_bytes = Zeroizing::new(d_bytes);
             let p_bytes = Zeroizing::new(p_bytes);
             let q_bytes = Zeroizing::new(q_bytes);
+            let _u_bytes = Zeroizing::new(u_bytes);
 
             // Get n, e from the public params
             let (n, e) = match pub_params {
                 PublicParams::RSA(rsa_pub) => {
+                    use rsa::traits::PublicKeyParts;
                     (rsa_pub.key.n().clone(), rsa_pub.key.e().clone())
                 }
                 _ => {
@@ -544,26 +561,22 @@ fn ssh_raw_sign_with_params(
             )
             .map_err(|e| Error::Crypto(format!("Failed to reconstruct RSA key: {}", e)))?;
 
-            // Determine hash algorithm from digest length and sign pre-hashed data
-            let sig_bytes = if data.len() == 32 {
-                // SHA-256 digest
-                let signer = RsaSigningKey::<sha2::Sha256>::new(private_key);
-                signer
-                    .sign_prehash(data)
-                    .map_err(|e| Error::Crypto(format!("RSA signing failed: {}", e)))?
-                    .to_vec()
-            } else if data.len() == 64 {
-                // SHA-512 digest
-                let signer = RsaSigningKey::<sha2::Sha512>::new(private_key);
-                signer
-                    .sign_prehash(data)
-                    .map_err(|e| Error::Crypto(format!("RSA signing failed: {}", e)))?
-                    .to_vec()
-            } else {
-                return Err(Error::Crypto(format!(
-                    "Unexpected RSA digest length: {} (expected 32 for SHA-256 or 64 for SHA-512)",
-                    data.len()
-                )));
+            // Use the explicitly provided hash algorithm
+            let sig_bytes = match hash_alg {
+                SshHashAlgorithm::Sha256 => {
+                    let signer = RsaSigningKey::<sha2::Sha256>::new(private_key);
+                    signer
+                        .sign_prehash(data)
+                        .map_err(|e| Error::Crypto(format!("RSA signing failed: {}", e)))?
+                        .to_vec()
+                }
+                SshHashAlgorithm::Sha512 => {
+                    let signer = RsaSigningKey::<sha2::Sha512>::new(private_key);
+                    signer
+                        .sign_prehash(data)
+                        .map_err(|e| Error::Crypto(format!("RSA signing failed: {}", e)))?
+                        .to_vec()
+                }
             };
 
             Ok(SshSignResult::Rsa(sig_bytes))

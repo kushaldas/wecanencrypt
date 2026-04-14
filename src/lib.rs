@@ -202,6 +202,7 @@ pub use ssh::{
     get_ssh_pubkey,
     get_signing_pubkey,
     ssh_sign_raw,
+    SshHashAlgorithm,
     SshSignResult,
 };
 
