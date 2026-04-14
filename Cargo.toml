@@ -1,6 +1,6 @@
 [package]
 name = "wecanencrypt"
-version = "0.7.0"
+version = "0.7.1"
 edition = "2021"
 license = "MIT"
 description = "Simple Rust OpenPGP library for encryption, signing, and key management."
@@ -78,6 +78,9 @@ tempfile = "3.0"
 hex-literal = "0.4"
 pretty_assertions = "1"
 testresult = "0.4.1"
+sha2 = "0.10"
+ed25519-dalek = "2"
+p256 = { version = "0.13", features = ["ecdsa"] }
 
 [package.metadata.docs.rs]
 features = ["keystore", "network", "card", "dane"]

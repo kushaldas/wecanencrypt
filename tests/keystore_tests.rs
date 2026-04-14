@@ -4,17 +4,14 @@
 
 #![cfg(feature = "keystore")]
 
-use std::path::PathBuf;
 use chrono::Datelike;
+use std::path::PathBuf;
 use tempfile::tempdir;
 use wecanencrypt::{
-    create_key, create_key_simple, get_pub_key, parse_cert_bytes,
-    add_uid, revoke_uid, update_password,
-    sign_bytes_detached,
-    encrypt_bytes_from_store, encrypt_bytes_to_multiple_from_store,
-    decrypt_bytes_from_store, sign_bytes_detached_from_store,
-    verify_bytes_detached_from_store,
-    KeyStore, CipherSuite, SubkeyFlags,
+    add_uid, create_key, create_key_simple, decrypt_bytes_from_store, encrypt_bytes_from_store,
+    encrypt_bytes_to_multiple_from_store, get_pub_key, parse_cert_bytes, revoke_uid,
+    sign_bytes_detached, sign_bytes_detached_from_store, update_password,
+    verify_bytes_detached_from_store, CipherSuite, KeyStore, SubkeyFlags,
 };
 
 const TEST_PASSWORD: &str = "test-password-123";
@@ -108,7 +105,9 @@ fn test_keystore_contains() {
     assert!(store.contains(&fingerprint).unwrap());
 
     // Nonexistent key
-    assert!(!store.contains("DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF").unwrap());
+    assert!(!store
+        .contains("DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF")
+        .unwrap());
 }
 
 #[test]
@@ -145,9 +144,15 @@ fn test_keystore_list_certs() {
     let (key2, fp2) = create_test_key("User2 <user2@example.com>");
     let (key3, fp3) = create_test_key("User3 <user3@example.com>");
 
-    store.import_cert(&get_pub_key(&key1).unwrap().as_bytes()).unwrap();
-    store.import_cert(&get_pub_key(&key2).unwrap().as_bytes()).unwrap();
-    store.import_cert(&get_pub_key(&key3).unwrap().as_bytes()).unwrap();
+    store
+        .import_cert(&get_pub_key(&key1).unwrap().as_bytes())
+        .unwrap();
+    store
+        .import_cert(&get_pub_key(&key2).unwrap().as_bytes())
+        .unwrap();
+    store
+        .import_cert(&get_pub_key(&key3).unwrap().as_bytes())
+        .unwrap();
 
     let certs = store.list_certs().unwrap();
     assert_eq!(certs.len(), 3);
@@ -169,9 +174,15 @@ fn test_keystore_search_by_uid() {
     let (key2, _) = create_test_key("Bob <bob@example.com>");
     let (key3, _) = create_test_key("Alice Work <alice@work.com>");
 
-    store.import_cert(&get_pub_key(&key1).unwrap().as_bytes()).unwrap();
-    store.import_cert(&get_pub_key(&key2).unwrap().as_bytes()).unwrap();
-    store.import_cert(&get_pub_key(&key3).unwrap().as_bytes()).unwrap();
+    store
+        .import_cert(&get_pub_key(&key1).unwrap().as_bytes())
+        .unwrap();
+    store
+        .import_cert(&get_pub_key(&key2).unwrap().as_bytes())
+        .unwrap();
+    store
+        .import_cert(&get_pub_key(&key3).unwrap().as_bytes())
+        .unwrap();
 
     // Search for Alice
     let results = store.search_by_uid("alice").unwrap();
@@ -222,11 +233,8 @@ fn test_keystore_update_cert() {
     store.import_cert(key.secret_key.as_slice()).unwrap();
 
     // Add a UID to the key
-    let updated_key = wecanencrypt::add_uid(
-        &key.secret_key,
-        "Added <added@example.com>",
-        TEST_PASSWORD,
-    ).unwrap();
+    let updated_key =
+        wecanencrypt::add_uid(&key.secret_key, "Added <added@example.com>", TEST_PASSWORD).unwrap();
 
     // Update in store
     store.update_cert(&key.fingerprint, &updated_key).unwrap();
@@ -293,10 +301,14 @@ fn test_keystore_count() {
     let (key1, _) = create_test_key("User1 <user1@example.com>");
     let (key2, _) = create_test_key("User2 <user2@example.com>");
 
-    store.import_cert(&get_pub_key(&key1).unwrap().as_bytes()).unwrap();
+    store
+        .import_cert(&get_pub_key(&key1).unwrap().as_bytes())
+        .unwrap();
     assert_eq!(store.count().unwrap(), 1);
 
-    store.import_cert(&get_pub_key(&key2).unwrap().as_bytes()).unwrap();
+    store
+        .import_cert(&get_pub_key(&key2).unwrap().as_bytes())
+        .unwrap();
     assert_eq!(store.count().unwrap(), 2);
 }
 
@@ -377,9 +389,15 @@ fn test_keystore_search_by_email() {
     let (key2, _) = create_test_key("Bob <bob@work.com>");
     let (key3, _) = create_test_key("Alice Work <alice@work.com>");
 
-    store.import_cert(&get_pub_key(&key1).unwrap().as_bytes()).unwrap();
-    store.import_cert(&get_pub_key(&key2).unwrap().as_bytes()).unwrap();
-    store.import_cert(&get_pub_key(&key3).unwrap().as_bytes()).unwrap();
+    store
+        .import_cert(&get_pub_key(&key1).unwrap().as_bytes())
+        .unwrap();
+    store
+        .import_cert(&get_pub_key(&key2).unwrap().as_bytes())
+        .unwrap();
+    store
+        .import_cert(&get_pub_key(&key3).unwrap().as_bytes())
+        .unwrap();
 
     // Search by exact email
     let results = store.search_by_email("alice@example.com").unwrap();
@@ -438,8 +456,12 @@ fn test_keystore_list_fingerprints() {
     let (key1, fp1) = create_test_key("User1 <user1@example.com>");
     let (key2, fp2) = create_test_key("User2 <user2@example.com>");
 
-    store.import_cert(&get_pub_key(&key1).unwrap().as_bytes()).unwrap();
-    store.import_cert(&get_pub_key(&key2).unwrap().as_bytes()).unwrap();
+    store
+        .import_cert(&get_pub_key(&key1).unwrap().as_bytes())
+        .unwrap();
+    store
+        .import_cert(&get_pub_key(&key2).unwrap().as_bytes())
+        .unwrap();
 
     let fingerprints = store.list_fingerprints().unwrap();
 
@@ -508,12 +530,8 @@ fn test_keystore_encrypt_decrypt_multiple_recipients() {
     let message = b"Message for multiple recipients";
 
     // Encrypt to both
-    let ciphertext = encrypt_bytes_to_multiple_from_store(
-        &store,
-        &[&fp1, &fp2],
-        message,
-        true,
-    ).unwrap();
+    let ciphertext =
+        encrypt_bytes_to_multiple_from_store(&store, &[&fp1, &fp2], message, true).unwrap();
 
     // Both should be able to decrypt
     let decrypted1 = decrypt_bytes_from_store(&store, &fp1, &ciphertext, TEST_PASSWORD).unwrap();
@@ -534,12 +552,9 @@ fn test_keystore_sign_verify_wrong_data_fails() {
     store.import_cert(&secret_key).unwrap();
 
     // Sign some data
-    let signature = sign_bytes_detached_from_store(
-        &store,
-        &fingerprint,
-        b"original data",
-        TEST_PASSWORD,
-    ).unwrap();
+    let signature =
+        sign_bytes_detached_from_store(&store, &fingerprint, b"original data", TEST_PASSWORD)
+            .unwrap();
 
     // Verify with correct data - should pass
     let valid = verify_bytes_detached_from_store(
@@ -547,7 +562,8 @@ fn test_keystore_sign_verify_wrong_data_fails() {
         &fingerprint,
         b"original data",
         signature.as_bytes(),
-    ).unwrap();
+    )
+    .unwrap();
     assert!(valid);
 
     // Verify with wrong data - should fail
@@ -556,7 +572,8 @@ fn test_keystore_sign_verify_wrong_data_fails() {
         &fingerprint,
         b"modified data",
         signature.as_bytes(),
-    ).unwrap();
+    )
+    .unwrap();
     assert!(!valid);
 }
 
@@ -581,7 +598,8 @@ fn test_keystore_add_and_revoke_uid() {
 
     // Revoke the added UID
     let updated_cert = store.export_cert(&fingerprint).unwrap();
-    let with_revoked = revoke_uid(&updated_cert, "Added <added@example.com>", TEST_PASSWORD).unwrap();
+    let with_revoked =
+        revoke_uid(&updated_cert, "Added <added@example.com>", TEST_PASSWORD).unwrap();
     store.update_cert(&fingerprint, &with_revoked).unwrap();
 
     // UID count stays same (revoked UIDs still present)
@@ -615,7 +633,7 @@ fn test_keystore_key_without_uid_fails() {
     // Attempt to create key without UID - should fail
     let result = create_key(
         TEST_PASSWORD,
-        &[],  // Empty UIDs
+        &[], // Empty UIDs
         CipherSuite::Cv25519,
         None,
         None,
@@ -699,7 +717,8 @@ fn test_keystore_encrypt_decrypt_from_store() {
     assert!(String::from_utf8_lossy(&ciphertext).starts_with("-----BEGIN PGP MESSAGE-----"));
 
     // Decrypt using store helper
-    let decrypted = decrypt_bytes_from_store(&store, &fingerprint, &ciphertext, TEST_PASSWORD).unwrap();
+    let decrypted =
+        decrypt_bytes_from_store(&store, &fingerprint, &ciphertext, TEST_PASSWORD).unwrap();
     assert_eq!(decrypted, message);
 }
 
@@ -776,13 +795,8 @@ fn test_keystore_encrypt_decrypt_file() {
     std::fs::write(&input_path, b"Test data for file encryption").unwrap();
 
     // Encrypt file
-    wecanencrypt::encrypt_file_from_store(
-        &store,
-        &fingerprint,
-        &input_path,
-        &encrypted_path,
-        true,
-    ).unwrap();
+    wecanencrypt::encrypt_file_from_store(&store, &fingerprint, &input_path, &encrypted_path, true)
+        .unwrap();
 
     assert!(encrypted_path.exists());
 
@@ -793,7 +807,8 @@ fn test_keystore_encrypt_decrypt_file() {
         &encrypted_path,
         &decrypted_path,
         TEST_PASSWORD,
-    ).unwrap();
+    )
+    .unwrap();
 
     // Verify content matches
     let decrypted = std::fs::read(&decrypted_path).unwrap();
@@ -823,7 +838,8 @@ fn test_keystore_sign_verify_file_detached() {
         &fingerprint,
         &data_path,
         TEST_PASSWORD,
-    ).unwrap();
+    )
+    .unwrap();
 
     assert!(signature.starts_with("-----BEGIN PGP SIGNATURE-----"));
 
@@ -831,12 +847,9 @@ fn test_keystore_sign_verify_file_detached() {
     std::fs::write(&sig_path, signature.as_bytes()).unwrap();
 
     // Verify
-    let valid = wecanencrypt::verify_file_detached_from_store(
-        &store,
-        &fingerprint,
-        &data_path,
-        &sig_path,
-    ).unwrap();
+    let valid =
+        wecanencrypt::verify_file_detached_from_store(&store, &fingerprint, &data_path, &sig_path)
+            .unwrap();
 
     assert!(valid);
 }
@@ -870,7 +883,8 @@ fn test_keystore_encrypt_file_multiple_recipients() {
         &input_path,
         &encrypted_path,
         true,
-    ).unwrap();
+    )
+    .unwrap();
 
     // Both should be able to decrypt
     wecanencrypt::decrypt_file_from_store(
@@ -879,7 +893,8 @@ fn test_keystore_encrypt_file_multiple_recipients() {
         &encrypted_path,
         &decrypted1_path,
         TEST_PASSWORD,
-    ).unwrap();
+    )
+    .unwrap();
 
     wecanencrypt::decrypt_file_from_store(
         &store,
@@ -887,7 +902,8 @@ fn test_keystore_encrypt_file_multiple_recipients() {
         &encrypted_path,
         &decrypted2_path,
         TEST_PASSWORD,
-    ).unwrap();
+    )
+    .unwrap();
 
     // Verify both got the same content
     let decrypted1 = std::fs::read(&decrypted1_path).unwrap();
@@ -976,9 +992,36 @@ fn test_keystore_save_and_get_card_keys() {
     let fp = store.import_cert(&key_data).unwrap();
 
     // Save card-key associations
-    store.save_card_key(&fp, "0006:12345678", "12345678", Some("Yubico AB"), "signature", "aabbccdd").unwrap();
-    store.save_card_key(&fp, "0006:12345678", "12345678", Some("Yubico AB"), "encryption", "eeff0011").unwrap();
-    store.save_card_key(&fp, "0006:99999999", "99999999", Some("Yubico AB"), "signature", "22334455").unwrap();
+    store
+        .save_card_key(
+            &fp,
+            "0006:12345678",
+            "12345678",
+            Some("Yubico AB"),
+            "signature",
+            "aabbccdd",
+        )
+        .unwrap();
+    store
+        .save_card_key(
+            &fp,
+            "0006:12345678",
+            "12345678",
+            Some("Yubico AB"),
+            "encryption",
+            "eeff0011",
+        )
+        .unwrap();
+    store
+        .save_card_key(
+            &fp,
+            "0006:99999999",
+            "99999999",
+            Some("Yubico AB"),
+            "signature",
+            "22334455",
+        )
+        .unwrap();
 
     // Retrieve card keys for this certificate
     let card_keys = store.get_card_keys(&fp).unwrap();
@@ -1002,10 +1045,28 @@ fn test_keystore_card_keys_replace_on_duplicate() {
     let fp = store.import_cert(&key_data).unwrap();
 
     // Save a card-key association
-    store.save_card_key(&fp, "0006:12345678", "12345678", Some("Yubico AB"), "signature", "aabbccdd").unwrap();
+    store
+        .save_card_key(
+            &fp,
+            "0006:12345678",
+            "12345678",
+            Some("Yubico AB"),
+            "signature",
+            "aabbccdd",
+        )
+        .unwrap();
 
     // Save again with same card_ident+slot — should replace
-    store.save_card_key(&fp, "0006:12345678", "12345678", Some("Yubico AB"), "signature", "newfingerprint").unwrap();
+    store
+        .save_card_key(
+            &fp,
+            "0006:12345678",
+            "12345678",
+            Some("Yubico AB"),
+            "signature",
+            "newfingerprint",
+        )
+        .unwrap();
 
     let card_keys = store.get_card_keys(&fp).unwrap();
     assert_eq!(card_keys.len(), 1);
@@ -1020,9 +1081,36 @@ fn test_keystore_remove_card_keys_for_card() {
     let key_data = read_file(&key_path);
     let fp = store.import_cert(&key_data).unwrap();
 
-    store.save_card_key(&fp, "0006:12345678", "12345678", Some("Yubico AB"), "signature", "aabbccdd").unwrap();
-    store.save_card_key(&fp, "0006:12345678", "12345678", Some("Yubico AB"), "encryption", "eeff0011").unwrap();
-    store.save_card_key(&fp, "0006:99999999", "99999999", Some("Yubico AB"), "signature", "22334455").unwrap();
+    store
+        .save_card_key(
+            &fp,
+            "0006:12345678",
+            "12345678",
+            Some("Yubico AB"),
+            "signature",
+            "aabbccdd",
+        )
+        .unwrap();
+    store
+        .save_card_key(
+            &fp,
+            "0006:12345678",
+            "12345678",
+            Some("Yubico AB"),
+            "encryption",
+            "eeff0011",
+        )
+        .unwrap();
+    store
+        .save_card_key(
+            &fp,
+            "0006:99999999",
+            "99999999",
+            Some("Yubico AB"),
+            "signature",
+            "22334455",
+        )
+        .unwrap();
 
     // Remove all associations for the first card
     store.remove_card_keys_for_card("0006:12345678").unwrap();
@@ -1040,7 +1128,16 @@ fn test_keystore_card_keys_cascade_delete() {
     let key_data = read_file(&key_path);
     let fp = store.import_cert(&key_data).unwrap();
 
-    store.save_card_key(&fp, "0006:12345678", "12345678", Some("Yubico AB"), "signature", "aabbccdd").unwrap();
+    store
+        .save_card_key(
+            &fp,
+            "0006:12345678",
+            "12345678",
+            Some("Yubico AB"),
+            "signature",
+            "aabbccdd",
+        )
+        .unwrap();
 
     // Delete the certificate — card_keys should cascade
     store.delete_cert(&fp).unwrap();

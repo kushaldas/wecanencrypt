@@ -115,17 +115,20 @@ pub fn encrypt_bytes_to_multiple(
 
     // Add all encryption keys as recipients
     for key in &encryption_keys {
-        builder.encrypt_to_key(&mut rng, key)
+        builder
+            .encrypt_to_key(&mut rng, key)
             .map_err(|e| Error::Crypto(e.to_string()))?;
     }
 
     // Produce the output
     if armor {
-        let armored = builder.to_armored_string(&mut rng, None.into())
+        let armored = builder
+            .to_armored_string(&mut rng, None.into())
             .map_err(|e| Error::Crypto(e.to_string()))?;
         Ok(armored.into_bytes())
     } else {
-        builder.to_vec(&mut rng)
+        builder
+            .to_vec(&mut rng)
             .map_err(|e| Error::Crypto(e.to_string()))
     }
 }
@@ -286,7 +289,9 @@ pub fn file_encrypted_for(path: impl AsRef<Path>) -> Result<Vec<String>> {
 }
 
 /// Helper to find valid encryption subkeys from a public key.
-fn find_valid_encryption_subkeys(key: &SignedPublicKey) -> Result<Vec<pgp::composed::SignedPublicSubKey>> {
+fn find_valid_encryption_subkeys(
+    key: &SignedPublicKey,
+) -> Result<Vec<pgp::composed::SignedPublicSubKey>> {
     let mut valid_keys = Vec::new();
 
     for subkey in &key.public_subkeys {

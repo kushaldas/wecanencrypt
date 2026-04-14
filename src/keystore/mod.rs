@@ -109,9 +109,9 @@
 //! ```
 
 #[cfg(feature = "keystore")]
-mod store;
-#[cfg(feature = "keystore")]
 mod schema;
+#[cfg(feature = "keystore")]
+mod store;
 
 #[cfg(feature = "keystore")]
 pub use store::*;

@@ -66,7 +66,11 @@ pub fn decrypt_bytes(secret_cert: &[u8], ciphertext: &[u8], password: &str) -> R
 ///
 /// # Returns
 /// The decrypted plaintext bytes.
-pub fn decrypt_bytes_legacy(secret_cert: &[u8], ciphertext: &[u8], password: &str) -> Result<Vec<u8>> {
+pub fn decrypt_bytes_legacy(
+    secret_cert: &[u8],
+    ciphertext: &[u8],
+    password: &str,
+) -> Result<Vec<u8>> {
     let secret_key = parse_secret_key(secret_cert)?;
     decrypt_with_key(&secret_key, ciphertext, password, true)
 }
@@ -92,13 +96,13 @@ pub fn decrypt_with_key(
     // Parse the encrypted message (try armored first, then binary)
     let message = match Message::from_armor(Cursor::new(ciphertext)) {
         Ok((msg, _headers)) => msg,
-        Err(_) => Message::from_bytes(ciphertext)
-            .map_err(|e| Error::Parse(e.to_string()))?,
+        Err(_) => Message::from_bytes(ciphertext).map_err(|e| Error::Parse(e.to_string()))?,
     };
 
     // Try standard decrypt first (integrity-protected: SEIPDv1/MDC or SEIPDv2/AEAD).
     // Return a uniform error to avoid leaking which phase failed (oracle prevention).
-    let decrypted = message.decrypt(&password, secret_key)
+    let decrypted = message
+        .decrypt(&password, secret_key)
         .or_else(|_| {
             if !allow_legacy {
                 return Err(Error::Crypto("Decryption failed".to_string()));
@@ -106,8 +110,9 @@ pub fn decrypt_with_key(
             // Legacy fallback: allows SED packets (no integrity protection).
             let msg = match Message::from_armor(Cursor::new(ciphertext)) {
                 Ok((m, _headers)) => m,
-                Err(_) => Message::from_bytes(ciphertext)
-                    .map_err(|e| Error::Parse(e.to_string()))?,
+                Err(_) => {
+                    Message::from_bytes(ciphertext).map_err(|e| Error::Parse(e.to_string()))?
+                }
             };
             msg.decrypt_legacy(&password, secret_key)
                 .map_err(|e| Error::Crypto(e.to_string()))
@@ -116,14 +121,16 @@ pub fn decrypt_with_key(
 
     // Handle compression if present
     let mut decompressed = if decrypted.is_compressed() {
-        decrypted.decompress()
+        decrypted
+            .decompress()
             .map_err(|e| Error::Crypto(e.to_string()))?
     } else {
         decrypted
     };
 
     // Extract the plaintext data
-    decompressed.as_data_vec()
+    decompressed
+        .as_data_vec()
         .map_err(|e| Error::Crypto(e.to_string()))
 }
 

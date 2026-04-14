@@ -80,11 +80,7 @@ pub fn verify_and_extract_bytes(signer_cert: &[u8], signed_message: &[u8]) -> Re
 ///
 /// # Returns
 /// `true` if the signature is valid.
-pub fn verify_bytes_detached(
-    signer_cert: &[u8],
-    data: &[u8],
-    signature: &[u8],
-) -> Result<bool> {
+pub fn verify_bytes_detached(signer_cert: &[u8], data: &[u8], signature: &[u8]) -> Result<bool> {
     let public_key = parse_public_key(signer_cert)?;
 
     // Parse the detached signature
@@ -168,8 +164,8 @@ pub fn verify_file_detached(
 fn verify_cleartext(public_key: &SignedPublicKey, signed_message: &[u8]) -> Result<bool> {
     // Try to parse as cleartext signed message
     let text = String::from_utf8_lossy(signed_message);
-    let (msg, _) = CleartextSignedMessage::from_string(&text)
-        .map_err(|e| Error::Parse(e.to_string()))?;
+    let (msg, _) =
+        CleartextSignedMessage::from_string(&text).map_err(|e| Error::Parse(e.to_string()))?;
 
     // Try verifying against primary key (only if not expired/revoked)
     if is_primary_key_valid_for_verification(public_key)
@@ -189,7 +185,10 @@ fn verify_cleartext(public_key: &SignedPublicKey, signed_message: &[u8]) -> Resu
 }
 
 /// Extract content from a cleartext signed message after verification.
-fn extract_cleartext(public_key: &SignedPublicKey, signed_message: &[u8]) -> Result<Option<Vec<u8>>> {
+fn extract_cleartext(
+    public_key: &SignedPublicKey,
+    signed_message: &[u8],
+) -> Result<Option<Vec<u8>>> {
     // Try to parse as cleartext signed message
     let text = match String::from_utf8(signed_message.to_vec()) {
         Ok(t) => t,
@@ -230,18 +229,19 @@ fn verify_inline_signed(public_key: &SignedPublicKey, signed_message: &[u8]) -> 
     // Try armored first, then binary
     let mut message = match Message::from_armor(Cursor::new(signed_message)) {
         Ok((msg, _headers)) => msg,
-        Err(_) => Message::from_bytes(signed_message)
-            .map_err(|e| Error::Parse(e.to_string()))?,
+        Err(_) => Message::from_bytes(signed_message).map_err(|e| Error::Parse(e.to_string()))?,
     };
 
     // Handle compression if needed
     if message.is_compressed() {
-        message = message.decompress()
+        message = message
+            .decompress()
             .map_err(|e| Error::Parse(e.to_string()))?;
     }
 
     // Read the message content (required before verification)
-    let _ = message.as_data_vec()
+    let _ = message
+        .as_data_vec()
         .map_err(|e| Error::Parse(e.to_string()))?;
 
     // Try verifying against primary key (only if not revoked)
@@ -266,18 +266,19 @@ fn extract_inline_signed(public_key: &SignedPublicKey, signed_message: &[u8]) ->
     // Try armored first, then binary
     let mut message = match Message::from_armor(Cursor::new(signed_message)) {
         Ok((msg, _headers)) => msg,
-        Err(_) => Message::from_bytes(signed_message)
-            .map_err(|e| Error::Parse(e.to_string()))?,
+        Err(_) => Message::from_bytes(signed_message).map_err(|e| Error::Parse(e.to_string()))?,
     };
 
     // Handle compression if needed
     if message.is_compressed() {
-        message = message.decompress()
+        message = message
+            .decompress()
             .map_err(|e| Error::Parse(e.to_string()))?;
     }
 
     // Read the message content
-    let content = message.as_data_vec()
+    let content = message
+        .as_data_vec()
         .map_err(|e| Error::Parse(e.to_string()))?;
 
     // Try verifying against primary key (only if not revoked)

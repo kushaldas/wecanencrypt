@@ -64,42 +64,25 @@
 //! **Warning**: Setting `TouchMode::Fixed` or `TouchMode::CachedFixed` is permanent
 //! on some devices (like YubiKey) and cannot be changed even with a factory reset!
 
-mod types;
 mod connection;
 mod crypto;
+mod types;
 pub mod upload;
 
-pub use types::{KeySlot, TouchMode, CardInfo, CardSummary, CardError, SlotMatch, CardKeyMatch};
 pub use connection::{
-    is_card_connected,
-    list_all_cards,
-    get_card_details,
-    get_card_version,
-    get_card_serial,
+    change_admin_pin, change_user_pin, find_cards_for_key, get_card_details, get_card_serial,
+    get_card_version, get_pin_retry_counters, get_touch_modes, is_card_connected, list_all_cards,
+    reset_card, set_cardholder_name, set_public_key_url, set_touch_mode, verify_admin_pin,
     verify_user_pin,
-    verify_admin_pin,
-    get_pin_retry_counters,
-    reset_card,
-    change_user_pin,
-    change_admin_pin,
-    get_touch_modes,
-    set_touch_mode,
-    set_cardholder_name,
-    set_public_key_url,
-    find_cards_for_key,
 };
+pub use types::{CardError, CardInfo, CardKeyMatch, CardSummary, KeySlot, SlotMatch, TouchMode};
 // Re-export get_card_backend for use by crypto module
 pub(crate) use connection::get_card_backend;
 pub use crypto::{
-    sign_bytes_detached_on_card,
-    decrypt_bytes_on_card,
-    update_primary_expiry_on_card,
+    decrypt_bytes_on_card, sign_bytes_detached_on_card, update_primary_expiry_on_card,
     update_subkeys_expiry_on_card,
 };
 pub use upload::{
-    upload_key_to_card,
-    upload_primary_key_to_card,
-    upload_subkey_by_fingerprint,
-    CardKeySlot,
+    upload_key_to_card, upload_primary_key_to_card, upload_subkey_by_fingerprint, CardKeySlot,
     KeySelection,
 };

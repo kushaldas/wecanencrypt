@@ -6,19 +6,31 @@
 use std::path::PathBuf;
 
 use wecanencrypt::{
-    // Encryption/Decryption
-    encrypt_bytes, decrypt_bytes, bytes_encrypted_for,
-    // Signing/Verification
-    sign_bytes, sign_bytes_cleartext, sign_bytes_detached,
-    verify_bytes, verify_and_extract_bytes, verify_bytes_detached,
-    // Parsing
-    parse_cert_bytes, parse_cert_file, get_key_cipher_details,
-    // Keyring
-    parse_keyring_file,
     // Key management
-    add_uid, get_pub_key, merge_keys,
+    add_uid,
+    bytes_encrypted_for,
+    decrypt_bytes,
+    // Encryption/Decryption
+    encrypt_bytes,
+    get_key_cipher_details,
+    get_pub_key,
     // SSH
     get_ssh_pubkey,
+    merge_keys,
+    // Parsing
+    parse_cert_bytes,
+    parse_cert_file,
+    // Keyring
+    parse_keyring_file,
+    // Signing/Verification
+    sign_bytes,
+    sign_bytes_cleartext,
+    sign_bytes_detached,
+    ssh_sign_raw,
+    verify_and_extract_bytes,
+    verify_bytes,
+    verify_bytes_detached,
+    SshSignResult,
 };
 
 /// Base path for test files.
@@ -154,7 +166,11 @@ mod parse_cert {
             assert!(detail.is_some(), "Missing fingerprint: {}", fp);
             let detail = detail.unwrap();
             assert_eq!(detail.algorithm, *algo, "Algorithm mismatch for {}", fp);
-            assert_eq!(detail.bit_length, *bits as usize, "Bits mismatch for {}", fp);
+            assert_eq!(
+                detail.bit_length, *bits as usize,
+                "Bits mismatch for {}",
+                fp
+            );
         }
     }
 }
@@ -377,6 +393,270 @@ mod ssh_pubkey {
 }
 
 // =============================================================================
+// SSH Signing Tests
+// =============================================================================
+
+mod ssh_sign {
+    use super::*;
+    use sha2::Digest;
+    use wecanencrypt::{create_key, CipherSuite, SshHashAlgorithm, SubkeyFlags};
+
+    const PASSWORD: &str = "test-ssh-sign";
+    const UID: &str = "SSH Test <ssh@example.com>";
+
+    /// Generate a key pair with all subkeys (including authentication).
+    /// Returns (secret_key_bytes, public_key_armored_string).
+    fn gen_key(cipher: CipherSuite) -> (Vec<u8>, String) {
+        let key = create_key(
+            PASSWORD,
+            &[UID],
+            cipher,
+            None,
+            None,
+            None,
+            SubkeyFlags::all(),
+            false,
+            true,
+        )
+        .unwrap();
+        let pub_key = get_pub_key(&key.secret_key).unwrap();
+        (key.secret_key.to_vec(), pub_key)
+    }
+
+    /// Generate a key pair without authentication subkey.
+    fn gen_key_no_auth(cipher: CipherSuite) -> Vec<u8> {
+        let flags = SubkeyFlags {
+            encryption: true,
+            signing: true,
+            authentication: false,
+        };
+        let key = create_key(
+            PASSWORD,
+            &[UID],
+            cipher,
+            None,
+            None,
+            None,
+            flags,
+            false,
+            true,
+        )
+        .unwrap();
+        key.secret_key.to_vec()
+    }
+
+    /// Minimal base64 decoder for parsing SSH public key blobs in tests.
+    fn base64_decode(input: &str) -> Vec<u8> {
+        let mut result = Vec::new();
+        let mut buf: u32 = 0;
+        let mut bits: u32 = 0;
+        for ch in input.bytes() {
+            let val = match ch {
+                b'A'..=b'Z' => ch - b'A',
+                b'a'..=b'z' => ch - b'a' + 26,
+                b'0'..=b'9' => ch - b'0' + 52,
+                b'+' => 62,
+                b'/' => 63,
+                b'=' | b'\n' | b'\r' => continue,
+                _ => continue,
+            };
+            buf = (buf << 6) | val as u32;
+            bits += 6;
+            if bits >= 8 {
+                bits -= 8;
+                result.push((buf >> bits) as u8);
+                buf &= (1 << bits) - 1;
+            }
+        }
+        result
+    }
+
+    // -- Ed25519 tests -------------------------------------------------------
+
+    #[test]
+    fn test_ssh_sign_raw_ed25519() {
+        let (secret, _pub_key) = gen_key(CipherSuite::Cv25519);
+        let data = b"test message for SSH signing";
+
+        let result = ssh_sign_raw(&secret, data, PASSWORD, SshHashAlgorithm::Sha256).unwrap();
+        match &result {
+            SshSignResult::Ed25519(sig) => {
+                assert_eq!(sig.len(), 64, "Ed25519 signature should be 64 bytes");
+            }
+            _ => panic!("Expected Ed25519 signature variant"),
+        }
+    }
+
+    #[test]
+    fn test_ssh_sign_raw_ed25519_deterministic() {
+        let (secret, _pub_key) = gen_key(CipherSuite::Cv25519);
+        let data = b"determinism check";
+
+        let sig1 = match ssh_sign_raw(&secret, data, PASSWORD, SshHashAlgorithm::Sha256).unwrap() {
+            SshSignResult::Ed25519(s) => s,
+            _ => panic!("Expected Ed25519"),
+        };
+        let sig2 = match ssh_sign_raw(&secret, data, PASSWORD, SshHashAlgorithm::Sha256).unwrap() {
+            SshSignResult::Ed25519(s) => s,
+            _ => panic!("Expected Ed25519"),
+        };
+        assert_eq!(sig1, sig2, "Ed25519 signatures should be deterministic");
+    }
+
+    #[test]
+    fn test_ssh_sign_raw_ed25519_verify() {
+        let (secret, pub_key) = gen_key(CipherSuite::Cv25519);
+        let data = b"round-trip verification data";
+
+        let sig_bytes =
+            match ssh_sign_raw(&secret, data, PASSWORD, SshHashAlgorithm::Sha256).unwrap() {
+                SshSignResult::Ed25519(s) => s,
+                _ => panic!("Expected Ed25519"),
+            };
+
+        // Extract 32-byte public key from SSH wire format
+        let ssh_pub = get_ssh_pubkey(pub_key.as_bytes(), None).unwrap();
+        let b64 = ssh_pub.trim().split(' ').nth(1).unwrap();
+        let blob = base64_decode(b64);
+        // Wire: [u32:11]["ssh-ed25519"][u32:32][32 bytes]
+        let pk_bytes: [u8; 32] = blob[4 + 11 + 4..4 + 11 + 4 + 32].try_into().unwrap();
+
+        let vk = ed25519_dalek::VerifyingKey::from_bytes(&pk_bytes).unwrap();
+        let sig = ed25519_dalek::Signature::from_bytes(sig_bytes.as_slice().try_into().unwrap());
+        use ed25519_dalek::Verifier;
+        vk.verify(data, &sig)
+            .expect("Ed25519 SSH signature verification failed");
+    }
+
+    // -- ECDSA tests ---------------------------------------------------------
+
+    #[test]
+    fn test_ssh_sign_raw_nistp256() {
+        let (secret, _pub_key) = gen_key(CipherSuite::NistP256);
+        // P-256 expects a SHA-256 pre-hash (32 bytes)
+        let digest = sha2::Sha256::digest(b"ECDSA P-256 test data");
+
+        let result = ssh_sign_raw(&secret, &digest, PASSWORD, SshHashAlgorithm::Sha256).unwrap();
+        match &result {
+            SshSignResult::Ecdsa { curve, r, s } => {
+                assert_eq!(curve, "nistp256");
+                assert_eq!(r.len(), 32, "P-256 r component should be 32 bytes");
+                assert_eq!(s.len(), 32, "P-256 s component should be 32 bytes");
+            }
+            _ => panic!("Expected ECDSA signature variant"),
+        }
+    }
+
+    #[test]
+    fn test_ssh_sign_raw_nistp256_verify() {
+        let (secret, pub_key) = gen_key(CipherSuite::NistP256);
+        let digest = sha2::Sha256::digest(b"P-256 round-trip test");
+
+        let (r, s) =
+            match ssh_sign_raw(&secret, &digest, PASSWORD, SshHashAlgorithm::Sha256).unwrap() {
+                SshSignResult::Ecdsa { r, s, .. } => (r, s),
+                _ => panic!("Expected ECDSA"),
+            };
+
+        // Parse uncompressed point from SSH wire format
+        let ssh_pub = get_ssh_pubkey(pub_key.as_bytes(), None).unwrap();
+        let b64 = ssh_pub.trim().split(' ').nth(1).unwrap();
+        let blob = base64_decode(b64);
+        // Wire: [u32:len][key_type][u32:len][curve_name][u32:len][point]
+        let kt_len = u32::from_be_bytes(blob[0..4].try_into().unwrap()) as usize;
+        let cn_off = 4 + kt_len;
+        let cn_len = u32::from_be_bytes(blob[cn_off..cn_off + 4].try_into().unwrap()) as usize;
+        let pt_off = cn_off + 4 + cn_len;
+        let pt_len = u32::from_be_bytes(blob[pt_off..pt_off + 4].try_into().unwrap()) as usize;
+        let point_bytes = &blob[pt_off + 4..pt_off + 4 + pt_len];
+
+        let encoded = p256::EncodedPoint::from_bytes(point_bytes).unwrap();
+        let vk = p256::ecdsa::VerifyingKey::from_encoded_point(&encoded).unwrap();
+
+        // Reconstruct fixed-size signature from r || s
+        let mut sig_buf = [0u8; 64];
+        sig_buf[..32].copy_from_slice(&r);
+        sig_buf[32..].copy_from_slice(&s);
+        let sig = p256::ecdsa::Signature::from_bytes(&sig_buf.into()).unwrap();
+
+        use p256::ecdsa::signature::hazmat::PrehashVerifier;
+        vk.verify_prehash(&digest, &sig)
+            .expect("P-256 ECDSA SSH signature verification failed");
+    }
+
+    #[test]
+    fn test_ssh_sign_raw_nistp384() {
+        let (secret, _pub_key) = gen_key(CipherSuite::NistP384);
+        // P-384 expects a SHA-384 pre-hash (48 bytes)
+        let digest = sha2::Sha384::digest(b"ECDSA P-384 test data");
+
+        let result = ssh_sign_raw(&secret, &digest, PASSWORD, SshHashAlgorithm::Sha256).unwrap();
+        match &result {
+            SshSignResult::Ecdsa { curve, r, s } => {
+                assert_eq!(curve, "nistp384");
+                assert_eq!(r.len(), 48, "P-384 r component should be 48 bytes");
+                assert_eq!(s.len(), 48, "P-384 s component should be 48 bytes");
+            }
+            _ => panic!("Expected ECDSA signature variant"),
+        }
+    }
+
+    #[test]
+    fn test_ssh_sign_raw_nistp521() {
+        let (secret, _pub_key) = gen_key(CipherSuite::NistP521);
+        // P-521 expects a SHA-512 pre-hash (64 bytes)
+        let digest = sha2::Sha512::digest(b"ECDSA P-521 test data");
+
+        let result = ssh_sign_raw(&secret, &digest, PASSWORD, SshHashAlgorithm::Sha512).unwrap();
+        match &result {
+            SshSignResult::Ecdsa { curve, r, s } => {
+                assert_eq!(curve, "nistp521");
+                assert_eq!(r.len(), 66, "P-521 r component should be 66 bytes");
+                assert_eq!(s.len(), 66, "P-521 s component should be 66 bytes");
+            }
+            _ => panic!("Expected ECDSA signature variant"),
+        }
+    }
+
+    // -- Error case tests ----------------------------------------------------
+
+    #[test]
+    fn test_ssh_sign_raw_wrong_password() {
+        let (secret, _pub_key) = gen_key(CipherSuite::Cv25519);
+        let result = ssh_sign_raw(&secret, b"data", "wrong-password", SshHashAlgorithm::Sha256);
+        assert!(result.is_err(), "Wrong password should fail");
+    }
+
+    #[test]
+    fn test_ssh_sign_raw_no_auth_subkey() {
+        let secret = gen_key_no_auth(CipherSuite::Cv25519);
+        let result = ssh_sign_raw(&secret, b"data", PASSWORD, SshHashAlgorithm::Sha256);
+        assert!(result.is_err(), "Key without auth subkey should fail");
+    }
+
+    #[test]
+    fn test_ssh_sign_raw_different_data_different_sig() {
+        let (secret, _pub_key) = gen_key(CipherSuite::Cv25519);
+        let sig1 = match ssh_sign_raw(&secret, b"message A", PASSWORD, SshHashAlgorithm::Sha256)
+            .unwrap()
+        {
+            SshSignResult::Ed25519(s) => s,
+            _ => panic!("Expected Ed25519"),
+        };
+        let sig2 = match ssh_sign_raw(&secret, b"message B", PASSWORD, SshHashAlgorithm::Sha256)
+            .unwrap()
+        {
+            SshSignResult::Ed25519(s) => s,
+            _ => panic!("Expected Ed25519"),
+        };
+        assert_ne!(
+            sig1, sig2,
+            "Different data should produce different signatures"
+        );
+    }
+}
+
+// =============================================================================
 // Encryption Tests with Fixture Files
 // =============================================================================
 
@@ -582,7 +862,10 @@ mod keystore_fixtures {
 
         let updated_info = parse_cert_bytes(&updated_cert, true).unwrap();
         assert_eq!(updated_info.user_ids.len(), original_uid_count + 1);
-        assert!(updated_info.user_ids.iter().any(|u| u.value == "New User <new@example.com>"));
+        assert!(updated_info
+            .user_ids
+            .iter()
+            .any(|u| u.value == "New User <new@example.com>"));
     }
 
     #[test]
@@ -605,7 +888,9 @@ mod keystore_fixtures {
 
         // Verify with public key
         let public_key = get_pub_key(&cert_data).unwrap();
-        assert!(verify_bytes_detached(public_key.as_bytes(), b"hello", signature.as_bytes()).unwrap());
+        assert!(
+            verify_bytes_detached(public_key.as_bytes(), b"hello", signature.as_bytes()).unwrap()
+        );
     }
 
     #[test]
@@ -705,10 +990,8 @@ mod primary_sign {
 mod subkey_availability {
     use super::*;
     use wecanencrypt::{
-        get_available_encryption_subkeys,
-        get_available_authentication_subkeys,
-        has_available_encryption_subkey,
-        has_available_signing_subkey,
+        get_available_authentication_subkeys, get_available_encryption_subkeys,
+        has_available_encryption_subkey, has_available_signing_subkey,
     };
 
     #[test]
@@ -728,8 +1011,14 @@ mod subkey_availability {
         assert_eq!(info.fingerprint, "F51C310E02DC1B7771E176D8A1C5C364EB5B9A20");
 
         // Check availability - same assertions as Python test
-        assert!(has_available_encryption_subkey(&secret_data).unwrap(), "encryption should be True");
-        assert!(has_available_signing_subkey(&secret_data).unwrap(), "signing should be True");
+        assert!(
+            has_available_encryption_subkey(&secret_data).unwrap(),
+            "encryption should be True"
+        );
+        assert!(
+            has_available_signing_subkey(&secret_data).unwrap(),
+            "signing should be True"
+        );
 
         // Authentication should be False
         let auth_subkeys = get_available_authentication_subkeys(&secret_data).unwrap();
@@ -752,13 +1041,22 @@ mod subkey_availability {
         assert_eq!(info.fingerprint, "A85FF376759C994A8A1168D8D8219C8C43F6C5E1");
 
         // Verify this key is actually expired (expiration was 2020-10-16)
-        assert!(info.expiration_time.is_some(), "Key should have expiration time");
+        assert!(
+            info.expiration_time.is_some(),
+            "Key should have expiration time"
+        );
         let exp = info.expiration_time.unwrap();
         assert!(exp < chrono::Utc::now(), "Key should be expired");
 
         // This is an expired key - all should be False
-        assert!(!has_available_encryption_subkey(&expired_key_data).unwrap(), "encryption should be False");
-        assert!(!has_available_signing_subkey(&expired_key_data).unwrap(), "signing should be False");
+        assert!(
+            !has_available_encryption_subkey(&expired_key_data).unwrap(),
+            "encryption should be False"
+        );
+        assert!(
+            !has_available_signing_subkey(&expired_key_data).unwrap(),
+            "signing should be False"
+        );
 
         // Authentication should also be False
         let auth_subkeys = get_available_authentication_subkeys(&expired_key_data).unwrap();
@@ -789,8 +1087,8 @@ mod subkey_availability {
 
 mod expiry_updates {
     use super::*;
-    use chrono::{Utc, Duration};
-    use wecanencrypt::{update_primary_expiry, update_subkeys_expiry, create_key_simple};
+    use chrono::{Duration, Utc};
+    use wecanencrypt::{create_key_simple, update_primary_expiry, update_subkeys_expiry};
 
     const PASSWORD: &str = "test123";
 
@@ -804,12 +1102,18 @@ mod expiry_updates {
 
         // Parse and verify
         let info = parse_cert_bytes(&updated, true).unwrap();
-        assert!(info.expiration_time.is_some(), "Expiration time should be set");
+        assert!(
+            info.expiration_time.is_some(),
+            "Expiration time should be set"
+        );
 
         let exp = info.expiration_time.unwrap();
         // Should be approximately 1 year from now (within a few seconds)
         let diff = (exp - new_expiry).num_seconds().abs();
-        assert!(diff < 10, "Expiry time should be within 10 seconds of expected");
+        assert!(
+            diff < 10,
+            "Expiry time should be within 10 seconds of expected"
+        );
     }
 
     #[test]
@@ -820,16 +1124,16 @@ mod expiry_updates {
         let info = parse_cert_bytes(&key.secret_key, true).unwrap();
         assert!(!info.subkeys.is_empty());
 
-        let subkey_fps: Vec<&str> = info.subkeys.iter().map(|s| s.fingerprint.as_str()).collect();
+        let subkey_fps: Vec<&str> = info
+            .subkeys
+            .iter()
+            .map(|s| s.fingerprint.as_str())
+            .collect();
 
         // Set expiry to 6 months from now
         let new_expiry = Utc::now() + Duration::days(180);
-        let updated = update_subkeys_expiry(
-            &key.secret_key,
-            &subkey_fps,
-            new_expiry,
-            PASSWORD,
-        ).unwrap();
+        let updated =
+            update_subkeys_expiry(&key.secret_key, &subkey_fps, new_expiry, PASSWORD).unwrap();
 
         // Parse and verify subkeys have new expiry
         let updated_info = parse_cert_bytes(&updated, true).unwrap();
@@ -854,7 +1158,8 @@ mod certification {
     #[test]
     fn test_certify_key_uid() {
         // Create certifier key
-        let certifier = create_key_simple(PASSWORD, &["Certifier <certifier@example.com>"]).unwrap();
+        let certifier =
+            create_key_simple(PASSWORD, &["Certifier <certifier@example.com>"]).unwrap();
 
         // Create target key to be certified
         let target = create_key_simple(PASSWORD, &["Target <target@example.com>"]).unwrap();
@@ -866,7 +1171,8 @@ mod certification {
             CertificationType::Positive,
             Some(&["Target <target@example.com>"]),
             PASSWORD,
-        ).unwrap();
+        )
+        .unwrap();
 
         // Verify certification was added
         assert!(!certified.is_empty());
@@ -879,22 +1185,28 @@ mod certification {
     #[test]
     fn test_certify_all_uids() {
         // Create certifier key
-        let certifier = create_key_simple(PASSWORD, &["Certifier <certifier@example.com>"]).unwrap();
+        let certifier =
+            create_key_simple(PASSWORD, &["Certifier <certifier@example.com>"]).unwrap();
 
         // Create target key with multiple UIDs
-        let target = create_key_simple(PASSWORD, &[
-            "Target One <target1@example.com>",
-            "Target Two <target2@example.com>",
-        ]).unwrap();
+        let target = create_key_simple(
+            PASSWORD,
+            &[
+                "Target One <target1@example.com>",
+                "Target Two <target2@example.com>",
+            ],
+        )
+        .unwrap();
 
         // Certify all UIDs (None means all)
         let certified = certify_key(
             &certifier.secret_key,
             target.public_key.as_bytes(),
             CertificationType::Casual,
-            None,  // Certify all UIDs
+            None, // Certify all UIDs
             PASSWORD,
-        ).unwrap();
+        )
+        .unwrap();
 
         // Verify the key is valid
         let info = parse_cert_bytes(&certified, true).unwrap();
@@ -917,13 +1229,20 @@ mod new_cipher_suites {
         // Generate a new key with this cipher suite
         let key = create_key(
             PASSWORD,
-            &[&format!("{} Test <{}@example.com>", name, name.to_lowercase())],
+            &[&format!(
+                "{} Test <{}@example.com>",
+                name,
+                name.to_lowercase()
+            )],
             suite,
-            None, None, None,
+            None,
+            None,
+            None,
             SubkeyFlags::all(),
             false,
             true,
-        ).expect(&format!("Failed to generate {} key", name));
+        )
+        .expect(&format!("Failed to generate {} key", name));
 
         // Parse the generated key
         let info = parse_cert_bytes(&key.secret_key, true)
@@ -937,7 +1256,11 @@ mod new_cipher_suites {
             .expect(&format!("Failed to encrypt with {} key", name));
         let decrypted = decrypt_bytes(&key.secret_key, &ciphertext, PASSWORD)
             .expect(&format!("Failed to decrypt with {} key", name));
-        assert_eq!(decrypted, plaintext, "{} encryption/decryption failed", name);
+        assert_eq!(
+            decrypted, plaintext,
+            "{} encryption/decryption failed",
+            name
+        );
 
         // Test signing/verification
         let message = b"Message to sign with new cipher suite";
@@ -986,7 +1309,9 @@ mod new_cipher_suites {
 
         // Verify algorithm info
         let details = get_key_cipher_details(&public).unwrap();
-        assert!(details.iter().any(|d| d.algorithm.contains("ECDSA") || d.algorithm.contains("P-256")));
+        assert!(details
+            .iter()
+            .any(|d| d.algorithm.contains("ECDSA") || d.algorithm.contains("P-256")));
     }
 
     #[test]
@@ -1038,7 +1363,9 @@ mod new_cipher_suites {
 
         // Verify algorithm info shows Ed25519/X25519
         let details = get_key_cipher_details(&public).unwrap();
-        assert!(details.iter().any(|d| d.algorithm.contains("Ed25519") || d.algorithm.contains("X25519")));
+        assert!(details
+            .iter()
+            .any(|d| d.algorithm.contains("Ed25519") || d.algorithm.contains("X25519")));
     }
 
     /// Test encrypt/decrypt with fixture keys
@@ -1142,18 +1469,45 @@ mod new_cipher_suites {
     /// Test cipher suite name parsing
     #[test]
     fn test_cipher_suite_from_str() {
-        assert_eq!("nistp256".parse::<CipherSuite>().unwrap(), CipherSuite::NistP256);
-        assert_eq!("P256".parse::<CipherSuite>().unwrap(), CipherSuite::NistP256);
-        assert_eq!("secp256r1".parse::<CipherSuite>().unwrap(), CipherSuite::NistP256);
+        assert_eq!(
+            "nistp256".parse::<CipherSuite>().unwrap(),
+            CipherSuite::NistP256
+        );
+        assert_eq!(
+            "P256".parse::<CipherSuite>().unwrap(),
+            CipherSuite::NistP256
+        );
+        assert_eq!(
+            "secp256r1".parse::<CipherSuite>().unwrap(),
+            CipherSuite::NistP256
+        );
 
-        assert_eq!("nistp384".parse::<CipherSuite>().unwrap(), CipherSuite::NistP384);
-        assert_eq!("P384".parse::<CipherSuite>().unwrap(), CipherSuite::NistP384);
+        assert_eq!(
+            "nistp384".parse::<CipherSuite>().unwrap(),
+            CipherSuite::NistP384
+        );
+        assert_eq!(
+            "P384".parse::<CipherSuite>().unwrap(),
+            CipherSuite::NistP384
+        );
 
-        assert_eq!("nistp521".parse::<CipherSuite>().unwrap(), CipherSuite::NistP521);
-        assert_eq!("P521".parse::<CipherSuite>().unwrap(), CipherSuite::NistP521);
+        assert_eq!(
+            "nistp521".parse::<CipherSuite>().unwrap(),
+            CipherSuite::NistP521
+        );
+        assert_eq!(
+            "P521".parse::<CipherSuite>().unwrap(),
+            CipherSuite::NistP521
+        );
 
-        assert_eq!("cv25519modern".parse::<CipherSuite>().unwrap(), CipherSuite::Cv25519Modern);
-        assert_eq!("x25519".parse::<CipherSuite>().unwrap(), CipherSuite::Cv25519Modern);
+        assert_eq!(
+            "cv25519modern".parse::<CipherSuite>().unwrap(),
+            CipherSuite::Cv25519Modern
+        );
+        assert_eq!(
+            "x25519".parse::<CipherSuite>().unwrap(),
+            CipherSuite::Cv25519Modern
+        );
 
         assert!("invalid".parse::<CipherSuite>().is_err());
     }
@@ -1165,7 +1519,7 @@ mod new_cipher_suites {
 
 #[cfg(feature = "network")]
 mod network_fetch {
-    use wecanencrypt::{fetch_key_by_fingerprint, fetch_key_by_email, parse_cert_bytes};
+    use wecanencrypt::{fetch_key_by_email, fetch_key_by_fingerprint, parse_cert_bytes};
 
     /// Test fetching Tor Browser Developers key by fingerprint from keys.openpgp.org
     /// Same test as johnnycanencrypt test_fetch_key_by_fingerprint
@@ -1200,10 +1554,16 @@ mod network_fetch {
         assert!(!info.user_ids.is_empty());
 
         // Check fingerprint matches expected
-        assert_eq!(info.fingerprint.to_uppercase(), "A85FF376759C994A8A1168D8D8219C8C43F6C5E1");
+        assert_eq!(
+            info.fingerprint.to_uppercase(),
+            "A85FF376759C994A8A1168D8D8219C8C43F6C5E1"
+        );
 
         // Check name is present
-        let has_name = info.user_ids.iter().any(|uid| uid.value.contains("Kushal Das"));
+        let has_name = info
+            .user_ids
+            .iter()
+            .any(|uid| uid.value.contains("Kushal Das"));
         assert!(has_name, "Certificate should contain 'Kushal Das'");
     }
 
@@ -1288,7 +1648,7 @@ mod sign_verify_fixtures {
 
 mod certification_fixtures {
     use super::*;
-    use wecanencrypt::{certify_key, create_key_simple, add_uid, revoke_uid, CertificationType};
+    use wecanencrypt::{add_uid, certify_key, create_key_simple, revoke_uid, CertificationType};
 
     /// Port of JCE test_keystore.py::test_ks_userid_signing
     /// Tests certification with PersonaCertification and verifies certification details
@@ -1297,13 +1657,18 @@ mod certification_fixtures {
         let password = "test123";
 
         // Create certifier key
-        let certifier = create_key_simple(password, &["Certifier <certifier@example.com>"]).unwrap();
+        let certifier =
+            create_key_simple(password, &["Certifier <certifier@example.com>"]).unwrap();
 
         // Create target key with multiple UIDs
-        let target = create_key_simple(password, &[
-            "Target One <target1@example.com>",
-            "Target Two <target2@example.com>",
-        ]).unwrap();
+        let target = create_key_simple(
+            password,
+            &[
+                "Target One <target1@example.com>",
+                "Target Two <target2@example.com>",
+            ],
+        )
+        .unwrap();
 
         // Certify specific UIDs with PersonaCertification
         let certified = certify_key(
@@ -1312,7 +1677,8 @@ mod certification_fixtures {
             CertificationType::Persona,
             Some(&["Target One <target1@example.com>"]),
             password,
-        ).unwrap();
+        )
+        .unwrap();
 
         // The certified key should be valid and parseable
         let info = parse_cert_bytes(&certified, true).unwrap();
@@ -1320,28 +1686,41 @@ mod certification_fixtures {
         assert_eq!(info.user_ids.len(), 2);
 
         // Verify certification details on the certified UID
-        let certified_uid = info.user_ids.iter()
+        let certified_uid = info
+            .user_ids
+            .iter()
             .find(|u| u.value == "Target One <target1@example.com>")
             .expect("Should find certified UID");
 
-        assert!(!certified_uid.certifications.is_empty(),
-                "Certified UID should have certifications");
+        assert!(
+            !certified_uid.certifications.is_empty(),
+            "Certified UID should have certifications"
+        );
 
         let cert = &certified_uid.certifications[0];
         assert_eq!(cert.certification_type, "persona");
         assert!(cert.creation_time.is_some());
 
         // Verify issuer fingerprint matches certifier
-        let has_certifier_fp = cert.issuers.iter()
+        let has_certifier_fp = cert
+            .issuers
+            .iter()
             .any(|(typ, val)| typ == "fingerprint" && *val == certifier.fingerprint);
-        assert!(has_certifier_fp, "Certification should have certifier's fingerprint");
+        assert!(
+            has_certifier_fp,
+            "Certification should have certifier's fingerprint"
+        );
 
         // The non-certified UID should have no third-party certifications
-        let uncertified_uid = info.user_ids.iter()
+        let uncertified_uid = info
+            .user_ids
+            .iter()
             .find(|u| u.value == "Target Two <target2@example.com>")
             .expect("Should find uncertified UID");
-        assert!(uncertified_uid.certifications.is_empty(),
-                "Uncertified UID should have no certifications");
+        assert!(
+            uncertified_uid.certifications.is_empty(),
+            "Uncertified UID should have no certifications"
+        );
     }
 
     /// Port of JCE test_parse_cert.py::test_uid_certs
@@ -1354,13 +1733,17 @@ mod certification_fixtures {
         let info = parse_cert_bytes(&key_data, true).unwrap();
 
         // Find the UID "Kushal Das <kushaldas@gmail.com>"
-        let uid = info.user_ids.iter()
+        let uid = info
+            .user_ids
+            .iter()
             .find(|u| u.value == "Kushal Das <kushaldas@gmail.com>")
             .expect("Should find Kushal's Gmail UID");
 
         // This UID should have multiple certifications
-        assert!(!uid.certifications.is_empty(),
-                "UID should have certifications, found 0");
+        assert!(
+            !uid.certifications.is_empty(),
+            "UID should have certifications, found 0"
+        );
 
         // Verify that certifications have both fingerprint and keyid issuers
         let mut has_fp = false;
@@ -1395,7 +1778,8 @@ mod certification_fixtures {
         assert!(!info.user_ids[0].revoked);
 
         // Add a new userid
-        let with_new_uid = add_uid(&secret_data, "Off Spinner <spin@example.com>", password).unwrap();
+        let with_new_uid =
+            add_uid(&secret_data, "Off Spinner <spin@example.com>", password).unwrap();
 
         let info2 = parse_cert_bytes(&with_new_uid, true).unwrap();
         assert_eq!(info2.user_ids.len(), 2);
@@ -1405,7 +1789,8 @@ mod certification_fixtures {
         }
 
         // Now revoke the new user id
-        let with_revoked = revoke_uid(&with_new_uid, "Off Spinner <spin@example.com>", password).unwrap();
+        let with_revoked =
+            revoke_uid(&with_new_uid, "Off Spinner <spin@example.com>", password).unwrap();
 
         let info3 = parse_cert_bytes(&with_revoked, true).unwrap();
         assert_eq!(info3.user_ids.len(), 2);
@@ -1446,4 +1831,3 @@ mod dane_tests {
         }
     }
 }
-

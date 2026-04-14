@@ -97,8 +97,10 @@ pub fn upload_key_to_card(
     let password = if key_password.is_empty() {
         Password::empty()
     } else {
-        Password::from(std::str::from_utf8(key_password)
-            .map_err(|_| Error::Parse("Password must be valid UTF-8".to_string()))?)
+        Password::from(
+            std::str::from_utf8(key_password)
+                .map_err(|_| Error::Parse("Password must be valid UTF-8".to_string()))?,
+        )
     };
 
     // Find the appropriate subkey for the slot
@@ -145,8 +147,10 @@ pub fn upload_primary_key_to_card(
     let password = if key_password.is_empty() {
         Password::empty()
     } else {
-        Password::from(std::str::from_utf8(key_password)
-            .map_err(|_| Error::Parse("Password must be valid UTF-8".to_string()))?)
+        Password::from(
+            std::str::from_utf8(key_password)
+                .map_err(|_| Error::Parse("Password must be valid UTF-8".to_string()))?,
+        )
     };
 
     // Extract primary key info
@@ -192,8 +196,10 @@ pub fn upload_subkey_by_fingerprint(
     let password = if key_password.is_empty() {
         Password::empty()
     } else {
-        Password::from(std::str::from_utf8(key_password)
-            .map_err(|_| Error::Parse("Password must be valid UTF-8".to_string()))?)
+        Password::from(
+            std::str::from_utf8(key_password)
+                .map_err(|_| Error::Parse("Password must be valid UTF-8".to_string()))?,
+        )
     };
 
     // Normalize fingerprint (remove spaces, lowercase)
@@ -217,9 +223,12 @@ pub fn upload_subkey_by_fingerprint(
             let timestamp = subkey.key.created_at().as_secs();
             let fp_bytes = subkey.key.fingerprint().as_bytes().to_vec();
 
-            let key_info = subkey.key.unlock(&password, |pub_p, priv_key| {
-                extract_key_info(pub_p, priv_key, timestamp, fp_bytes.clone())
-            }).map_err(|e| Error::Crypto(e.to_string()))??;
+            let key_info = subkey
+                .key
+                .unlock(&password, |pub_p, priv_key| {
+                    extract_key_info(pub_p, priv_key, timestamp, fp_bytes.clone())
+                })
+                .map_err(|e| Error::Crypto(e.to_string()))??;
 
             return upload_with_talktosc(&key_info, slot, admin_pin);
         }
@@ -240,23 +249,25 @@ fn extract_primary_key_info(
     let timestamp = primary.created_at().as_secs();
     let fingerprint = primary.fingerprint().as_bytes().to_vec();
 
-    primary.unlock(password, |pub_p, priv_key| {
-        extract_key_info(pub_p, priv_key, timestamp, fingerprint.clone())
-    }).map_err(|e| Error::Crypto(e.to_string()))?
-      .map_err(|e| Error::Crypto(e.to_string()))
+    primary
+        .unlock(password, |pub_p, priv_key| {
+            extract_key_info(pub_p, priv_key, timestamp, fingerprint.clone())
+        })
+        .map_err(|e| Error::Crypto(e.to_string()))?
+        .map_err(|e| Error::Crypto(e.to_string()))
 }
 
 struct KeyUploadInfo {
     key_type: KeyType,
-    scalar: Zeroizing<Vec<u8>>,       // Private key scalar (zeroized on drop)
+    scalar: Zeroizing<Vec<u8>>, // Private key scalar (zeroized on drop)
     fingerprint: Vec<u8>,
     timestamp: u32,
     // RSA-specific
     n_bits: Option<u16>,
     e_bits: Option<u16>,
     e_value: Option<Vec<u8>>,
-    p_value: Option<Zeroizing<Vec<u8>>>,  // RSA prime p (zeroized on drop)
-    q_value: Option<Zeroizing<Vec<u8>>>,  // RSA prime q (zeroized on drop)
+    p_value: Option<Zeroizing<Vec<u8>>>, // RSA prime p (zeroized on drop)
+    q_value: Option<Zeroizing<Vec<u8>>>, // RSA prime q (zeroized on drop)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -279,8 +290,7 @@ fn parse_secret_key(data: &[u8]) -> Result<SignedSecretKey> {
         Ok((key, _headers)) => Ok(key),
         Err(_) => {
             // Try binary
-            SignedSecretKey::from_bytes(data)
-                .map_err(|e| Error::Parse(e.to_string()))
+            SignedSecretKey::from_bytes(data).map_err(|e| Error::Parse(e.to_string()))
         }
     }
 }
@@ -292,35 +302,34 @@ fn find_key_for_slot(
     slot: CardKeySlot,
 ) -> Result<KeyUploadInfo> {
     match slot {
-        CardKeySlot::Signing | CardKeySlot::Authentication => find_signing_key(secret_key, password),
+        CardKeySlot::Signing | CardKeySlot::Authentication => {
+            find_signing_key(secret_key, password)
+        }
         CardKeySlot::Decryption => find_encryption_key(secret_key, password),
     }
 }
 
 /// Check if algorithm supports signing
 fn is_signing_algorithm(params: &PublicParams) -> bool {
-    matches!(params,
-        PublicParams::RSA(_) |
-        PublicParams::EdDSALegacy(_) |
-        PublicParams::Ed25519(_) |
-        PublicParams::ECDSA(_)
+    matches!(
+        params,
+        PublicParams::RSA(_)
+            | PublicParams::EdDSALegacy(_)
+            | PublicParams::Ed25519(_)
+            | PublicParams::ECDSA(_)
     )
 }
 
 /// Check if algorithm supports encryption
 fn is_encryption_algorithm(params: &PublicParams) -> bool {
-    matches!(params,
-        PublicParams::RSA(_) |
-        PublicParams::ECDH(_) |
-        PublicParams::X25519(_)
+    matches!(
+        params,
+        PublicParams::RSA(_) | PublicParams::ECDH(_) | PublicParams::X25519(_)
     )
 }
 
 /// Find a signing-capable key (checks both algorithm and key flags)
-fn find_signing_key(
-    secret_key: &SignedSecretKey,
-    password: &Password,
-) -> Result<KeyUploadInfo> {
+fn find_signing_key(secret_key: &SignedSecretKey, password: &Password) -> Result<KeyUploadInfo> {
     // First check subkeys for a signing key
     for subkey in &secret_key.secret_subkeys {
         let pub_params = subkey.key.public_params();
@@ -329,9 +338,7 @@ fn find_signing_key(
             continue;
         }
         // Check if binding signature has signing flag
-        let has_signing_flag = subkey.signatures.iter().any(|sig| {
-            sig.key_flags().sign()
-        });
+        let has_signing_flag = subkey.signatures.iter().any(|sig| sig.key_flags().sign());
         if !has_signing_flag {
             continue;
         }
@@ -339,9 +346,12 @@ fn find_signing_key(
         let timestamp = subkey.key.created_at().as_secs();
         let fingerprint = subkey.key.fingerprint().as_bytes().to_vec();
 
-        let info = subkey.key.unlock(password, |pub_p, priv_key| {
-            extract_key_info(pub_p, priv_key, timestamp, fingerprint.clone())
-        }).map_err(|e| Error::Crypto(e.to_string()))??;
+        let info = subkey
+            .key
+            .unlock(password, |pub_p, priv_key| {
+                extract_key_info(pub_p, priv_key, timestamp, fingerprint.clone())
+            })
+            .map_err(|e| Error::Crypto(e.to_string()))??;
 
         return Ok(info);
     }
@@ -353,9 +363,11 @@ fn find_signing_key(
         let timestamp = primary.created_at().as_secs();
         let fingerprint = primary.fingerprint().as_bytes().to_vec();
 
-        let info = primary.unlock(password, |pub_p, priv_key| {
-            extract_key_info(pub_p, priv_key, timestamp, fingerprint.clone())
-        }).map_err(|e| Error::Crypto(e.to_string()))??;
+        let info = primary
+            .unlock(password, |pub_p, priv_key| {
+                extract_key_info(pub_p, priv_key, timestamp, fingerprint.clone())
+            })
+            .map_err(|e| Error::Crypto(e.to_string()))??;
 
         return Ok(info);
     }
@@ -364,10 +376,7 @@ fn find_signing_key(
 }
 
 /// Find an encryption-capable key (checks both algorithm and key flags)
-fn find_encryption_key(
-    secret_key: &SignedSecretKey,
-    password: &Password,
-) -> Result<KeyUploadInfo> {
+fn find_encryption_key(secret_key: &SignedSecretKey, password: &Password) -> Result<KeyUploadInfo> {
     // First check subkeys
     for subkey in &secret_key.secret_subkeys {
         let pub_params = subkey.key.public_params();
@@ -387,9 +396,12 @@ fn find_encryption_key(
         let timestamp = subkey.key.created_at().as_secs();
         let fingerprint = subkey.key.fingerprint().as_bytes().to_vec();
 
-        let info = subkey.key.unlock(password, |pub_p, priv_key| {
-            extract_key_info(pub_p, priv_key, timestamp, fingerprint.clone())
-        }).map_err(|e| Error::Crypto(e.to_string()))??;
+        let info = subkey
+            .key
+            .unlock(password, |pub_p, priv_key| {
+                extract_key_info(pub_p, priv_key, timestamp, fingerprint.clone())
+            })
+            .map_err(|e| Error::Crypto(e.to_string()))??;
 
         return Ok(info);
     }
@@ -401,9 +413,11 @@ fn find_encryption_key(
         let timestamp = primary.created_at().as_secs();
         let fingerprint = primary.fingerprint().as_bytes().to_vec();
 
-        let info = primary.unlock(password, |pub_p, priv_key| {
-            extract_key_info(pub_p, priv_key, timestamp, fingerprint.clone())
-        }).map_err(|e| Error::Crypto(e.to_string()))??;
+        let info = primary
+            .unlock(password, |pub_p, priv_key| {
+                extract_key_info(pub_p, priv_key, timestamp, fingerprint.clone())
+            })
+            .map_err(|e| Error::Crypto(e.to_string()))??;
 
         return Ok(info);
     }
@@ -418,20 +432,18 @@ fn extract_key_info(
     fingerprint: Vec<u8>,
 ) -> pgp::errors::Result<KeyUploadInfo> {
     match (pub_params, priv_params) {
-        (PublicParams::EdDSALegacy(_), PlainSecretParams::Ed25519Legacy(ed_priv)) |
-        (PublicParams::Ed25519(_), PlainSecretParams::Ed25519(ed_priv)) => {
-            Ok(KeyUploadInfo {
-                key_type: KeyType::Ed25519,
-                scalar: Zeroizing::new(ed_priv.to_bytes().to_vec()),
-                fingerprint,
-                timestamp,
-                n_bits: None,
-                e_bits: None,
-                e_value: None,
-                p_value: None,
-                q_value: None,
-            })
-        }
+        (PublicParams::EdDSALegacy(_), PlainSecretParams::Ed25519Legacy(ed_priv))
+        | (PublicParams::Ed25519(_), PlainSecretParams::Ed25519(ed_priv)) => Ok(KeyUploadInfo {
+            key_type: KeyType::Ed25519,
+            scalar: Zeroizing::new(ed_priv.to_bytes().to_vec()),
+            fingerprint,
+            timestamp,
+            n_bits: None,
+            e_bits: None,
+            e_value: None,
+            p_value: None,
+            q_value: None,
+        }),
         (PublicParams::ECDH(ecdh_pub), PlainSecretParams::ECDH(ecdh_priv)) => {
             use pgp::types::EcdhPublicParams;
             match ecdh_pub {
@@ -452,45 +464,39 @@ fn extract_key_info(
                         q_value: None,
                     })
                 }
-                EcdhPublicParams::P256 { .. } => {
-                    Ok(KeyUploadInfo {
-                        key_type: KeyType::EcdhP256,
-                        scalar: Zeroizing::new(ecdh_priv.to_bytes()),
-                        fingerprint,
-                        timestamp,
-                        n_bits: None,
-                        e_bits: None,
-                        e_value: None,
-                        p_value: None,
-                        q_value: None,
-                    })
-                }
-                EcdhPublicParams::P384 { .. } => {
-                    Ok(KeyUploadInfo {
-                        key_type: KeyType::EcdhP384,
-                        scalar: Zeroizing::new(ecdh_priv.to_bytes()),
-                        fingerprint,
-                        timestamp,
-                        n_bits: None,
-                        e_bits: None,
-                        e_value: None,
-                        p_value: None,
-                        q_value: None,
-                    })
-                }
-                EcdhPublicParams::P521 { .. } => {
-                    Ok(KeyUploadInfo {
-                        key_type: KeyType::EcdhP521,
-                        scalar: Zeroizing::new(ecdh_priv.to_bytes()),
-                        fingerprint,
-                        timestamp,
-                        n_bits: None,
-                        e_bits: None,
-                        e_value: None,
-                        p_value: None,
-                        q_value: None,
-                    })
-                }
+                EcdhPublicParams::P256 { .. } => Ok(KeyUploadInfo {
+                    key_type: KeyType::EcdhP256,
+                    scalar: Zeroizing::new(ecdh_priv.to_bytes()),
+                    fingerprint,
+                    timestamp,
+                    n_bits: None,
+                    e_bits: None,
+                    e_value: None,
+                    p_value: None,
+                    q_value: None,
+                }),
+                EcdhPublicParams::P384 { .. } => Ok(KeyUploadInfo {
+                    key_type: KeyType::EcdhP384,
+                    scalar: Zeroizing::new(ecdh_priv.to_bytes()),
+                    fingerprint,
+                    timestamp,
+                    n_bits: None,
+                    e_bits: None,
+                    e_value: None,
+                    p_value: None,
+                    q_value: None,
+                }),
+                EcdhPublicParams::P521 { .. } => Ok(KeyUploadInfo {
+                    key_type: KeyType::EcdhP521,
+                    scalar: Zeroizing::new(ecdh_priv.to_bytes()),
+                    fingerprint,
+                    timestamp,
+                    n_bits: None,
+                    e_bits: None,
+                    e_value: None,
+                    p_value: None,
+                    q_value: None,
+                }),
                 _ => Err("Unsupported ECDH curve for card".to_string().into()),
             }
         }
@@ -543,22 +549,29 @@ fn upload_with_talktosc(
     admin_pin: &[u8],
 ) -> Result<()> {
     use talktosc::apdus::APDU;
-    use talktosc::{create_connection, send_and_parse, disconnect};
+    use talktosc::{create_connection, disconnect, send_and_parse};
 
     // Create connection to card
     let card = create_connection().map_err(|e| {
-        Error::Card(super::types::CardError::CommunicationError(
-            format!("Failed to connect to card: {}", e)
-        ))
+        Error::Card(super::types::CardError::CommunicationError(format!(
+            "Failed to connect to card: {}",
+            e
+        )))
     })?;
 
     // Select OpenPGP application
-    let select_apdu = APDU::new(0x00, 0xA4, 0x04, 0x00, Some(vec![0xD2, 0x76, 0x00, 0x01, 0x24, 0x01]));
+    let select_apdu = APDU::new(
+        0x00,
+        0xA4,
+        0x04,
+        0x00,
+        Some(vec![0xD2, 0x76, 0x00, 0x01, 0x24, 0x01]),
+    );
     let resp = send_and_parse(&card, select_apdu);
     if resp.is_err() {
         disconnect(card);
         return Err(Error::Card(super::types::CardError::CommunicationError(
-            "Failed to select OpenPGP applet".to_string()
+            "Failed to select OpenPGP applet".to_string(),
         )));
     }
 
@@ -580,7 +593,7 @@ fn upload_with_talktosc(
     if resp.is_err() {
         disconnect(card);
         return Err(Error::Card(super::types::CardError::CommunicationError(
-            "Failed to set algorithm attributes".to_string()
+            "Failed to set algorithm attributes".to_string(),
         )));
     }
 
@@ -596,22 +609,24 @@ fn upload_with_talktosc(
     if resp.is_err() {
         disconnect(card);
         return Err(Error::Card(super::types::CardError::CommunicationError(
-            "Failed to import key".to_string()
+            "Failed to import key".to_string(),
         )));
     }
 
     // Set fingerprint
-    let fp_apdu = APDU::create_big_apdu(0x00, 0xDA, 0x00, slot.fp_p2(), key_info.fingerprint.clone());
+    let fp_apdu =
+        APDU::create_big_apdu(0x00, 0xDA, 0x00, slot.fp_p2(), key_info.fingerprint.clone());
     let resp = send_and_parse(&card, fp_apdu);
     if resp.is_err() {
         disconnect(card);
         return Err(Error::Card(super::types::CardError::CommunicationError(
-            "Failed to set fingerprint".to_string()
+            "Failed to set fingerprint".to_string(),
         )));
     }
 
     // Set timestamp
-    let time_value: Vec<u8> = key_info.timestamp
+    let time_value: Vec<u8> = key_info
+        .timestamp
         .to_be_bytes()
         .iter()
         .skip_while(|&&e| e == 0)
@@ -622,7 +637,7 @@ fn upload_with_talktosc(
     if resp.is_err() {
         disconnect(card);
         return Err(Error::Card(super::types::CardError::CommunicationError(
-            "Failed to set timestamp".to_string()
+            "Failed to set timestamp".to_string(),
         )));
     }
 
@@ -638,7 +653,9 @@ fn build_algo_attributes(key_info: &KeyUploadInfo) -> Vec<u8> {
         }
         KeyType::Cv25519 => {
             // ECDH with cv25519 OID: 1.3.6.1.4.1.3029.1.5.1
-            vec![0x12, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x97, 0x55, 0x01, 0x05, 0x01]
+            vec![
+                0x12, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x97, 0x55, 0x01, 0x05, 0x01,
+            ]
         }
         KeyType::EcdsaP256 => {
             // ECDSA with NIST P-256 OID: 1.2.840.10045.3.1.7
@@ -689,8 +706,14 @@ fn build_key_import_data(key_info: &KeyUploadInfo, slot: CardKeySlot) -> Result<
     let mut for4d: Vec<u8> = vec![0x4D];
 
     match key_info.key_type {
-        KeyType::Ed25519 | KeyType::Cv25519 | KeyType::EcdsaP256 | KeyType::EcdsaP384 | KeyType::EcdsaP521 |
-        KeyType::EcdhP256 | KeyType::EcdhP384 | KeyType::EcdhP521 => {
+        KeyType::Ed25519
+        | KeyType::Cv25519
+        | KeyType::EcdsaP256
+        | KeyType::EcdsaP384
+        | KeyType::EcdsaP521
+        | KeyType::EcdhP256
+        | KeyType::EcdhP384
+        | KeyType::EcdhP521 => {
             // Build 5F48 TLV (private key scalar)
             let mut for5f48: Vec<u8> = vec![0x5F, 0x48];
             let scalar_len = key_info.scalar.len();

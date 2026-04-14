@@ -4,22 +4,34 @@
 //! key generation, encryption, decryption, signing, and verification.
 
 use wecanencrypt::{
+    // Key management
+    add_uid,
+    bytes_encrypted_for,
     // Key generation
-    create_key, create_key_simple,
-    // Encryption
-    encrypt_bytes, encrypt_bytes_to_multiple, bytes_encrypted_for,
+    create_key,
+    create_key_simple,
     // Decryption
     decrypt_bytes,
-    // Signing
-    sign_bytes, sign_bytes_cleartext, sign_bytes_detached,
-    // Verification
-    verify_bytes, verify_and_extract_bytes, verify_bytes_detached,
+    // Encryption
+    encrypt_bytes,
+    encrypt_bytes_to_multiple,
+    get_key_cipher_details,
+    get_pub_key,
     // Parsing
-    parse_cert_bytes, get_key_cipher_details,
-    // Key management
-    add_uid, revoke_uid, update_password, get_pub_key,
+    parse_cert_bytes,
+    revoke_uid,
+    // Signing
+    sign_bytes,
+    sign_bytes_cleartext,
+    sign_bytes_detached,
+    update_password,
+    verify_and_extract_bytes,
+    // Verification
+    verify_bytes,
+    verify_bytes_detached,
     // Types
-    CipherSuite, SubkeyFlags,
+    CipherSuite,
+    SubkeyFlags,
 };
 
 const TEST_PASSWORD: &str = "test-password-123";
@@ -110,8 +122,14 @@ mod key_generation {
 
         let info = parse_cert_bytes(&key.secret_key, true).unwrap();
         assert_eq!(info.user_ids.len(), 2);
-        assert!(info.user_ids.iter().any(|u| u.value == "Alice <alice@example.com>"));
-        assert!(info.user_ids.iter().any(|u| u.value == "Alice Work <alice@work.com>"));
+        assert!(info
+            .user_ids
+            .iter()
+            .any(|u| u.value == "Alice <alice@example.com>"));
+        assert!(info
+            .user_ids
+            .iter()
+            .any(|u| u.value == "Alice Work <alice@work.com>"));
     }
 
     #[test]
@@ -446,13 +464,19 @@ mod key_management {
         // Create key with multiple UIDs
         let key = create_key_simple(
             TEST_PASSWORD,
-            &["Primary <primary@example.com>", "Secondary <secondary@example.com>"],
+            &[
+                "Primary <primary@example.com>",
+                "Secondary <secondary@example.com>",
+            ],
         )
         .unwrap();
 
-        let updated_key =
-            revoke_uid(&key.secret_key, "Secondary <secondary@example.com>", TEST_PASSWORD)
-                .unwrap();
+        let updated_key = revoke_uid(
+            &key.secret_key,
+            "Secondary <secondary@example.com>",
+            TEST_PASSWORD,
+        )
+        .unwrap();
 
         // Key should still parse (revoked UID is still present but marked as revoked)
         let info = parse_cert_bytes(&updated_key, true).unwrap();
@@ -520,8 +544,7 @@ mod cross_cipher {
     #[test]
     fn test_rsa4k_encrypt_decrypt() {
         // Use fixture keys instead of generating (RSA4k generation is slow)
-        let store = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/files/store");
+        let store = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/files/store");
         let public_key = std::fs::read(store.join("rsa4k_public.asc")).unwrap();
         let secret_key = std::fs::read(store.join("rsa4k_secret.asc")).unwrap();
 
@@ -547,8 +570,7 @@ mod cross_cipher {
     #[test]
     fn test_rsa4k_sign_verify() {
         // Use fixture keys instead of generating (RSA4k generation is slow)
-        let store = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/files/store");
+        let store = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/files/store");
         let public_key = std::fs::read(store.join("rsa4k_public.asc")).unwrap();
         let secret_key = std::fs::read(store.join("rsa4k_secret.asc")).unwrap();
 
@@ -565,11 +587,11 @@ mod cross_cipher {
 // =============================================================================
 
 mod reader_encryption {
-    use wecanencrypt::{
-        create_key_simple, encrypt_reader_to_file, decrypt_reader_to_file, get_pub_key,
-    };
-    use tempfile::tempdir;
     use std::io::Cursor;
+    use tempfile::tempdir;
+    use wecanencrypt::{
+        create_key_simple, decrypt_reader_to_file, encrypt_reader_to_file, get_pub_key,
+    };
 
     const TEST_PASSWORD: &str = "test-password-123";
 
@@ -588,12 +610,7 @@ mod reader_encryption {
 
         // Encrypt from a reader (Cursor simulates a file handle)
         let reader = Cursor::new(plaintext);
-        encrypt_reader_to_file(
-            &[public_key.as_bytes()],
-            reader,
-            &encrypted_path,
-            false,
-        ).unwrap();
+        encrypt_reader_to_file(&[public_key.as_bytes()], reader, &encrypted_path, false).unwrap();
 
         // Verify encrypted file exists
         assert!(encrypted_path.exists());
@@ -606,7 +623,8 @@ mod reader_encryption {
             encrypted_reader,
             &decrypted_path,
             TEST_PASSWORD,
-        ).unwrap();
+        )
+        .unwrap();
 
         // Verify content matches
         let decrypted = std::fs::read(&decrypted_path).unwrap();

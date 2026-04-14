@@ -31,7 +31,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("==========\n");
     println!("Fingerprint:  {}", info.fingerprint);
     println!("Key ID:       {}", info.key_id);
-    println!("Created:      {}", info.creation_time.format("%Y-%m-%d %H:%M:%S UTC"));
+    println!(
+        "Created:      {}",
+        info.creation_time.format("%Y-%m-%d %H:%M:%S UTC")
+    );
 
     if let Some(exp) = info.expiration_time {
         println!("Expires:      {}", exp.format("%Y-%m-%d %H:%M:%S UTC"));
@@ -39,11 +42,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Expires:      Never");
     }
 
-    println!("Primary sign: {}", if info.can_primary_sign { "Yes" } else { "No" });
+    println!(
+        "Primary sign: {}",
+        if info.can_primary_sign { "Yes" } else { "No" }
+    );
 
     println!("\nUser IDs:");
     for uid in &info.user_ids {
-        println!("  - {}{}", uid.value, if uid.revoked { " [REVOKED]" } else { "" });
+        println!(
+            "  - {}{}",
+            uid.value,
+            if uid.revoked { " [REVOKED]" } else { "" }
+        );
     }
 
     println!("\nSubkeys ({}):", info.subkeys.len());

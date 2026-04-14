@@ -156,10 +156,8 @@ impl KeyStore {
         }
 
         // Update subkeys
-        self.conn.execute(
-            "DELETE FROM subkeys WHERE fingerprint = ?1",
-            [&fingerprint],
-        )?;
+        self.conn
+            .execute("DELETE FROM subkeys WHERE fingerprint = ?1", [&fingerprint])?;
 
         // Add primary key
         let primary_key_id = keyid_to_hex(&public_key.primary_key);
@@ -931,10 +929,8 @@ impl KeyStore {
     ///
     /// * `card_ident` - Card identifier ("MANUFACTURER:SERIAL")
     pub fn remove_card_keys_for_card(&self, card_ident: &str) -> Result<()> {
-        self.conn.execute(
-            "DELETE FROM card_keys WHERE card_ident = ?1",
-            [card_ident],
-        )?;
+        self.conn
+            .execute("DELETE FROM card_keys WHERE card_ident = ?1", [card_ident])?;
         Ok(())
     }
 }

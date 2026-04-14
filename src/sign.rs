@@ -235,8 +235,9 @@ fn sign_bytes_internal(
     if cleartext {
         // For cleartext signatures, convert bytes to string
         let text = String::from_utf8_lossy(data);
-        let csf = CleartextSignedMessage::sign(&mut rng, &text, &secret_key.primary_key, &password_obj)
-            .map_err(|e| Error::Crypto(e.to_string()))?;
+        let csf =
+            CleartextSignedMessage::sign(&mut rng, &text, &secret_key.primary_key, &password_obj)
+                .map_err(|e| Error::Crypto(e.to_string()))?;
 
         csf.to_armored_string(None.into())
             .map(|s| s.into_bytes())

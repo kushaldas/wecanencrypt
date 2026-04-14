@@ -4,11 +4,10 @@
 
 use std::path::PathBuf;
 
-use chrono::{NaiveDate, Duration, Utc};
+use chrono::{Duration, NaiveDate, Utc};
 use wecanencrypt::{
-    create_key, parse_cert_bytes,
-    update_primary_expiry, update_subkeys_expiry,
-    CipherSuite, SubkeyFlags,
+    create_key, parse_cert_bytes, update_primary_expiry, update_subkeys_expiry, CipherSuite,
+    SubkeyFlags,
 };
 
 /// Base path for test files.
@@ -47,16 +46,20 @@ fn test_update_primary_expiry_with_fixture() {
     assert!(info.can_primary_sign);
 
     // Update primary expiry to 2050-10-25
-    let new_expiry = chrono::NaiveDate::from_ymd_opt(2050, 10, 25).unwrap()
-        .and_hms_opt(10, 0, 0).unwrap()
+    let new_expiry = chrono::NaiveDate::from_ymd_opt(2050, 10, 25)
+        .unwrap()
+        .and_hms_opt(10, 0, 0)
+        .unwrap()
         .and_utc();
     let updated = update_primary_expiry(&keydata, new_expiry, "redhat").unwrap();
 
     // Verify creation preserved, expiry updated
     let updated_info = parse_cert_bytes(&updated, true).unwrap();
     assert_eq!(updated_info.creation_time.date_naive(), expected_creation);
-    assert_eq!(updated_info.expiration_time.unwrap().date_naive(),
-               NaiveDate::from_ymd_opt(2050, 10, 25).unwrap());
+    assert_eq!(
+        updated_info.expiration_time.unwrap().date_naive(),
+        NaiveDate::from_ymd_opt(2050, 10, 25).unwrap()
+    );
 }
 
 /// Port of JCE test_keystore.py::test_ks_update_expiry_time_for_subkeys
@@ -66,8 +69,10 @@ fn test_update_subkey_expiry_with_fixture() {
     let keydata = read_file(&keypath);
 
     let subkey_fp = "102EBD23BD5D2D340FBBDE0ADFD1C55926648D2F";
-    let new_expiry = chrono::NaiveDate::from_ymd_opt(2050, 10, 25).unwrap()
-        .and_hms_opt(10, 0, 0).unwrap()
+    let new_expiry = chrono::NaiveDate::from_ymd_opt(2050, 10, 25)
+        .unwrap()
+        .and_hms_opt(10, 0, 0)
+        .unwrap()
         .and_utc();
 
     let updated = update_subkeys_expiry(&keydata, &[subkey_fp], new_expiry, "redhat").unwrap();
@@ -75,8 +80,10 @@ fn test_update_subkey_expiry_with_fixture() {
     let updated_info = parse_cert_bytes(&updated, true).unwrap();
     for subkey in &updated_info.subkeys {
         if subkey.fingerprint == subkey_fp {
-            assert_eq!(subkey.expiration_time.unwrap().date_naive(),
-                       NaiveDate::from_ymd_opt(2050, 10, 25).unwrap());
+            assert_eq!(
+                subkey.expiration_time.unwrap().date_naive(),
+                NaiveDate::from_ymd_opt(2050, 10, 25).unwrap()
+            );
         }
     }
 }
@@ -87,16 +94,20 @@ fn test_update_primary_expiry_fixture_key() {
     let keypath = store_dir().join("secret.asc");
     let keydata = read_file(&keypath);
 
-    let new_expiry = chrono::NaiveDate::from_ymd_opt(2050, 10, 25).unwrap()
-        .and_hms_opt(10, 0, 0).unwrap()
+    let new_expiry = chrono::NaiveDate::from_ymd_opt(2050, 10, 25)
+        .unwrap()
+        .and_hms_opt(10, 0, 0)
+        .unwrap()
         .and_utc();
 
     let updated = update_primary_expiry(&keydata, new_expiry, "redhat").unwrap();
 
     let updated_info = parse_cert_bytes(&updated, true).unwrap();
     assert!(updated_info.expiration_time.is_some());
-    assert_eq!(updated_info.expiration_time.unwrap().date_naive(),
-               NaiveDate::from_ymd_opt(2050, 10, 25).unwrap());
+    assert_eq!(
+        updated_info.expiration_time.unwrap().date_naive(),
+        NaiveDate::from_ymd_opt(2050, 10, 25).unwrap()
+    );
 }
 
 /// Port of JCE test_keystore.py::test_update_subkey_expiry_time (duration-based)
@@ -126,8 +137,10 @@ fn test_update_subkey_expiry_past_fails() {
     let keydata = read_file(&keypath);
 
     let subkey_fp = "102EBD23BD5D2D340FBBDE0ADFD1C55926648D2F";
-    let past = chrono::NaiveDate::from_ymd_opt(2000, 1, 1).unwrap()
-        .and_hms_opt(0, 0, 0).unwrap()
+    let past = chrono::NaiveDate::from_ymd_opt(2000, 1, 1)
+        .unwrap()
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
         .and_utc();
 
     let result = update_subkeys_expiry(&keydata, &[subkey_fp], past, "redhat");
@@ -141,11 +154,14 @@ fn test_create_primary_key_with_sign() {
         "redhat",
         &["test key42 <42@example.com>"],
         CipherSuite::Cv25519,
-        None, None, None,
+        None,
+        None,
+        None,
         SubkeyFlags::encryption_only(),
-        true,  // can_primary_sign
+        true, // can_primary_sign
         true,
-    ).unwrap();
+    )
+    .unwrap();
 
     let info = parse_cert_bytes(&key.secret_key, true).unwrap();
     assert!(info.can_primary_sign);
@@ -158,8 +174,10 @@ fn test_create_primary_key_with_sign() {
 /// Port of JCE test_keystore.py::test_ks_creation_expiration_time (creation time part)
 #[test]
 fn test_create_key_with_creation_time() {
-    let ctime = chrono::NaiveDate::from_ymd_opt(2010, 10, 10).unwrap()
-        .and_hms_opt(20, 53, 47).unwrap()
+    let ctime = chrono::NaiveDate::from_ymd_opt(2010, 10, 10)
+        .unwrap()
+        .and_hms_opt(20, 53, 47)
+        .unwrap()
         .and_utc();
 
     let key = create_key(
@@ -167,23 +185,29 @@ fn test_create_key_with_creation_time() {
         &["Another test key <test@example.com>"],
         CipherSuite::Cv25519,
         Some(ctime),
-        None, None,
+        None,
+        None,
         SubkeyFlags::all(),
         false,
         true,
-    ).unwrap();
+    )
+    .unwrap();
 
     let info = parse_cert_bytes(&key.secret_key, true).unwrap();
-    assert_eq!(info.creation_time.date_naive(),
-               NaiveDate::from_ymd_opt(2010, 10, 10).unwrap());
+    assert_eq!(
+        info.creation_time.date_naive(),
+        NaiveDate::from_ymd_opt(2010, 10, 10).unwrap()
+    );
     assert!(info.expiration_time.is_none());
 }
 
 /// Port of JCE test_keystore.py::test_ks_creation_expiration_time (primary expiry part)
 #[test]
 fn test_create_key_with_primary_expiration() {
-    let etime = chrono::NaiveDate::from_ymd_opt(2035, 12, 15).unwrap()
-        .and_hms_opt(20, 53, 47).unwrap()
+    let etime = chrono::NaiveDate::from_ymd_opt(2035, 12, 15)
+        .unwrap()
+        .and_hms_opt(20, 53, 47)
+        .unwrap()
         .and_utc();
 
     let key = create_key(
@@ -195,23 +219,30 @@ fn test_create_key_with_primary_expiration() {
         None,
         SubkeyFlags::all(),
         false,
-        true,  // can_primary_expire
-    ).unwrap();
+        true, // can_primary_expire
+    )
+    .unwrap();
 
     let info = parse_cert_bytes(&key.secret_key, true).unwrap();
     assert_eq!(info.creation_time.date_naive(), Utc::now().date_naive());
-    assert_eq!(info.expiration_time.unwrap().date_naive(),
-               NaiveDate::from_ymd_opt(2035, 12, 15).unwrap());
+    assert_eq!(
+        info.expiration_time.unwrap().date_naive(),
+        NaiveDate::from_ymd_opt(2035, 12, 15).unwrap()
+    );
 }
 
 /// Port of JCE test_keystore.py::test_ks_creation_expiration_time (subkeys expiry part)
 #[test]
 fn test_create_key_with_subkeys_expiration() {
-    let ctime = chrono::NaiveDate::from_ymd_opt(2008, 10, 10).unwrap()
-        .and_hms_opt(20, 53, 47).unwrap()
+    let ctime = chrono::NaiveDate::from_ymd_opt(2008, 10, 10)
+        .unwrap()
+        .and_hms_opt(20, 53, 47)
+        .unwrap()
         .and_utc();
-    let etime = chrono::NaiveDate::from_ymd_opt(2029, 12, 15).unwrap()
-        .and_hms_opt(20, 53, 47).unwrap()
+    let etime = chrono::NaiveDate::from_ymd_opt(2029, 12, 15)
+        .unwrap()
+        .and_hms_opt(20, 53, 47)
+        .unwrap()
         .and_utc();
 
     let key = create_key(
@@ -220,30 +251,40 @@ fn test_create_key_with_subkeys_expiration() {
         CipherSuite::Cv25519,
         Some(ctime),
         Some(etime),
-        Some(etime),  // subkeys_expiration
+        Some(etime), // subkeys_expiration
         SubkeyFlags::all(),
         false,
-        false,  // can_primary_expire = false
-    ).unwrap();
+        false, // can_primary_expire = false
+    )
+    .unwrap();
 
     let info = parse_cert_bytes(&key.secret_key, true).unwrap();
-    assert_eq!(info.creation_time.date_naive(),
-               NaiveDate::from_ymd_opt(2008, 10, 10).unwrap());
+    assert_eq!(
+        info.creation_time.date_naive(),
+        NaiveDate::from_ymd_opt(2008, 10, 10).unwrap()
+    );
 
     // Verify all subkeys have the expiry date
     for subkey in &info.subkeys {
-        assert!(subkey.expiration_time.is_some(),
-                "Subkey {} should have expiration", subkey.fingerprint);
-        assert_eq!(subkey.expiration_time.unwrap().date_naive(),
-                   NaiveDate::from_ymd_opt(2029, 12, 15).unwrap());
+        assert!(
+            subkey.expiration_time.is_some(),
+            "Subkey {} should have expiration",
+            subkey.fingerprint
+        );
+        assert_eq!(
+            subkey.expiration_time.unwrap().date_naive(),
+            NaiveDate::from_ymd_opt(2029, 12, 15).unwrap()
+        );
     }
 }
 
 /// Port of JCE: subkeys expire but primary does NOT
 #[test]
 fn test_create_key_subkeys_only_expiration() {
-    let etime = chrono::NaiveDate::from_ymd_opt(2030, 6, 5).unwrap()
-        .and_hms_opt(20, 53, 47).unwrap()
+    let etime = chrono::NaiveDate::from_ymd_opt(2030, 6, 5)
+        .unwrap()
+        .and_hms_opt(20, 53, 47)
+        .unwrap()
         .and_utc();
 
     let key = create_key(
@@ -255,26 +296,34 @@ fn test_create_key_subkeys_only_expiration() {
         Some(etime),
         SubkeyFlags::all(),
         false,
-        false,  // can_primary_expire = false, so primary should NOT expire
-    ).unwrap();
+        false, // can_primary_expire = false, so primary should NOT expire
+    )
+    .unwrap();
 
     let info = parse_cert_bytes(&key.secret_key, true).unwrap();
     assert_eq!(info.creation_time.date_naive(), Utc::now().date_naive());
     assert!(info.expiration_time.is_none(), "Primary should NOT expire");
 
     for subkey in &info.subkeys {
-        assert!(subkey.expiration_time.is_some(),
-                "Subkey {} should have expiration", subkey.fingerprint);
-        assert_eq!(subkey.expiration_time.unwrap().date_naive(),
-                   NaiveDate::from_ymd_opt(2030, 6, 5).unwrap());
+        assert!(
+            subkey.expiration_time.is_some(),
+            "Subkey {} should have expiration",
+            subkey.fingerprint
+        );
+        assert_eq!(
+            subkey.expiration_time.unwrap().date_naive(),
+            NaiveDate::from_ymd_opt(2030, 6, 5).unwrap()
+        );
     }
 }
 
 /// Port of JCE: both primary and subkeys expire at same date
 #[test]
 fn test_create_key_both_primary_and_subkeys_expire() {
-    let etime = chrono::NaiveDate::from_ymd_opt(2030, 6, 5).unwrap()
-        .and_hms_opt(20, 53, 47).unwrap()
+    let etime = chrono::NaiveDate::from_ymd_opt(2030, 6, 5)
+        .unwrap()
+        .and_hms_opt(20, 53, 47)
+        .unwrap()
         .and_utc();
 
     let key = create_key(
@@ -286,30 +335,42 @@ fn test_create_key_both_primary_and_subkeys_expire() {
         Some(etime),
         SubkeyFlags::all(),
         false,
-        true,  // can_primary_expire = true
-    ).unwrap();
+        true, // can_primary_expire = true
+    )
+    .unwrap();
 
     let info = parse_cert_bytes(&key.secret_key, true).unwrap();
     assert_eq!(info.creation_time.date_naive(), Utc::now().date_naive());
-    assert_eq!(info.expiration_time.unwrap().date_naive(),
-               NaiveDate::from_ymd_opt(2030, 6, 5).unwrap());
+    assert_eq!(
+        info.expiration_time.unwrap().date_naive(),
+        NaiveDate::from_ymd_opt(2030, 6, 5).unwrap()
+    );
 
     for subkey in &info.subkeys {
-        assert!(subkey.expiration_time.is_some(),
-                "Subkey {} should have expiration", subkey.fingerprint);
-        assert_eq!(subkey.expiration_time.unwrap().date_naive(),
-                   NaiveDate::from_ymd_opt(2030, 6, 5).unwrap());
+        assert!(
+            subkey.expiration_time.is_some(),
+            "Subkey {} should have expiration",
+            subkey.fingerprint
+        );
+        assert_eq!(
+            subkey.expiration_time.unwrap().date_naive(),
+            NaiveDate::from_ymd_opt(2030, 6, 5).unwrap()
+        );
     }
 }
 
 /// Port of JCE: custom creation time + primary expiry together
 #[test]
 fn test_create_key_with_creation_and_primary_expiry() {
-    let ctime = chrono::NaiveDate::from_ymd_opt(2008, 10, 10).unwrap()
-        .and_hms_opt(20, 53, 47).unwrap()
+    let ctime = chrono::NaiveDate::from_ymd_opt(2008, 10, 10)
+        .unwrap()
+        .and_hms_opt(20, 53, 47)
+        .unwrap()
         .and_utc();
-    let etime = chrono::NaiveDate::from_ymd_opt(2025, 12, 15).unwrap()
-        .and_hms_opt(20, 53, 47).unwrap()
+    let etime = chrono::NaiveDate::from_ymd_opt(2025, 12, 15)
+        .unwrap()
+        .and_hms_opt(20, 53, 47)
+        .unwrap()
         .and_utc();
 
     let key = create_key(
@@ -322,11 +383,16 @@ fn test_create_key_with_creation_and_primary_expiry() {
         SubkeyFlags::all(),
         false,
         true,
-    ).unwrap();
+    )
+    .unwrap();
 
     let info = parse_cert_bytes(&key.secret_key, true).unwrap();
-    assert_eq!(info.creation_time.date_naive(),
-               NaiveDate::from_ymd_opt(2008, 10, 10).unwrap());
-    assert_eq!(info.expiration_time.unwrap().date_naive(),
-               NaiveDate::from_ymd_opt(2025, 12, 15).unwrap());
+    assert_eq!(
+        info.creation_time.date_naive(),
+        NaiveDate::from_ymd_opt(2008, 10, 10).unwrap()
+    );
+    assert_eq!(
+        info.expiration_time.unwrap().date_naive(),
+        NaiveDate::from_ymd_opt(2025, 12, 15).unwrap()
+    );
 }
