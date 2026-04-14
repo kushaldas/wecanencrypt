@@ -94,7 +94,7 @@ mod key;
 mod keyring;
 mod ssh;
 
-#[cfg(feature = "network")]
+#[cfg(any(feature = "network", feature = "dane"))]
 mod network;
 
 #[cfg(feature = "card")]
@@ -233,3 +233,7 @@ pub use network::{
     fetch_key_by_fingerprint,
     fetch_key_by_keyid,
 };
+
+// Re-export DANE function when feature is enabled
+#[cfg(feature = "dane")]
+pub use network::fetch_key_by_email_from_dane;

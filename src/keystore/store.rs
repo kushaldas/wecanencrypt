@@ -818,6 +818,142 @@ impl KeyStore {
             Err(e) => Err(e.into()),
         }
     }
+
+    /// Find certificate by subkey fingerprint.
+    ///
+    /// Searches for a certificate that contains a subkey with the given
+    /// fingerprint. This is useful when a signature's issuer is a subkey
+    /// rather than the primary key.
+    ///
+    /// # Arguments
+    /// * `subkey_fp` - The subkey fingerprint to search for (hex string)
+    ///
+    /// # Returns
+    /// The certificate data if found, or `None` if not found.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use wecanencrypt::KeyStore;
+    ///
+    /// let store = KeyStore::open("keys.db").unwrap();
+    ///
+    /// // Find by subkey fingerprint
+    /// if let Some(cert) = store.find_by_subkey_fingerprint("ABCD1234...").unwrap() {
+    ///     println!("Found parent certificate");
+    /// }
+    /// ```
+    pub fn find_by_subkey_fingerprint(&self, subkey_fp: &str) -> Result<Option<Vec<u8>>> {
+        let result: std::result::Result<String, _> = self.conn.query_row(
+            "SELECT fingerprint FROM subkeys WHERE subkey_fingerprint = ?1",
+            [subkey_fp],
+            |row| row.get(0),
+        );
+
+        match result {
+            Ok(fp) => {
+                let data = self.export_cert(&fp)?;
+                Ok(Some(data))
+            }
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Save a card-key association.
+    ///
+    /// Records that a specific card slot holds a key belonging to a certificate.
+    /// Uses INSERT OR REPLACE on (card_ident, slot) so repeated calls update
+    /// the `last_seen` timestamp.
+    ///
+    /// # Arguments
+    ///
+    /// * `cert_fingerprint` - Fingerprint of the certificate (must exist in the store)
+    /// * `card_ident` - Card identifier ("MANUFACTURER:SERIAL")
+    /// * `card_serial` - Card serial number (hex)
+    /// * `card_manufacturer` - Human-readable manufacturer name
+    /// * `slot` - Slot name: "signature", "encryption", or "authentication"
+    /// * `slot_fingerprint` - Fingerprint of the key in this card slot
+    pub fn save_card_key(
+        &self,
+        cert_fingerprint: &str,
+        card_ident: &str,
+        card_serial: &str,
+        card_manufacturer: Option<&str>,
+        slot: &str,
+        slot_fingerprint: &str,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO card_keys
+                (fingerprint, card_ident, card_serial, card_manufacturer, slot, slot_fingerprint, last_seen)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, CURRENT_TIMESTAMP)",
+            params![cert_fingerprint, card_ident, card_serial, card_manufacturer, slot, slot_fingerprint],
+        )?;
+        Ok(())
+    }
+
+    /// Get all card associations for a certificate.
+    ///
+    /// Returns information about which smart card slots hold keys belonging
+    /// to the given certificate.
+    ///
+    /// # Arguments
+    ///
+    /// * `cert_fingerprint` - Fingerprint of the certificate
+    pub fn get_card_keys(&self, cert_fingerprint: &str) -> Result<Vec<StoredCardKey>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT card_ident, card_serial, card_manufacturer, slot, slot_fingerprint, last_seen
+             FROM card_keys WHERE fingerprint = ?1
+             ORDER BY card_ident, slot",
+        )?;
+
+        let rows = stmt.query_map([cert_fingerprint], |row| {
+            Ok(StoredCardKey {
+                card_ident: row.get(0)?,
+                card_serial: row.get(1)?,
+                card_manufacturer: row.get(2)?,
+                slot: row.get(3)?,
+                slot_fingerprint: row.get(4)?,
+                last_seen: row.get(5)?,
+            })
+        })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(results)
+    }
+
+    /// Remove all card associations for a specific card.
+    ///
+    /// # Arguments
+    ///
+    /// * `card_ident` - Card identifier ("MANUFACTURER:SERIAL")
+    pub fn remove_card_keys_for_card(&self, card_ident: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM card_keys WHERE card_ident = ?1",
+            [card_ident],
+        )?;
+        Ok(())
+    }
+}
+
+/// A card-key association stored in the keystore.
+#[derive(Debug, Clone)]
+pub struct StoredCardKey {
+    /// Card identifier ("MANUFACTURER:SERIAL")
+    pub card_ident: String,
+    /// Card serial number (hex)
+    pub card_serial: String,
+    /// Human-readable manufacturer name
+    pub card_manufacturer: Option<String>,
+    /// Slot name: "signature", "encryption", or "authentication"
+    pub slot: String,
+    /// Fingerprint of the key stored in this card slot (lowercase hex)
+    pub slot_fingerprint: String,
+    /// Timestamp when this association was last observed
+    pub last_seen: String,
 }
 
 /// Extract email from a User ID string (e.g., "Name <email@example.com>").

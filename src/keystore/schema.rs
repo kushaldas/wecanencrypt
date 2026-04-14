@@ -3,7 +3,7 @@
 use rusqlite::Connection;
 
 /// Current schema version.
-pub const SCHEMA_VERSION: u32 = 20251228;
+pub const SCHEMA_VERSION: u32 = 20260413;
 
 /// Initialize the database schema.
 pub fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
@@ -35,6 +35,9 @@ pub fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
 fn migrate(conn: &Connection, from_version: u32) -> rusqlite::Result<()> {
     if from_version < 1 {
         migrate_v1(conn)?;
+    }
+    if from_version < 20260413 {
+        migrate_v2(conn)?;
     }
 
     // Update version
@@ -103,6 +106,36 @@ fn migrate_v1(conn: &Connection) -> rusqlite::Result<()> {
     )?;
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_certificates_is_secret ON certificates(is_secret)",
+        [],
+    )?;
+
+    Ok(())
+}
+
+/// Migration to version 2 - add card_keys table for card-key associations.
+fn migrate_v2(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS card_keys (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            fingerprint TEXT NOT NULL,
+            card_ident TEXT NOT NULL,
+            card_serial TEXT NOT NULL,
+            card_manufacturer TEXT,
+            slot TEXT NOT NULL,
+            slot_fingerprint TEXT NOT NULL,
+            last_seen TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (fingerprint) REFERENCES certificates(fingerprint) ON DELETE CASCADE,
+            UNIQUE(card_ident, slot)
+        )",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_card_keys_fingerprint ON card_keys(fingerprint)",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_card_keys_card_ident ON card_keys(card_ident)",
         [],
     )?;
 

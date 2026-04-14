@@ -965,3 +965,101 @@ fn test_keystore_deletion_cleans_subkeys() {
     // The store should have no keys at all
     assert_eq!(store.count().unwrap(), 0);
 }
+
+#[test]
+fn test_keystore_save_and_get_card_keys() {
+    let store = KeyStore::open_in_memory().unwrap();
+
+    // Import a key first (card_keys has FK to certificates)
+    let key_path = store_dir().join("public.asc");
+    let key_data = read_file(&key_path);
+    let fp = store.import_cert(&key_data).unwrap();
+
+    // Save card-key associations
+    store.save_card_key(&fp, "0006:12345678", "12345678", Some("Yubico AB"), "signature", "aabbccdd").unwrap();
+    store.save_card_key(&fp, "0006:12345678", "12345678", Some("Yubico AB"), "encryption", "eeff0011").unwrap();
+    store.save_card_key(&fp, "0006:99999999", "99999999", Some("Yubico AB"), "signature", "22334455").unwrap();
+
+    // Retrieve card keys for this certificate
+    let card_keys = store.get_card_keys(&fp).unwrap();
+    assert_eq!(card_keys.len(), 3);
+
+    // Results ordered by card_ident, slot — "encryption" < "signature" alphabetically
+    let first = &card_keys[0];
+    assert_eq!(first.card_ident, "0006:12345678");
+    assert_eq!(first.card_serial, "12345678");
+    assert_eq!(first.card_manufacturer, Some("Yubico AB".to_string()));
+    assert_eq!(first.slot, "encryption");
+    assert_eq!(first.slot_fingerprint, "eeff0011");
+}
+
+#[test]
+fn test_keystore_card_keys_replace_on_duplicate() {
+    let store = KeyStore::open_in_memory().unwrap();
+
+    let key_path = store_dir().join("public.asc");
+    let key_data = read_file(&key_path);
+    let fp = store.import_cert(&key_data).unwrap();
+
+    // Save a card-key association
+    store.save_card_key(&fp, "0006:12345678", "12345678", Some("Yubico AB"), "signature", "aabbccdd").unwrap();
+
+    // Save again with same card_ident+slot — should replace
+    store.save_card_key(&fp, "0006:12345678", "12345678", Some("Yubico AB"), "signature", "newfingerprint").unwrap();
+
+    let card_keys = store.get_card_keys(&fp).unwrap();
+    assert_eq!(card_keys.len(), 1);
+    assert_eq!(card_keys[0].slot_fingerprint, "newfingerprint");
+}
+
+#[test]
+fn test_keystore_remove_card_keys_for_card() {
+    let store = KeyStore::open_in_memory().unwrap();
+
+    let key_path = store_dir().join("public.asc");
+    let key_data = read_file(&key_path);
+    let fp = store.import_cert(&key_data).unwrap();
+
+    store.save_card_key(&fp, "0006:12345678", "12345678", Some("Yubico AB"), "signature", "aabbccdd").unwrap();
+    store.save_card_key(&fp, "0006:12345678", "12345678", Some("Yubico AB"), "encryption", "eeff0011").unwrap();
+    store.save_card_key(&fp, "0006:99999999", "99999999", Some("Yubico AB"), "signature", "22334455").unwrap();
+
+    // Remove all associations for the first card
+    store.remove_card_keys_for_card("0006:12345678").unwrap();
+
+    let card_keys = store.get_card_keys(&fp).unwrap();
+    assert_eq!(card_keys.len(), 1);
+    assert_eq!(card_keys[0].card_ident, "0006:99999999");
+}
+
+#[test]
+fn test_keystore_card_keys_cascade_delete() {
+    let store = KeyStore::open_in_memory().unwrap();
+
+    let key_path = store_dir().join("public.asc");
+    let key_data = read_file(&key_path);
+    let fp = store.import_cert(&key_data).unwrap();
+
+    store.save_card_key(&fp, "0006:12345678", "12345678", Some("Yubico AB"), "signature", "aabbccdd").unwrap();
+
+    // Delete the certificate — card_keys should cascade
+    store.delete_cert(&fp).unwrap();
+
+    // Re-import the key and check card_keys are gone
+    let fp2 = store.import_cert(&key_data).unwrap();
+    let card_keys = store.get_card_keys(&fp2).unwrap();
+    assert_eq!(card_keys.len(), 0);
+}
+
+#[test]
+fn test_keystore_card_keys_empty_result() {
+    let store = KeyStore::open_in_memory().unwrap();
+
+    let key_path = store_dir().join("public.asc");
+    let key_data = read_file(&key_path);
+    let fp = store.import_cert(&key_data).unwrap();
+
+    // No card keys saved — should return empty
+    let card_keys = store.get_card_keys(&fp).unwrap();
+    assert!(card_keys.is_empty());
+}

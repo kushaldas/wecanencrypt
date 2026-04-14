@@ -76,6 +76,24 @@ pub struct CardInfo {
     pub manufacturer_name: Option<String>,
 }
 
+/// Describes which slot on a card matches a key fingerprint.
+#[derive(Debug, Clone)]
+pub struct SlotMatch {
+    /// Which slot on the card holds a matching key
+    pub slot: KeySlot,
+    /// The fingerprint stored in that slot (lowercase hex)
+    pub fingerprint: String,
+}
+
+/// A connected card that holds one or more keys from a certificate.
+#[derive(Debug, Clone)]
+pub struct CardKeyMatch {
+    /// Full card details
+    pub card: CardInfo,
+    /// Slots that match fingerprints from the queried key
+    pub matching_slots: Vec<SlotMatch>,
+}
+
 /// Errors specific to smart card operations.
 #[derive(Debug, Clone)]
 pub enum CardError {
