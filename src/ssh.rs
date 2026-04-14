@@ -38,7 +38,9 @@ pub fn get_ssh_pubkey(cert_data: &[u8], comment: Option<&str>) -> Result<String>
         if !is_subkey_valid(sk, false) {
             return false;
         }
-        sk.signatures.iter().any(|sig| sig.key_flags().authentication())
+        sk.signatures
+            .iter()
+            .any(|sig| sig.key_flags().authentication())
     });
 
     let params = match auth_subkey {
@@ -195,7 +197,11 @@ fn write_ssh_string(buf: &mut Vec<u8>, data: &[u8]) {
 /// SSH mpints are big-endian, with a leading zero byte if the high bit is set.
 fn write_ssh_mpint(buf: &mut Vec<u8>, data: &[u8]) {
     // Skip leading zeros
-    let data = data.iter().skip_while(|&&b| b == 0).copied().collect::<Vec<_>>();
+    let data = data
+        .iter()
+        .skip_while(|&&b| b == 0)
+        .copied()
+        .collect::<Vec<_>>();
 
     if data.is_empty() {
         // Zero value
@@ -233,9 +239,11 @@ pub fn get_signing_pubkey(cert_data: &[u8]) -> Result<SigningPublicKey> {
     });
 
     // Check if primary can sign
-    let primary_can_sign = public_key.details.users.iter().any(|user| {
-        user.signatures.iter().any(|sig| sig.key_flags().sign())
-    });
+    let primary_can_sign = public_key
+        .details
+        .users
+        .iter()
+        .any(|user| user.signatures.iter().any(|sig| sig.key_flags().sign()));
 
     // Get the public params from the appropriate key
     let params = if let Some(sk) = sign_subkey {
@@ -408,9 +416,10 @@ pub fn ssh_sign_raw(
         }
 
         // Check the subkey isn't revoked
-        let is_revoked = subkey.signatures.iter().any(|sig| {
-            sig.typ() == Some(pgp::packet::SignatureType::SubkeyRevocation)
-        });
+        let is_revoked = subkey
+            .signatures
+            .iter()
+            .any(|sig| sig.typ() == Some(pgp::packet::SignatureType::SubkeyRevocation));
         if is_revoked {
             continue;
         }
@@ -427,11 +436,12 @@ pub fn ssh_sign_raw(
 
         // Unlock the subkey and perform raw signing
         let result = subkey.key.unlock(&pw, |pub_params, secret_params| {
-            ssh_raw_sign_with_params(pub_params, secret_params, data, hash_alg)
-                .map_err(|e| pgp::errors::Error::Message {
+            ssh_raw_sign_with_params(pub_params, secret_params, data, hash_alg).map_err(|e| {
+                pgp::errors::Error::Message {
                     message: e.to_string(),
                     backtrace: Some(std::backtrace::Backtrace::capture()),
-                })
+                }
+            })
         });
 
         match result {
@@ -476,11 +486,11 @@ fn ssh_raw_sign_with_params(
             match pub_params {
                 PublicParams::ECDSA(EcdsaPublicParams::P256 { .. }) => {
                     use p256::ecdsa::{signature::hazmat::PrehashSigner, Signature, SigningKey};
-                    let signing_key = SigningKey::from_bytes(
-                        p256::FieldBytes::from_slice(&scalar_bytes),
-                    )
-                    .map_err(|e| Error::Crypto(e.to_string()))?;
-                    let sig: Signature = signing_key.sign_prehash(data)
+                    let signing_key =
+                        SigningKey::from_bytes(p256::FieldBytes::from_slice(&scalar_bytes))
+                            .map_err(|e| Error::Crypto(e.to_string()))?;
+                    let sig: Signature = signing_key
+                        .sign_prehash(data)
                         .map_err(|e| Error::Crypto(e.to_string()))?;
                     let (r, s) = sig.split_bytes();
                     Ok(SshSignResult::Ecdsa {
@@ -491,11 +501,11 @@ fn ssh_raw_sign_with_params(
                 }
                 PublicParams::ECDSA(EcdsaPublicParams::P384 { .. }) => {
                     use p384::ecdsa::{signature::hazmat::PrehashSigner, Signature, SigningKey};
-                    let signing_key = SigningKey::from_bytes(
-                        p384::FieldBytes::from_slice(&scalar_bytes),
-                    )
-                    .map_err(|e| Error::Crypto(e.to_string()))?;
-                    let sig: Signature = signing_key.sign_prehash(data)
+                    let signing_key =
+                        SigningKey::from_bytes(p384::FieldBytes::from_slice(&scalar_bytes))
+                            .map_err(|e| Error::Crypto(e.to_string()))?;
+                    let sig: Signature = signing_key
+                        .sign_prehash(data)
                         .map_err(|e| Error::Crypto(e.to_string()))?;
                     let (r, s) = sig.split_bytes();
                     Ok(SshSignResult::Ecdsa {
@@ -506,11 +516,11 @@ fn ssh_raw_sign_with_params(
                 }
                 PublicParams::ECDSA(EcdsaPublicParams::P521 { .. }) => {
                     use p521::ecdsa::{signature::hazmat::PrehashSigner, Signature, SigningKey};
-                    let signing_key = SigningKey::from_bytes(
-                        p521::FieldBytes::from_slice(&scalar_bytes),
-                    )
-                    .map_err(|e| Error::Crypto(e.to_string()))?;
-                    let sig: Signature = signing_key.sign_prehash(data)
+                    let signing_key =
+                        SigningKey::from_bytes(p521::FieldBytes::from_slice(&scalar_bytes))
+                            .map_err(|e| Error::Crypto(e.to_string()))?;
+                    let sig: Signature = signing_key
+                        .sign_prehash(data)
                         .map_err(|e| Error::Crypto(e.to_string()))?;
                     let (r, s) = sig.split_bytes();
                     Ok(SshSignResult::Ecdsa {
@@ -520,7 +530,8 @@ fn ssh_raw_sign_with_params(
                     })
                 }
                 _ => Err(Error::UnsupportedAlgorithm(
-                    "Unsupported ECDSA curve for SSH signing (only P-256, P-384, P-521)".to_string(),
+                    "Unsupported ECDSA curve for SSH signing (only P-256, P-384, P-521)"
+                        .to_string(),
                 )),
             }
         }

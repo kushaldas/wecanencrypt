@@ -47,15 +47,13 @@ pub fn parse_keyring_bytes(data: &[u8]) -> Result<Vec<(CertificateInfo, Vec<u8>)
 
     // Try to parse as multiple public keys
     let cursor = Cursor::new(data);
-    let (keys_iter, _headers) = SignedPublicKey::from_reader_many(cursor)
-        .map_err(|e| Error::Parse(e.to_string()))?;
+    let (keys_iter, _headers) =
+        SignedPublicKey::from_reader_many(cursor).map_err(|e| Error::Parse(e.to_string()))?;
 
     for key_result in keys_iter {
         match key_result {
             Ok(key) => {
-                let bytes = key
-                    .to_bytes()
-                    .map_err(|e| Error::Crypto(e.to_string()))?;
+                let bytes = key.to_bytes().map_err(|e| Error::Crypto(e.to_string()))?;
                 let info = parse_cert_bytes(&bytes, true)?;
                 results.push((info, bytes));
             }

@@ -26,9 +26,10 @@ pub(crate) fn is_key_expired(creation_time: SystemTime, validity_seconds: Option
 
 /// Check if a subkey is revoked.
 pub(crate) fn is_subkey_revoked(subkey: &SignedPublicSubKey) -> bool {
-    subkey.signatures.iter().any(|sig| {
-        sig.typ() == Some(SignatureType::SubkeyRevocation)
-    })
+    subkey
+        .signatures
+        .iter()
+        .any(|sig| sig.typ() == Some(SignatureType::SubkeyRevocation))
 }
 
 /// Check if a key is valid for use (not expired, not revoked).
@@ -70,9 +71,10 @@ pub(crate) fn can_primary_sign(key: &SignedPublicKey) -> bool {
 
 /// Check if the primary key is revoked.
 pub(crate) fn is_primary_key_revoked(key: &SignedPublicKey) -> bool {
-    key.details.revocation_signatures.iter().any(|sig| {
-        sig.typ() == Some(SignatureType::KeyRevocation)
-    })
+    key.details
+        .revocation_signatures
+        .iter()
+        .any(|sig| sig.typ() == Some(SignatureType::KeyRevocation))
 }
 
 /// Check if the primary key is valid for verification (not revoked).

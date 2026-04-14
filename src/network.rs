@@ -4,9 +4,9 @@
 //! using Web Key Directory (WKD), HKP keyservers, and DNS DANE (OPENPGPKEY records).
 
 use crate::error::{Error, Result};
+use crate::internal::parse_cert;
 #[cfg(feature = "network")]
 use crate::internal::{fingerprint_to_hex, keyid_to_hex};
-use crate::internal::parse_cert;
 
 /// Maximum response size for key fetches (10 MB).
 const MAX_KEY_RESPONSE_SIZE: u64 = 10 * 1024 * 1024;
@@ -84,19 +84,21 @@ pub fn fetch_key_by_email(email: &str) -> Result<Vec<u8>> {
 /// )?;
 /// ```
 #[cfg(feature = "network")]
-pub fn fetch_key_by_fingerprint(
-    fingerprint: &str,
-    keyserver: Option<&str>,
-) -> Result<Vec<u8>> {
+pub fn fetch_key_by_fingerprint(fingerprint: &str, keyserver: Option<&str>) -> Result<Vec<u8>> {
     let server = keyserver.unwrap_or("https://keys.openpgp.org");
-    let url = format!("{}/vks/v1/by-fingerprint/{}", server, fingerprint.to_uppercase());
+    let url = format!(
+        "{}/vks/v1/by-fingerprint/{}",
+        server,
+        fingerprint.to_uppercase()
+    );
 
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|e| Error::Network(e.to_string()))?;
 
-    let response = client.get(&url)
+    let response = client
+        .get(&url)
         .send()
         .map_err(|e| Error::Network(e.to_string()))?;
 
@@ -131,10 +133,7 @@ pub fn fetch_key_by_fingerprint(
 /// # Returns
 /// The certificate data if found.
 #[cfg(feature = "network")]
-pub fn fetch_key_by_keyid(
-    key_id: &str,
-    keyserver: Option<&str>,
-) -> Result<Vec<u8>> {
+pub fn fetch_key_by_keyid(key_id: &str, keyserver: Option<&str>) -> Result<Vec<u8>> {
     let server = keyserver.unwrap_or("https://keys.openpgp.org");
     let url = format!("{}/vks/v1/by-keyid/{}", server, key_id.to_uppercase());
 
@@ -143,7 +142,8 @@ pub fn fetch_key_by_keyid(
         .build()
         .map_err(|e| Error::Network(e.to_string()))?;
 
-    let response = client.get(&url)
+    let response = client
+        .get(&url)
         .send()
         .map_err(|e| Error::Network(e.to_string()))?;
 
@@ -161,9 +161,10 @@ pub fn fetch_key_by_keyid(
     let fetched_keyid = keyid_to_hex(&public_key.primary_key);
     if fetched_keyid != key_id.to_uppercase() {
         // Also check subkey IDs — the key ID might refer to a subkey
-        let subkey_match = public_key.public_subkeys.iter().any(|sk| {
-            keyid_to_hex(&sk.key) == key_id.to_uppercase()
-        });
+        let subkey_match = public_key
+            .public_subkeys
+            .iter()
+            .any(|sk| keyid_to_hex(&sk.key) == key_id.to_uppercase());
         if !subkey_match {
             return Err(Error::KeyNotFound(format!(
                 "Fetched key ID {} does not match requested {}",
@@ -196,10 +197,7 @@ pub fn fetch_key_by_keyid(
 /// let cert = fetch_key_by_email_from_keyserver("user@example.com", None)?;
 /// ```
 #[cfg(feature = "network")]
-pub fn fetch_key_by_email_from_keyserver(
-    email: &str,
-    keyserver: Option<&str>,
-) -> Result<Vec<u8>> {
+pub fn fetch_key_by_email_from_keyserver(email: &str, keyserver: Option<&str>) -> Result<Vec<u8>> {
     let server = keyserver.unwrap_or("https://keys.openpgp.org");
     let url = format!("{}/vks/v1/by-email/{}", server, email);
 
@@ -208,7 +206,8 @@ pub fn fetch_key_by_email_from_keyserver(
         .build()
         .map_err(|e| Error::Network(e.to_string()))?;
 
-    let response = client.get(&url)
+    let response = client
+        .get(&url)
         .send()
         .map_err(|e| Error::Network(e.to_string()))?;
 
@@ -240,13 +239,15 @@ fn read_response_limited(response: reqwest::blocking::Response) -> Result<Vec<u8
         }
     }
 
-    let bytes = response.bytes()
+    let bytes = response
+        .bytes()
         .map_err(|e| Error::Network(e.to_string()))?;
 
     if bytes.len() as u64 > MAX_KEY_RESPONSE_SIZE {
         return Err(Error::Network(format!(
             "Response too large: {} bytes (max {})",
-            bytes.len(), MAX_KEY_RESPONSE_SIZE
+            bytes.len(),
+            MAX_KEY_RESPONSE_SIZE
         )));
     }
 
@@ -257,7 +258,10 @@ fn read_response_limited(response: reqwest::blocking::Response) -> Result<Vec<u8
 fn parse_email(email: &str) -> Result<(String, String)> {
     let parts: Vec<&str> = email.split('@').collect();
     if parts.len() != 2 {
-        return Err(Error::InvalidInput(format!("Invalid email address: {}", email)));
+        return Err(Error::InvalidInput(format!(
+            "Invalid email address: {}",
+            email
+        )));
     }
     Ok((parts[0].to_lowercase(), parts[1].to_lowercase()))
 }
@@ -266,7 +270,7 @@ fn parse_email(email: &str) -> Result<(String, String)> {
 /// Returns both advanced and direct method URLs.
 #[cfg(feature = "network")]
 fn wkd_urls(local: &str, domain: &str) -> Vec<String> {
-    use sha1::{Sha1, Digest};
+    use sha1::{Digest, Sha1};
 
     // Z-base32 encoding for WKD
     let hash = {
@@ -331,7 +335,7 @@ fn zbase32_encode(data: &[u8]) -> String {
 /// `_openpgpkey.<domain>`.
 #[cfg(feature = "dane")]
 fn openpgpkey_name(local: &str, domain: &str) -> String {
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
 
     let mut hasher = Sha256::new();
     hasher.update(local.as_bytes());
@@ -371,10 +375,7 @@ fn get_system_resolver() -> String {
     // query scutil which reflects the live system DNS config
     #[cfg(target_os = "macos")]
     {
-        if let Ok(output) = std::process::Command::new("scutil")
-            .arg("--dns")
-            .output()
-        {
+        if let Ok(output) = std::process::Command::new("scutil").arg("--dns").output() {
             let stdout = String::from_utf8_lossy(&output.stdout);
             for line in stdout.lines() {
                 let trimmed = line.trim();
@@ -444,22 +445,27 @@ fn dns_query(name: &str, resolver: &str) -> Result<Vec<u8>> {
     edns.set_version(0);
     msg.set_edns(edns);
 
-    let wire = msg.to_vec()
+    let wire = msg
+        .to_vec()
         .map_err(|e| Error::Network(format!("Failed to serialize DNS query: {}", e)))?;
 
-    let resolver_addr: std::net::SocketAddr = resolver.parse()
+    let resolver_addr: std::net::SocketAddr = resolver
+        .parse()
         .map_err(|e| Error::Network(format!("Invalid resolver address '{}': {}", resolver, e)))?;
 
     // UDP query
     let socket = UdpSocket::bind("0.0.0.0:0")
         .map_err(|e| Error::Network(format!("Failed to bind UDP socket: {}", e)))?;
-    socket.set_read_timeout(Some(Duration::from_secs(10)))
+    socket
+        .set_read_timeout(Some(Duration::from_secs(10)))
         .map_err(|e| Error::Network(format!("Failed to set socket timeout: {}", e)))?;
-    socket.send_to(&wire, resolver_addr)
+    socket
+        .send_to(&wire, resolver_addr)
         .map_err(|e| Error::Network(format!("Failed to send DNS query: {}", e)))?;
 
     let mut buf = vec![0u8; 65535];
-    let len = socket.recv(&mut buf)
+    let len = socket
+        .recv(&mut buf)
         .map_err(|e| Error::Network(format!("Failed to receive DNS response: {}", e)))?;
     let response = Message::from_bytes(&buf[..len])
         .map_err(|e| Error::Network(format!("Failed to parse DNS response: {}", e)))?;
@@ -475,12 +481,14 @@ fn dns_query(name: &str, resolver: &str) -> Result<Vec<u8>> {
         ResponseCode::NoError => {}
         ResponseCode::NXDomain => {
             return Err(Error::KeyNotFound(format!(
-                "No OPENPGPKEY DNS record found for {}", name
+                "No OPENPGPKEY DNS record found for {}",
+                name
             )));
         }
         code => {
             return Err(Error::Network(format!(
-                "DNS query failed with response code: {}", code
+                "DNS query failed with response code: {}",
+                code
             )));
         }
     }
@@ -493,7 +501,8 @@ fn dns_query(name: &str, resolver: &str) -> Result<Vec<u8>> {
     }
 
     Err(Error::KeyNotFound(format!(
-        "No OPENPGPKEY record in DNS response for {}", name
+        "No OPENPGPKEY record in DNS response for {}",
+        name
     )))
 }
 
@@ -506,30 +515,36 @@ fn dns_query_tcp(name: &str, resolver: &str, wire: &[u8]) -> Result<Vec<u8>> {
     use std::net::TcpStream;
     use std::time::Duration;
 
-    let resolver_addr: std::net::SocketAddr = resolver.parse()
+    let resolver_addr: std::net::SocketAddr = resolver
+        .parse()
         .map_err(|e| Error::Network(format!("Invalid resolver address '{}': {}", resolver, e)))?;
 
     let mut stream = TcpStream::connect_timeout(&resolver_addr, Duration::from_secs(10))
         .map_err(|e| Error::Network(format!("TCP connection to DNS resolver failed: {}", e)))?;
-    stream.set_read_timeout(Some(Duration::from_secs(10)))
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
         .map_err(|e| Error::Network(format!("Failed to set TCP timeout: {}", e)))?;
 
     // TCP DNS: 2-byte length prefix
     let len_bytes = (wire.len() as u16).to_be_bytes();
-    stream.write_all(&len_bytes)
+    stream
+        .write_all(&len_bytes)
         .map_err(|e| Error::Network(format!("Failed to write DNS query length: {}", e)))?;
-    stream.write_all(wire)
+    stream
+        .write_all(wire)
         .map_err(|e| Error::Network(format!("Failed to write DNS query: {}", e)))?;
 
     // Read 2-byte response length
     let mut resp_len_buf = [0u8; 2];
-    stream.read_exact(&mut resp_len_buf)
+    stream
+        .read_exact(&mut resp_len_buf)
         .map_err(|e| Error::Network(format!("Failed to read DNS response length: {}", e)))?;
     let resp_len = u16::from_be_bytes(resp_len_buf) as usize;
 
     // Read response
     let mut resp_buf = vec![0u8; resp_len];
-    stream.read_exact(&mut resp_buf)
+    stream
+        .read_exact(&mut resp_buf)
         .map_err(|e| Error::Network(format!("Failed to read DNS response: {}", e)))?;
 
     let response = Message::from_bytes(&resp_buf)
@@ -543,7 +558,8 @@ fn dns_query_tcp(name: &str, resolver: &str, wire: &[u8]) -> Result<Vec<u8>> {
     }
 
     Err(Error::KeyNotFound(format!(
-        "No OPENPGPKEY record in DNS response for {}", name
+        "No OPENPGPKEY record in DNS response for {}",
+        name
     )))
 }
 
@@ -579,10 +595,7 @@ fn dns_query_tcp(name: &str, resolver: &str, wire: &[u8]) -> Result<Vec<u8>> {
 /// let cert = fetch_key_by_email_from_dane("user@example.com", Some("8.8.8.8:53"))?;
 /// ```
 #[cfg(feature = "dane")]
-pub fn fetch_key_by_email_from_dane(
-    email: &str,
-    dns_resolver: Option<&str>,
-) -> Result<Vec<u8>> {
+pub fn fetch_key_by_email_from_dane(email: &str, dns_resolver: Option<&str>) -> Result<Vec<u8>> {
     let (local, domain) = parse_email(email)?;
     let name = openpgpkey_name(&local, &domain);
 
@@ -639,7 +652,11 @@ mod tests {
         // SHA-256("user") truncated to 28 octets, hex-encoded = 56 hex chars
         assert!(name.ends_with("._openpgpkey.example.com"));
         let hash_part = name.split("._openpgpkey.").next().unwrap();
-        assert_eq!(hash_part.len(), 56, "Hash should be 56 hex chars (28 octets)");
+        assert_eq!(
+            hash_part.len(),
+            56,
+            "Hash should be 56 hex chars (28 octets)"
+        );
         // Verify it's valid hex
         assert!(hash_part.chars().all(|c| c.is_ascii_hexdigit()));
     }
@@ -669,7 +686,15 @@ mod tests {
     #[cfg(feature = "dane")]
     fn test_get_system_resolver() {
         let resolver = get_system_resolver();
-        assert!(resolver.contains(':'), "Resolver should include port: {}", resolver);
-        assert!(resolver.ends_with(":53"), "Resolver should use port 53: {}", resolver);
+        assert!(
+            resolver.contains(':'),
+            "Resolver should include port: {}",
+            resolver
+        );
+        assert!(
+            resolver.ends_with(":53"),
+            "Resolver should use port 53: {}",
+            resolver
+        );
     }
 }

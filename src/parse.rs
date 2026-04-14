@@ -14,8 +14,8 @@ use crate::internal::{
     keyid_to_hex, parse_cert, system_time_to_datetime,
 };
 use crate::types::{
-    AvailableSubkey, CertificateInfo, KeyCipherDetails, KeyType, SubkeyInfo,
-    UIDCertification, UserIDInfo,
+    AvailableSubkey, CertificateInfo, KeyCipherDetails, KeyType, SubkeyInfo, UIDCertification,
+    UserIDInfo,
 };
 
 /// Parse a certificate from bytes and extract its information.
@@ -98,58 +98,61 @@ fn extract_cert_info(
             let value = String::from_utf8_lossy(u.id.id()).to_string();
 
             // Check revocation: any CertRevocation signature on this UID
-            let revocation_sig = u.signatures.iter().find(|sig| {
-                sig.typ() == Some(pgp::packet::SignatureType::CertRevocation)
-            });
+            let revocation_sig = u
+                .signatures
+                .iter()
+                .find(|sig| sig.typ() == Some(pgp::packet::SignatureType::CertRevocation));
             let revoked = revocation_sig.is_some();
-            let revocation_time = revocation_sig
-                .and_then(|sig| sig.created())
-                .map(|ts| {
-                    let st: std::time::SystemTime = ts.into();
-                    system_time_to_datetime(st)
-                });
+            let revocation_time = revocation_sig.and_then(|sig| sig.created()).map(|ts| {
+                let st: std::time::SystemTime = ts.into();
+                system_time_to_datetime(st)
+            });
 
             // Collect third-party certifications (exclude self-signatures)
-            let certifications = u.signatures.iter().filter_map(|sig| {
-                let sig_type = sig.typ()?;
-                let cert_type_str = match sig_type {
-                    pgp::packet::SignatureType::CertGeneric => "generic",
-                    pgp::packet::SignatureType::CertPersona => "persona",
-                    pgp::packet::SignatureType::CertCasual => "casual",
-                    pgp::packet::SignatureType::CertPositive => "positive",
-                    _ => return None,
-                };
+            let certifications = u
+                .signatures
+                .iter()
+                .filter_map(|sig| {
+                    let sig_type = sig.typ()?;
+                    let cert_type_str = match sig_type {
+                        pgp::packet::SignatureType::CertGeneric => "generic",
+                        pgp::packet::SignatureType::CertPersona => "persona",
+                        pgp::packet::SignatureType::CertCasual => "casual",
+                        pgp::packet::SignatureType::CertPositive => "positive",
+                        _ => return None,
+                    };
 
-                // Collect issuer info
-                let mut issuers: Vec<(String, String)> = Vec::new();
-                for fp in sig.issuer_fingerprint() {
-                    let fp_hex = hex::encode_upper(fp.as_bytes());
-                    // Skip self-signatures (issuer == primary key)
-                    if fp_hex == primary_fp {
+                    // Collect issuer info
+                    let mut issuers: Vec<(String, String)> = Vec::new();
+                    for fp in sig.issuer_fingerprint() {
+                        let fp_hex = hex::encode_upper(fp.as_bytes());
+                        // Skip self-signatures (issuer == primary key)
+                        if fp_hex == primary_fp {
+                            return None;
+                        }
+                        issuers.push(("fingerprint".to_string(), fp_hex));
+                    }
+                    for kid in sig.issuer_key_id() {
+                        issuers.push(("keyid".to_string(), hex::encode_upper(kid.as_ref())));
+                    }
+
+                    // If no issuers found, it might still be a self-sig without fingerprint subpacket
+                    if issuers.is_empty() {
                         return None;
                     }
-                    issuers.push(("fingerprint".to_string(), fp_hex));
-                }
-                for kid in sig.issuer_key_id() {
-                    issuers.push(("keyid".to_string(), hex::encode_upper(kid.as_ref())));
-                }
 
-                // If no issuers found, it might still be a self-sig without fingerprint subpacket
-                if issuers.is_empty() {
-                    return None;
-                }
+                    let creation_time = sig.created().map(|ts| {
+                        let st: std::time::SystemTime = ts.into();
+                        system_time_to_datetime(st)
+                    });
 
-                let creation_time = sig.created().map(|ts| {
-                    let st: std::time::SystemTime = ts.into();
-                    system_time_to_datetime(st)
-                });
-
-                Some(UIDCertification {
-                    certification_type: cert_type_str.to_string(),
-                    creation_time,
-                    issuers,
+                    Some(UIDCertification {
+                        certification_type: cert_type_str.to_string(),
+                        creation_time,
+                        issuers,
+                    })
                 })
-            }).collect();
+                .collect();
 
             UserIDInfo {
                 value,
@@ -166,22 +169,23 @@ fn extract_cert_info(
     let creation_time = system_time_to_datetime(public_key.primary_key.created_at().into());
 
     // Get expiration time from user signatures
-    let expiration_time = crate::internal::get_key_expiration(public_key).map(system_time_to_datetime);
+    let expiration_time =
+        crate::internal::get_key_expiration(public_key).map(system_time_to_datetime);
 
     // Check if primary can sign
     let can_primary_sign = crate::internal::can_primary_sign(public_key);
 
     // Check key revocation
-    let revocation_sig = public_key.details.revocation_signatures.iter().find(|sig| {
-        sig.typ() == Some(pgp::packet::SignatureType::KeyRevocation)
-    });
+    let revocation_sig = public_key
+        .details
+        .revocation_signatures
+        .iter()
+        .find(|sig| sig.typ() == Some(pgp::packet::SignatureType::KeyRevocation));
     let is_revoked = revocation_sig.is_some();
-    let revocation_time = revocation_sig
-        .and_then(|sig| sig.created())
-        .map(|ts| {
-            let st: std::time::SystemTime = ts.into();
-            system_time_to_datetime(st)
-        });
+    let revocation_time = revocation_sig.and_then(|sig| sig.created()).map(|ts| {
+        let st: std::time::SystemTime = ts.into();
+        system_time_to_datetime(st)
+    });
 
     // Get subkey info
     let subkeys = extract_subkey_info(public_key, allow_expired);

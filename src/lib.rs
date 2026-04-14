@@ -82,17 +82,17 @@ pub use pgp;
 
 // Modules
 mod error;
-mod types;
 mod internal;
+mod types;
 
-mod parse;
-mod encrypt;
 mod decrypt;
-mod sign;
-mod verify;
+mod encrypt;
 mod key;
 mod keyring;
+mod parse;
+mod sign;
 mod ssh;
+mod verify;
 
 #[cfg(any(feature = "network", feature = "dane"))]
 mod network;
@@ -107,133 +107,81 @@ pub use error::{Error, Result};
 
 // Re-export all public types
 pub use types::{
-    CipherSuite,
-    SubkeyFlags,
-    KeyType,
-    SubkeyInfo,
-    CertificateInfo,
-    KeyCipherDetails,
-    GeneratedKey,
-    CertificationType,
-    RsaPublicKey,
-    SigningPublicKey,
-    AvailableSubkey,
-    UserIDInfo,
-    UIDCertification,
+    AvailableSubkey, CertificateInfo, CertificationType, CipherSuite, GeneratedKey,
+    KeyCipherDetails, KeyType, RsaPublicKey, SigningPublicKey, SubkeyFlags, SubkeyInfo,
+    UIDCertification, UserIDInfo,
 };
 
 // Re-export parsing functions
 pub use parse::{
-    parse_cert_bytes,
+    get_all_available_subkeys, get_available_authentication_subkeys,
+    get_available_encryption_subkeys, get_available_signing_subkeys, get_key_cipher_details,
+    has_available_encryption_subkey, has_available_signing_subkey, parse_cert_bytes,
     parse_cert_file,
-    get_key_cipher_details,
-    get_available_encryption_subkeys,
-    get_available_signing_subkeys,
-    get_available_authentication_subkeys,
-    get_all_available_subkeys,
-    has_available_encryption_subkey,
-    has_available_signing_subkey,
 };
 
 // Re-export encryption functions
 pub use encrypt::{
-    encrypt_bytes,
-    encrypt_bytes_to_multiple,
-    encrypt_file,
-    encrypt_file_to_multiple,
-    encrypt_reader_to_file,
-    bytes_encrypted_for,
-    file_encrypted_for,
+    bytes_encrypted_for, encrypt_bytes, encrypt_bytes_to_multiple, encrypt_file,
+    encrypt_file_to_multiple, encrypt_reader_to_file, file_encrypted_for,
 };
 
 // Re-export decryption functions
-pub use decrypt::{
-    decrypt_bytes,
-    decrypt_bytes_legacy,
-    decrypt_file,
-    decrypt_reader_to_file,
-};
+pub use decrypt::{decrypt_bytes, decrypt_bytes_legacy, decrypt_file, decrypt_reader_to_file};
 
 // Re-export signing functions
 pub use sign::{
-    sign_bytes,
-    sign_bytes_cleartext,
-    sign_bytes_detached,
-    sign_file,
-    sign_file_cleartext,
+    sign_bytes, sign_bytes_cleartext, sign_bytes_detached, sign_file, sign_file_cleartext,
     sign_file_detached,
 };
 
 // Re-export verification functions
 pub use verify::{
-    verify_bytes,
-    verify_and_extract_bytes,
-    verify_bytes_detached,
-    verify_file,
-    verify_and_extract_file,
-    verify_file_detached,
+    verify_and_extract_bytes, verify_and_extract_file, verify_bytes, verify_bytes_detached,
+    verify_file, verify_file_detached,
 };
 
 // Re-export key generation and management functions
 pub use key::{
-    create_key,
-    create_key_simple,
-    update_subkeys_expiry,
-    update_primary_expiry,
-    add_uid,
-    revoke_uid,
-    revoke_key,
-    update_password,
-    certify_key,
-    get_pub_key,
+    add_uid, certify_key, create_key, create_key_simple, get_pub_key, revoke_key, revoke_uid,
+    update_password, update_primary_expiry, update_subkeys_expiry,
 };
 
 // Re-export keyring functions
 pub use keyring::{
+    export_keyring_armored, export_keyring_file, merge_keys, parse_keyring_bytes,
     parse_keyring_file,
-    parse_keyring_bytes,
-    export_keyring_file,
-    export_keyring_armored,
-    merge_keys,
 };
 
 // Re-export SSH functions
-pub use ssh::{
-    get_ssh_pubkey,
-    get_signing_pubkey,
-    ssh_sign_raw,
-    SshHashAlgorithm,
-    SshSignResult,
-};
+pub use ssh::{get_signing_pubkey, get_ssh_pubkey, ssh_sign_raw, SshHashAlgorithm, SshSignResult};
 
 // Re-export keystore types when feature is enabled
 #[cfg(feature = "keystore")]
 pub use keystore::{
-    KeyStore,
+    decrypt_bytes_from_store,
+    decrypt_file_from_store,
     // Bytes-based store operations
     encrypt_bytes_from_store,
     encrypt_bytes_to_multiple_from_store,
-    decrypt_bytes_from_store,
-    sign_bytes_from_store,
-    sign_bytes_detached_from_store,
-    verify_bytes_from_store,
-    verify_bytes_detached_from_store,
     // File-based store operations
     encrypt_file_from_store,
     encrypt_file_to_multiple_from_store,
-    decrypt_file_from_store,
-    sign_file_from_store,
+    sign_bytes_detached_from_store,
+    sign_bytes_from_store,
     sign_file_detached_from_store,
-    verify_file_from_store,
+    sign_file_from_store,
+    verify_bytes_detached_from_store,
+    verify_bytes_from_store,
     verify_file_detached_from_store,
+    verify_file_from_store,
+    KeyStore,
 };
 
 // Re-export network functions when feature is enabled
 #[cfg(feature = "network")]
 pub use network::{
-    fetch_key_by_email,
-    fetch_key_by_email_from_keyserver,
-    fetch_key_by_fingerprint,
+    fetch_key_by_email, fetch_key_by_email_from_keyserver, fetch_key_by_fingerprint,
     fetch_key_by_keyid,
 };
 

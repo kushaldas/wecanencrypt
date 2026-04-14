@@ -2,7 +2,7 @@
 
 use std::io::Cursor;
 
-use pgp::composed::{SignedSecretKey, SignedPublicKey, Deserializable};
+use pgp::composed::{Deserializable, SignedPublicKey, SignedSecretKey};
 use pgp::ser::Serialize;
 use pgp::types::KeyDetails;
 
@@ -19,8 +19,7 @@ pub(crate) fn parse_secret_key(data: &[u8]) -> Result<SignedSecretKey> {
         Err(_) => {
             // Try binary
             let cursor = Cursor::new(data);
-            SignedSecretKey::from_bytes(cursor)
-                .map_err(|e| Error::Parse(e.to_string()))
+            SignedSecretKey::from_bytes(cursor).map_err(|e| Error::Parse(e.to_string()))
         }
     }
 }

@@ -6,8 +6,8 @@
 //! (e.g. `"0006:00000001"` for a Yubico card). If `None`, the first available card is used.
 
 use card_backend_pcsc::PcscBackend;
+use openpgp_card::ocard::{data::UserInteractionFlag, OpenPGP};
 use openpgp_card::Card;
-use openpgp_card::ocard::{OpenPGP, data::UserInteractionFlag};
 use secrecy::{SecretString, SecretVec};
 
 use super::types::{CardError, CardInfo, CardKeyMatch, CardSummary, KeySlot, SlotMatch, TouchMode};
@@ -76,8 +76,7 @@ pub fn list_all_cards() -> Result<Vec<CardSummary>> {
             let ident = aid.ident();
             let manufacturer_name = aid.manufacturer_name().to_string();
             let serial_number = format!("{:08X}", aid.serial());
-            let cardholder_name = tx.cardholder_name().ok()
-                .filter(|n| !n.is_empty());
+            let cardholder_name = tx.cardholder_name().ok().filter(|n| !n.is_empty());
 
             result.push(CardSummary {
                 ident,
@@ -100,7 +99,8 @@ pub(crate) fn get_card_backend(ident: Option<&str>) -> Result<PcscBackend> {
         None => {
             let mut cards = PcscBackend::cards(None)
                 .map_err(|e| Error::Card(CardError::CommunicationError(e.to_string())))?;
-            cards.next()
+            cards
+                .next()
                 .ok_or(Error::Card(CardError::NotConnected))?
                 .map_err(|e| Error::Card(CardError::CommunicationError(e.to_string())))
         }
@@ -162,8 +162,9 @@ pub(crate) fn get_card_backend(ident: Option<&str>) -> Result<PcscBackend> {
                         if matches {
                             // Drop Card so the backend is free, re-open one more time
                             drop(c2);
-                            let cards3 = PcscBackend::cards(None)
-                                .map_err(|e| Error::Card(CardError::CommunicationError(e.to_string())))?;
+                            let cards3 = PcscBackend::cards(None).map_err(|e| {
+                                Error::Card(CardError::CommunicationError(e.to_string()))
+                            })?;
                             if let Some(b3) = cards3.flatten().next() {
                                 return Ok(b3);
                             }
@@ -172,17 +173,21 @@ pub(crate) fn get_card_backend(ident: Option<&str>) -> Result<PcscBackend> {
                     return Err(Error::Card(CardError::NotConnected));
                 }
             }
-            Err(Error::Card(CardError::CommunicationError(
-                format!("Card with ident '{}' not found", target_ident)
-            )))
+            Err(Error::Card(CardError::CommunicationError(format!(
+                "Card with ident '{}' not found",
+                target_ident
+            ))))
         }
     }
 }
 
 /// Convert a PIN byte slice to SecretString.
 fn pin_to_secret(pin: &[u8]) -> Result<SecretString> {
-    let pin_str = std::str::from_utf8(pin)
-        .map_err(|_| Error::Card(CardError::InvalidData("PIN must be valid UTF-8".to_string())))?;
+    let pin_str = std::str::from_utf8(pin).map_err(|_| {
+        Error::Card(CardError::InvalidData(
+            "PIN must be valid UTF-8".to_string(),
+        ))
+    })?;
     Ok(SecretString::new(pin_str.to_string()))
 }
 
@@ -206,10 +211,10 @@ fn pin_to_secret(pin: &[u8]) -> Result<SecretString> {
 /// ```
 pub fn get_card_details(ident: Option<&str>) -> Result<CardInfo> {
     let backend = get_card_backend(ident)?;
-    let mut card = Card::new(backend)
-        .map_err(|e| Error::Card(CardError::from(e)))?;
+    let mut card = Card::new(backend).map_err(|e| Error::Card(CardError::from(e)))?;
 
-    let mut tx = card.transaction()
+    let mut tx = card
+        .transaction()
         .map_err(|e| Error::Card(CardError::from(e)))?;
 
     let mut info = CardInfo::default();
@@ -274,13 +279,14 @@ pub fn get_card_details(ident: Option<&str>) -> Result<CardInfo> {
 /// ```
 pub fn get_card_version(ident: Option<&str>) -> Result<String> {
     let backend = get_card_backend(ident)?;
-    let mut card = Card::new(backend)
+    let mut card = Card::new(backend).map_err(|e| Error::Card(CardError::from(e)))?;
+
+    let tx = card
+        .transaction()
         .map_err(|e| Error::Card(CardError::from(e)))?;
 
-    let tx = card.transaction()
-        .map_err(|e| Error::Card(CardError::from(e)))?;
-
-    let aid = tx.application_identifier()
+    let aid = tx
+        .application_identifier()
         .map_err(|e| Error::Card(CardError::from(e)))?;
 
     let version = aid.version();
@@ -309,13 +315,14 @@ pub fn get_card_version(ident: Option<&str>) -> Result<String> {
 /// ```
 pub fn get_card_serial(ident: Option<&str>) -> Result<String> {
     let backend = get_card_backend(ident)?;
-    let mut card = Card::new(backend)
+    let mut card = Card::new(backend).map_err(|e| Error::Card(CardError::from(e)))?;
+
+    let tx = card
+        .transaction()
         .map_err(|e| Error::Card(CardError::from(e)))?;
 
-    let tx = card.transaction()
-        .map_err(|e| Error::Card(CardError::from(e)))?;
-
-    let aid = tx.application_identifier()
+    let aid = tx
+        .application_identifier()
         .map_err(|e| Error::Card(CardError::from(e)))?;
 
     Ok(format!("{:08X}", aid.serial()))
@@ -350,10 +357,10 @@ pub fn get_card_serial(ident: Option<&str>) -> Result<String> {
 /// ```
 pub fn verify_user_pin(pin: &[u8], ident: Option<&str>) -> Result<bool> {
     let backend = get_card_backend(ident)?;
-    let mut card = Card::new(backend)
-        .map_err(|e| Error::Card(CardError::from(e)))?;
+    let mut card = Card::new(backend).map_err(|e| Error::Card(CardError::from(e)))?;
 
-    let mut tx = card.transaction()
+    let mut tx = card
+        .transaction()
         .map_err(|e| Error::Card(CardError::from(e)))?;
 
     let secret_pin = pin_to_secret(pin)?;
@@ -392,10 +399,10 @@ pub fn verify_user_pin(pin: &[u8], ident: Option<&str>) -> Result<bool> {
 /// ```
 pub fn verify_admin_pin(pin: &[u8], ident: Option<&str>) -> Result<bool> {
     let backend = get_card_backend(ident)?;
-    let mut card = Card::new(backend)
-        .map_err(|e| Error::Card(CardError::from(e)))?;
+    let mut card = Card::new(backend).map_err(|e| Error::Card(CardError::from(e)))?;
 
-    let mut tx = card.transaction()
+    let mut tx = card
+        .transaction()
         .map_err(|e| Error::Card(CardError::from(e)))?;
 
     let secret_pin = pin_to_secret(pin)?;
@@ -426,13 +433,14 @@ pub fn verify_admin_pin(pin: &[u8], ident: Option<&str>) -> Result<bool> {
 /// ```
 pub fn get_pin_retry_counters(ident: Option<&str>) -> Result<(u8, u8, u8)> {
     let backend = get_card_backend(ident)?;
-    let mut card = Card::new(backend)
+    let mut card = Card::new(backend).map_err(|e| Error::Card(CardError::from(e)))?;
+
+    let mut tx = card
+        .transaction()
         .map_err(|e| Error::Card(CardError::from(e)))?;
 
-    let mut tx = card.transaction()
-        .map_err(|e| Error::Card(CardError::from(e)))?;
-
-    let status = tx.pw_status_bytes()
+    let status = tx
+        .pw_status_bytes()
         .map_err(|e| Error::Card(CardError::from(e)))?;
 
     Ok((
@@ -461,10 +469,10 @@ pub fn get_pin_retry_counters(ident: Option<&str>) -> Result<(u8, u8, u8)> {
 /// ```
 pub fn reset_card(ident: Option<&str>) -> Result<()> {
     let backend = get_card_backend(ident)?;
-    let mut card = Card::new(backend)
-        .map_err(|e| Error::Card(CardError::from(e)))?;
+    let mut card = Card::new(backend).map_err(|e| Error::Card(CardError::from(e)))?;
 
-    let mut tx = card.transaction()
+    let mut tx = card
+        .transaction()
         .map_err(|e| Error::Card(CardError::from(e)))?;
 
     tx.factory_reset()
@@ -490,10 +498,10 @@ pub fn reset_card(ident: Option<&str>) -> Result<()> {
 /// ```
 pub fn change_user_pin(old_pin: &[u8], new_pin: &[u8], ident: Option<&str>) -> Result<()> {
     let backend = get_card_backend(ident)?;
-    let mut card = Card::new(backend)
-        .map_err(|e| Error::Card(CardError::from(e)))?;
+    let mut card = Card::new(backend).map_err(|e| Error::Card(CardError::from(e)))?;
 
-    let mut tx = card.transaction()
+    let mut tx = card
+        .transaction()
         .map_err(|e| Error::Card(CardError::from(e)))?;
 
     let old_secret = pin_to_secret(old_pin)?;
@@ -521,10 +529,10 @@ pub fn change_user_pin(old_pin: &[u8], new_pin: &[u8], ident: Option<&str>) -> R
 /// ```
 pub fn change_admin_pin(old_pin: &[u8], new_pin: &[u8], ident: Option<&str>) -> Result<()> {
     let backend = get_card_backend(ident)?;
-    let mut card = Card::new(backend)
-        .map_err(|e| Error::Card(CardError::from(e)))?;
+    let mut card = Card::new(backend).map_err(|e| Error::Card(CardError::from(e)))?;
 
-    let mut tx = card.transaction()
+    let mut tx = card
+        .transaction()
         .map_err(|e| Error::Card(CardError::from(e)))?;
 
     let old_secret = pin_to_secret(old_pin)?;
@@ -556,12 +564,14 @@ pub fn change_admin_pin(old_pin: &[u8], new_pin: &[u8], ident: Option<&str>) -> 
 /// let (sig, enc, auth) = get_touch_modes(None).unwrap();
 /// println!("Signature: {:?}, Encryption: {:?}, Auth: {:?}", sig, enc, auth);
 /// ```
-pub fn get_touch_modes(ident: Option<&str>) -> Result<(Option<TouchMode>, Option<TouchMode>, Option<TouchMode>)> {
+pub fn get_touch_modes(
+    ident: Option<&str>,
+) -> Result<(Option<TouchMode>, Option<TouchMode>, Option<TouchMode>)> {
     let backend = get_card_backend(ident)?;
-    let mut card = Card::new(backend)
-        .map_err(|e| Error::Card(CardError::from(e)))?;
+    let mut card = Card::new(backend).map_err(|e| Error::Card(CardError::from(e)))?;
 
-    let mut tx = card.transaction()
+    let mut tx = card
+        .transaction()
         .map_err(|e| Error::Card(CardError::from(e)))?;
 
     let convert = |policy: openpgp_card::ocard::data::TouchPolicy| -> TouchMode {
@@ -575,16 +585,22 @@ pub fn get_touch_modes(ident: Option<&str>) -> Result<(Option<TouchMode>, Option
         }
     };
 
-    let sig = tx.user_interaction_flag(openpgp_card::ocard::KeyType::Signing)
-        .ok().flatten()
+    let sig = tx
+        .user_interaction_flag(openpgp_card::ocard::KeyType::Signing)
+        .ok()
+        .flatten()
         .map(|uif| convert(uif.touch_policy()));
 
-    let enc = tx.user_interaction_flag(openpgp_card::ocard::KeyType::Decryption)
-        .ok().flatten()
+    let enc = tx
+        .user_interaction_flag(openpgp_card::ocard::KeyType::Decryption)
+        .ok()
+        .flatten()
         .map(|uif| convert(uif.touch_policy()));
 
-    let auth = tx.user_interaction_flag(openpgp_card::ocard::KeyType::Authentication)
-        .ok().flatten()
+    let auth = tx
+        .user_interaction_flag(openpgp_card::ocard::KeyType::Authentication)
+        .ok()
+        .flatten()
         .map(|uif| convert(uif.touch_policy()));
 
     Ok((sig, enc, auth))
@@ -619,12 +635,18 @@ pub fn get_touch_modes(ident: Option<&str>) -> Result<(Option<TouchMode>, Option
 /// // Permanently require touch for decryption
 /// set_touch_mode(KeySlot::Encryption, TouchMode::Fixed, b"12345678", None).unwrap();
 /// ```
-pub fn set_touch_mode(slot: KeySlot, mode: TouchMode, admin_pin: &[u8], ident: Option<&str>) -> Result<()> {
+pub fn set_touch_mode(
+    slot: KeySlot,
+    mode: TouchMode,
+    admin_pin: &[u8],
+    ident: Option<&str>,
+) -> Result<()> {
     let backend = get_card_backend(ident)?;
 
     let mut opgp = OpenPGP::new(backend)
         .map_err(|e: openpgp_card::Error| Error::Card(CardError::CardError(e.to_string())))?;
-    let mut tx = opgp.transaction()
+    let mut tx = opgp
+        .transaction()
         .map_err(|e: openpgp_card::Error| Error::Card(CardError::CardError(e.to_string())))?;
 
     let secret_pin = SecretVec::new(admin_pin.to_vec());
@@ -639,21 +661,25 @@ pub fn set_touch_mode(slot: KeySlot, mode: TouchMode, admin_pin: &[u8], ident: O
         TouchMode::CachedFixed => 0x04,
     };
     let uif_bytes = vec![policy_byte, 0x20];
-    let uif = UserInteractionFlag::try_from(uif_bytes)
-        .map_err(|e: openpgp_card::Error| Error::Card(CardError::CardError(format!("Failed to create UIF: {}", e))))?;
+    let uif = UserInteractionFlag::try_from(uif_bytes).map_err(|e: openpgp_card::Error| {
+        Error::Card(CardError::CardError(format!("Failed to create UIF: {}", e)))
+    })?;
 
     match slot {
         KeySlot::Signature => {
-            tx.set_uif_pso_cds(&uif)
-                .map_err(|e: openpgp_card::Error| Error::Card(CardError::CardError(e.to_string())))?;
+            tx.set_uif_pso_cds(&uif).map_err(|e: openpgp_card::Error| {
+                Error::Card(CardError::CardError(e.to_string()))
+            })?;
         }
         KeySlot::Encryption => {
-            tx.set_uif_pso_dec(&uif)
-                .map_err(|e: openpgp_card::Error| Error::Card(CardError::CardError(e.to_string())))?;
+            tx.set_uif_pso_dec(&uif).map_err(|e: openpgp_card::Error| {
+                Error::Card(CardError::CardError(e.to_string()))
+            })?;
         }
         KeySlot::Authentication => {
-            tx.set_uif_pso_aut(&uif)
-                .map_err(|e: openpgp_card::Error| Error::Card(CardError::CardError(e.to_string())))?;
+            tx.set_uif_pso_aut(&uif).map_err(|e: openpgp_card::Error| {
+                Error::Card(CardError::CardError(e.to_string()))
+            })?;
         }
     }
 
@@ -685,7 +711,8 @@ pub fn set_cardholder_name(name: &str, admin_pin: &[u8], ident: Option<&str>) ->
     let backend = get_card_backend(ident)?;
     let mut opgp = OpenPGP::new(backend)
         .map_err(|e: openpgp_card::Error| Error::Card(CardError::CardError(e.to_string())))?;
-    let mut tx = opgp.transaction()
+    let mut tx = opgp
+        .transaction()
         .map_err(|e: openpgp_card::Error| Error::Card(CardError::CardError(e.to_string())))?;
 
     let secret_pin = SecretVec::new(admin_pin.to_vec());
@@ -720,7 +747,8 @@ pub fn set_public_key_url(url: &str, admin_pin: &[u8], ident: Option<&str>) -> R
     let backend = get_card_backend(ident)?;
     let mut opgp = OpenPGP::new(backend)
         .map_err(|e: openpgp_card::Error| Error::Card(CardError::CardError(e.to_string())))?;
-    let mut tx = opgp.transaction()
+    let mut tx = opgp
+        .transaction()
         .map_err(|e: openpgp_card::Error| Error::Card(CardError::CardError(e.to_string())))?;
 
     let secret_pin = SecretVec::new(admin_pin.to_vec());

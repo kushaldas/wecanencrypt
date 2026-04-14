@@ -16,8 +16,8 @@ use std::io::{self, Write};
 
 use chrono::{NaiveDate, Utc};
 use wecanencrypt::card::{
-    is_card_connected, verify_user_pin, update_primary_expiry_on_card,
-    update_subkeys_expiry_on_card,
+    is_card_connected, update_primary_expiry_on_card, update_subkeys_expiry_on_card,
+    verify_user_pin,
 };
 use wecanencrypt::parse_cert_bytes;
 
@@ -54,7 +54,10 @@ fn main() {
     let public_key = match fs::read(key_path) {
         Ok(data) => data,
         Err(e) => {
-            eprintln!("Error: Failed to read public key file '{}': {}", key_path, e);
+            eprintln!(
+                "Error: Failed to read public key file '{}': {}",
+                key_path, e
+            );
             std::process::exit(1);
         }
     };
@@ -134,19 +137,24 @@ fn main() {
 
     // Update primary key expiry
     println!("Updating primary key expiry. Touch the YubiKey when flashing...");
-    let updated_with_primary = match update_primary_expiry_on_card(&public_key, expiry_seconds, pin_bytes) {
-        Ok(data) => {
-            println!("Primary key expiry updated.");
-            data
-        }
-        Err(e) => {
-            eprintln!("Error: Failed to update primary key expiry: {}", e);
-            std::process::exit(1);
-        }
-    };
+    let updated_with_primary =
+        match update_primary_expiry_on_card(&public_key, expiry_seconds, pin_bytes) {
+            Ok(data) => {
+                println!("Primary key expiry updated.");
+                data
+            }
+            Err(e) => {
+                eprintln!("Error: Failed to update primary key expiry: {}", e);
+                std::process::exit(1);
+            }
+        };
 
     // Get subkey fingerprints
-    let subkey_fps: Vec<&str> = info.subkeys.iter().map(|s| s.fingerprint.as_str()).collect();
+    let subkey_fps: Vec<&str> = info
+        .subkeys
+        .iter()
+        .map(|s| s.fingerprint.as_str())
+        .collect();
 
     // Update subkey expiry
     if !subkey_fps.is_empty() {

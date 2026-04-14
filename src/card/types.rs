@@ -158,10 +158,11 @@ impl From<openpgp_card::Error> for CardError {
             CardError::PinBlocked
         } else if msg.contains("63C") {
             // Try to extract retry count from error message
-            CardError::PinIncorrect { retries_remaining: 3 }
+            CardError::PinIncorrect {
+                retries_remaining: 3,
+            }
         } else {
             CardError::CardError(msg)
         }
     }
 }
-

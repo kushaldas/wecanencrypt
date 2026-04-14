@@ -104,8 +104,10 @@ pub fn create_key(
     let creation_timestamp = match creation_time {
         Some(dt) => {
             let systime: SystemTime = dt.into();
-            Some(Timestamp::try_from(systime)
-                .map_err(|e| Error::InvalidInput(format!("Invalid creation time: {}", e)))?)
+            Some(
+                Timestamp::try_from(systime)
+                    .map_err(|e| Error::InvalidInput(format!("Invalid creation time: {}", e)))?,
+            )
         }
         None => None,
     };
@@ -129,7 +131,11 @@ pub fn create_key(
             enc_builder.passphrase(Some(password.to_string()));
         }
 
-        subkeys.push(enc_builder.build().map_err(|e| Error::Crypto(e.to_string()))?);
+        subkeys.push(
+            enc_builder
+                .build()
+                .map_err(|e| Error::Crypto(e.to_string()))?,
+        );
     }
 
     if which_keys.signing {
@@ -148,7 +154,11 @@ pub fn create_key(
             sign_builder.passphrase(Some(password.to_string()));
         }
 
-        subkeys.push(sign_builder.build().map_err(|e| Error::Crypto(e.to_string()))?);
+        subkeys.push(
+            sign_builder
+                .build()
+                .map_err(|e| Error::Crypto(e.to_string()))?,
+        );
     }
 
     if which_keys.authentication {
@@ -167,7 +177,11 @@ pub fn create_key(
             auth_builder.passphrase(Some(password.to_string()));
         }
 
-        subkeys.push(auth_builder.build().map_err(|e| Error::Crypto(e.to_string()))?);
+        subkeys.push(
+            auth_builder
+                .build()
+                .map_err(|e| Error::Crypto(e.to_string()))?,
+        );
     }
 
     // Build primary key params
@@ -196,7 +210,9 @@ pub fn create_key(
     key_params.subkeys(subkeys);
 
     // Generate the key
-    let secret_key_params = key_params.build().map_err(|e| Error::Crypto(e.to_string()))?;
+    let secret_key_params = key_params
+        .build()
+        .map_err(|e| Error::Crypto(e.to_string()))?;
 
     let secret_key = secret_key_params
         .generate(&mut rng)
@@ -212,24 +228,30 @@ pub fn create_key(
     // Apply primary key expiration if requested
     if can_primary_expire {
         if let Some(exp_time) = expiration_time {
-            final_secret_key_bytes = Zeroizing::new(
-                update_primary_expiry(&final_secret_key_bytes, exp_time, password)?);
+            final_secret_key_bytes = Zeroizing::new(update_primary_expiry(
+                &final_secret_key_bytes,
+                exp_time,
+                password,
+            )?);
         }
     }
 
     // Apply subkey expiration if requested
     if let Some(subkey_exp_time) = subkeys_expiration {
         let current_info = crate::parse::parse_cert_bytes(&final_secret_key_bytes, true)?;
-        let subkey_fps: Vec<String> = current_info.subkeys.iter()
+        let subkey_fps: Vec<String> = current_info
+            .subkeys
+            .iter()
             .map(|s| s.fingerprint.clone())
             .collect();
-        let subkey_fp_refs: Vec<&str> = subkey_fps.iter()
-            .map(|s| s.as_str())
-            .collect();
+        let subkey_fp_refs: Vec<&str> = subkey_fps.iter().map(|s| s.as_str()).collect();
         if !subkey_fp_refs.is_empty() {
-            final_secret_key_bytes = Zeroizing::new(
-                update_subkeys_expiry(
-                    &final_secret_key_bytes, &subkey_fp_refs, subkey_exp_time, password)?);
+            final_secret_key_bytes = Zeroizing::new(update_subkeys_expiry(
+                &final_secret_key_bytes,
+                &subkey_fp_refs,
+                subkey_exp_time,
+                password,
+            )?);
         }
     }
 
@@ -394,7 +416,9 @@ pub fn update_subkeys_expiry(
     let mut new_public_subkeys = Vec::new();
     for subkey in &secret_key.public_subkeys {
         let subkey_fp = fingerprint_to_hex(&subkey.key);
-        let should_update = normalized_fps.iter().any(|fp| subkey_fp.contains(fp) || fp.contains(&subkey_fp));
+        let should_update = normalized_fps
+            .iter()
+            .any(|fp| subkey_fp.contains(fp) || fp.contains(&subkey_fp));
 
         if should_update {
             // Calculate duration from subkey creation to expiry
@@ -476,7 +500,9 @@ pub fn update_subkeys_expiry(
     let mut new_secret_subkeys = Vec::new();
     for subkey in &secret_key.secret_subkeys {
         let subkey_fp = fingerprint_to_hex(&subkey.key);
-        let should_update = normalized_fps.iter().any(|fp| subkey_fp.contains(fp) || fp.contains(&subkey_fp));
+        let should_update = normalized_fps
+            .iter()
+            .any(|fp| subkey_fp.contains(fp) || fp.contains(&subkey_fp));
 
         if should_update {
             // Calculate duration from subkey creation to expiry
@@ -638,9 +664,9 @@ pub fn update_primary_expiry(
         // Only update direct key signatures (0x1f), not revocations
         if existing_sig.typ() == Some(SignatureType::Key) {
             // Preserve existing subpackets, updating only creation time and expiry
-            let existing_config = existing_sig
-                .config()
-                .ok_or_else(|| Error::Crypto("Cannot read existing direct signature config".to_string()))?;
+            let existing_config = existing_sig.config().ok_or_else(|| {
+                Error::Crypto("Cannot read existing direct signature config".to_string())
+            })?;
 
             let mut new_hashed_subpackets: Vec<Subpacket> = Vec::new();
             let mut has_creation_time = false;
@@ -650,8 +676,10 @@ pub fn update_primary_expiry(
                 match &subpacket.data {
                     SubpacketData::SignatureCreationTime(_) => {
                         new_hashed_subpackets.push(
-                            Subpacket::regular(SubpacketData::SignatureCreationTime(Timestamp::now()))
-                                .map_err(|e| Error::Crypto(e.to_string()))?,
+                            Subpacket::regular(SubpacketData::SignatureCreationTime(
+                                Timestamp::now(),
+                            ))
+                            .map_err(|e| Error::Crypto(e.to_string()))?,
                         );
                         has_creation_time = true;
                     }
@@ -682,18 +710,21 @@ pub fn update_primary_expiry(
                 );
             }
 
-            let new_unhashed_subpackets: Vec<Subpacket> = existing_config
-                .unhashed_subpackets()
-                .cloned()
-                .collect();
+            let new_unhashed_subpackets: Vec<Subpacket> =
+                existing_config.unhashed_subpackets().cloned().collect();
 
-            let mut config = SignatureConfig::from_key(&mut rng, &secret_key.primary_key, SignatureType::Key)
-                .map_err(|e| Error::Crypto(e.to_string()))?;
+            let mut config =
+                SignatureConfig::from_key(&mut rng, &secret_key.primary_key, SignatureType::Key)
+                    .map_err(|e| Error::Crypto(e.to_string()))?;
             config.hashed_subpackets = new_hashed_subpackets;
             config.unhashed_subpackets = new_unhashed_subpackets;
 
             let sig = config
-                .sign_key(&secret_key.primary_key, &password, &secret_key.primary_key.public_key())
+                .sign_key(
+                    &secret_key.primary_key,
+                    &password,
+                    &secret_key.primary_key.public_key(),
+                )
                 .map_err(|e| Error::Crypto(e.to_string()))?;
 
             new_direct_signatures.push(sig);
@@ -729,8 +760,12 @@ pub fn update_primary_expiry(
         }
 
         // Create the signature config
-        let mut config = SignatureConfig::from_key(&mut rng, &secret_key.primary_key, SignatureType::CertPositive)
-            .map_err(|e| Error::Crypto(e.to_string()))?;
+        let mut config = SignatureConfig::from_key(
+            &mut rng,
+            &secret_key.primary_key,
+            SignatureType::CertPositive,
+        )
+        .map_err(|e| Error::Crypto(e.to_string()))?;
 
         config.hashed_subpackets = hashed_subpackets;
 
@@ -886,14 +921,20 @@ pub fn revoke_uid(cert_data: &[u8], uid: &str, password: &str) -> Result<Vec<u8>
         .ok_or_else(|| Error::InvalidInput(format!("User ID '{}' not found in key", uid)))?;
 
     // Create a revocation signature for this user ID
-    let mut config = SignatureConfig::from_key(&mut rng, &secret_key.primary_key, SignatureType::CertRevocation)
-        .map_err(|e| Error::Crypto(e.to_string()))?;
+    let mut config = SignatureConfig::from_key(
+        &mut rng,
+        &secret_key.primary_key,
+        SignatureType::CertRevocation,
+    )
+    .map_err(|e| Error::Crypto(e.to_string()))?;
 
     config.hashed_subpackets = vec![
         Subpacket::regular(SubpacketData::SignatureCreationTime(Timestamp::now()))
             .map_err(|e| Error::Crypto(e.to_string()))?,
-        Subpacket::regular(SubpacketData::IssuerFingerprint(secret_key.primary_key.fingerprint()))
-            .map_err(|e| Error::Crypto(e.to_string()))?,
+        Subpacket::regular(SubpacketData::IssuerFingerprint(
+            secret_key.primary_key.fingerprint(),
+        ))
+        .map_err(|e| Error::Crypto(e.to_string()))?,
     ];
 
     if secret_key.primary_key.version() <= KeyVersion::V4 {
@@ -962,14 +1003,20 @@ pub fn revoke_key(cert_data: &[u8], password: &str) -> Result<Vec<u8>> {
     let password = Password::from(password);
 
     // Create a key revocation signature
-    let mut config = SignatureConfig::from_key(&mut rng, &secret_key.primary_key, SignatureType::KeyRevocation)
-        .map_err(|e| Error::Crypto(e.to_string()))?;
+    let mut config = SignatureConfig::from_key(
+        &mut rng,
+        &secret_key.primary_key,
+        SignatureType::KeyRevocation,
+    )
+    .map_err(|e| Error::Crypto(e.to_string()))?;
 
     config.hashed_subpackets = vec![
         Subpacket::regular(SubpacketData::SignatureCreationTime(Timestamp::now()))
             .map_err(|e| Error::Crypto(e.to_string()))?,
-        Subpacket::regular(SubpacketData::IssuerFingerprint(secret_key.primary_key.fingerprint()))
-            .map_err(|e| Error::Crypto(e.to_string()))?,
+        Subpacket::regular(SubpacketData::IssuerFingerprint(
+            secret_key.primary_key.fingerprint(),
+        ))
+        .map_err(|e| Error::Crypto(e.to_string()))?,
     ];
 
     if secret_key.primary_key.version() <= KeyVersion::V4 {
@@ -980,7 +1027,11 @@ pub fn revoke_key(cert_data: &[u8], password: &str) -> Result<Vec<u8>> {
     }
 
     let revocation_sig = config
-        .sign_key(&secret_key.primary_key, &password, secret_key.primary_key.public_key())
+        .sign_key(
+            &secret_key.primary_key,
+            &password,
+            secret_key.primary_key.public_key(),
+        )
         .map_err(|e| Error::Crypto(e.to_string()))?;
 
     // Add the revocation signature to the key's revocation signatures

@@ -52,21 +52,22 @@
 #[cfg(feature = "card")]
 mod card_tests {
     use std::fs;
-    use wecanencrypt::card::*;
     use wecanencrypt::card::upload::{
-        upload_key_to_card,
-        upload_primary_key_to_card,
-        upload_subkey_by_fingerprint,
-        CardKeySlot,
+        upload_key_to_card, upload_primary_key_to_card, upload_subkey_by_fingerprint, CardKeySlot,
     };
+    use wecanencrypt::card::*;
     use wecanencrypt::{encrypt_bytes, verify_bytes_detached};
 
     // ==================== Test Key Paths ====================
 
-    const CV25519_PUBLIC_KEY: &str = "tests/files/card_keys/5286C32E7C71E14C4C82F9AE0B207108925CB162.pub";
-    const CV25519_SECRET_KEY: &str = "tests/files/card_keys/5286C32E7C71E14C4C82F9AE0B207108925CB162.sec";
-    const RSA_PUBLIC_KEY: &str = "tests/files/card_keys/2184DF8AF2CAFEB16357FE43E6F848F1DDC66C12.pub";
-    const RSA_SECRET_KEY: &str = "tests/files/card_keys/2184DF8AF2CAFEB16357FE43E6F848F1DDC66C12.sec";
+    const CV25519_PUBLIC_KEY: &str =
+        "tests/files/card_keys/5286C32E7C71E14C4C82F9AE0B207108925CB162.pub";
+    const CV25519_SECRET_KEY: &str =
+        "tests/files/card_keys/5286C32E7C71E14C4C82F9AE0B207108925CB162.sec";
+    const RSA_PUBLIC_KEY: &str =
+        "tests/files/card_keys/2184DF8AF2CAFEB16357FE43E6F848F1DDC66C12.pub";
+    const RSA_SECRET_KEY: &str =
+        "tests/files/card_keys/2184DF8AF2CAFEB16357FE43E6F848F1DDC66C12.sec";
 
     // NIST P-256 keys (from store directory, same password)
     const NISTP256_PUBLIC_KEY: &str = "tests/files/store/nistp256_public.asc";
@@ -172,7 +173,10 @@ mod card_tests {
     fn test_is_card_connected() {
         let connected = is_card_connected();
         println!("Card connected: {}", connected);
-        assert!(connected, "No smart card detected. Please insert a YubiKey.");
+        assert!(
+            connected,
+            "No smart card detected. Please insert a YubiKey."
+        );
     }
 
     #[test]
@@ -192,7 +196,10 @@ mod card_tests {
         println!("  PIN retries: {}", info.pin_retry_counter);
         println!("  Admin PIN retries: {}", info.admin_pin_retry_counter);
 
-        assert!(!info.serial_number.is_empty(), "Serial number should not be empty");
+        assert!(
+            !info.serial_number.is_empty(),
+            "Serial number should not be empty"
+        );
     }
 
     #[test]
@@ -215,7 +222,8 @@ mod card_tests {
     #[test]
     #[ignore = "requires physical smart card"]
     fn test_get_pin_retry_counters() {
-        let (user, reset, admin) = get_pin_retry_counters(None).expect("Failed to get PIN counters");
+        let (user, reset, admin) =
+            get_pin_retry_counters(None).expect("Failed to get PIN counters");
 
         println!("PIN retry counters:");
         println!("  User PIN: {}", user);
@@ -232,7 +240,11 @@ mod card_tests {
     #[ignore = "requires physical smart card with default PIN"]
     fn test_verify_user_pin() {
         let result = verify_user_pin(USER_PIN, None);
-        assert!(result.is_ok(), "User PIN verification failed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "User PIN verification failed: {:?}",
+            result.err()
+        );
         assert!(result.unwrap(), "User PIN should be verified");
     }
 
@@ -240,7 +252,11 @@ mod card_tests {
     #[ignore = "requires physical smart card with default PIN"]
     fn test_verify_admin_pin() {
         let result = verify_admin_pin(ADMIN_PIN, None);
-        assert!(result.is_ok(), "Admin PIN verification failed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Admin PIN verification failed: {:?}",
+            result.err()
+        );
         assert!(result.unwrap(), "Admin PIN should be verified");
     }
 
@@ -251,8 +267,7 @@ mod card_tests {
     fn test_upload_cv25519_signing_subkey_verify_fingerprint() {
         reset_card_to_defaults();
 
-        let secret_key = fs::read(CV25519_SECRET_KEY)
-            .expect("Failed to read CV25519 secret key");
+        let secret_key = fs::read(CV25519_SECRET_KEY).expect("Failed to read CV25519 secret key");
 
         println!("Uploading CV25519 signing subkey to card...");
         upload_key_to_card(&secret_key, KEY_PASSWORD, CardKeySlot::Signing, ADMIN_PIN)
@@ -269,12 +284,16 @@ mod card_tests {
     fn test_upload_cv25519_encryption_subkey_verify_fingerprint() {
         reset_card_to_defaults();
 
-        let secret_key = fs::read(CV25519_SECRET_KEY)
-            .expect("Failed to read CV25519 secret key");
+        let secret_key = fs::read(CV25519_SECRET_KEY).expect("Failed to read CV25519 secret key");
 
         println!("Uploading CV25519 encryption subkey to card...");
-        upload_key_to_card(&secret_key, KEY_PASSWORD, CardKeySlot::Decryption, ADMIN_PIN)
-            .expect("Failed to upload decryption key");
+        upload_key_to_card(
+            &secret_key,
+            KEY_PASSWORD,
+            CardKeySlot::Decryption,
+            ADMIN_PIN,
+        )
+        .expect("Failed to upload decryption key");
         println!("Decryption key uploaded successfully.");
 
         // Verify fingerprint on card
@@ -289,8 +308,7 @@ mod card_tests {
     fn test_upload_rsa_signing_subkey_verify_fingerprint() {
         reset_card_to_defaults();
 
-        let secret_key = fs::read(RSA_SECRET_KEY)
-            .expect("Failed to read RSA secret key");
+        let secret_key = fs::read(RSA_SECRET_KEY).expect("Failed to read RSA secret key");
 
         println!("Uploading RSA signing subkey to card...");
         upload_key_to_card(&secret_key, KEY_PASSWORD, CardKeySlot::Signing, ADMIN_PIN)
@@ -307,12 +325,16 @@ mod card_tests {
     fn test_upload_rsa_encryption_subkey_verify_fingerprint() {
         reset_card_to_defaults();
 
-        let secret_key = fs::read(RSA_SECRET_KEY)
-            .expect("Failed to read RSA secret key");
+        let secret_key = fs::read(RSA_SECRET_KEY).expect("Failed to read RSA secret key");
 
         println!("Uploading RSA encryption subkey to card...");
-        upload_key_to_card(&secret_key, KEY_PASSWORD, CardKeySlot::Decryption, ADMIN_PIN)
-            .expect("Failed to upload decryption key");
+        upload_key_to_card(
+            &secret_key,
+            KEY_PASSWORD,
+            CardKeySlot::Decryption,
+            ADMIN_PIN,
+        )
+        .expect("Failed to upload decryption key");
         println!("Decryption key uploaded successfully.");
 
         // Verify fingerprint on card
@@ -327,8 +349,7 @@ mod card_tests {
     fn test_upload_cv25519_primary_key_to_signing_slot() {
         reset_card_to_defaults();
 
-        let secret_key = fs::read(CV25519_SECRET_KEY)
-            .expect("Failed to read CV25519 secret key");
+        let secret_key = fs::read(CV25519_SECRET_KEY).expect("Failed to read CV25519 secret key");
 
         println!("Uploading CV25519 PRIMARY key to signing slot...");
         upload_primary_key_to_card(&secret_key, KEY_PASSWORD, CardKeySlot::Signing, ADMIN_PIN)
@@ -345,8 +366,7 @@ mod card_tests {
     fn test_upload_rsa_primary_key_to_signing_slot() {
         reset_card_to_defaults();
 
-        let secret_key = fs::read(RSA_SECRET_KEY)
-            .expect("Failed to read RSA secret key");
+        let secret_key = fs::read(RSA_SECRET_KEY).expect("Failed to read RSA secret key");
 
         println!("Uploading RSA PRIMARY key to signing slot...");
         upload_primary_key_to_card(&secret_key, KEY_PASSWORD, CardKeySlot::Signing, ADMIN_PIN)
@@ -365,8 +385,7 @@ mod card_tests {
     fn test_upload_cv25519_subkey_by_fingerprint() {
         reset_card_to_defaults();
 
-        let secret_key = fs::read(CV25519_SECRET_KEY)
-            .expect("Failed to read CV25519 secret key");
+        let secret_key = fs::read(CV25519_SECRET_KEY).expect("Failed to read CV25519 secret key");
 
         println!("Uploading CV25519 auth subkey by fingerprint to auth slot...");
         upload_subkey_by_fingerprint(
@@ -375,7 +394,8 @@ mod card_tests {
             CV25519_AUTH_FP,
             CardKeySlot::Authentication,
             ADMIN_PIN,
-        ).expect("Failed to upload auth key by fingerprint");
+        )
+        .expect("Failed to upload auth key by fingerprint");
         println!("Auth key uploaded successfully.");
 
         // Verify fingerprint on card
@@ -388,8 +408,7 @@ mod card_tests {
     fn test_upload_rsa_subkey_by_fingerprint() {
         reset_card_to_defaults();
 
-        let secret_key = fs::read(RSA_SECRET_KEY)
-            .expect("Failed to read RSA secret key");
+        let secret_key = fs::read(RSA_SECRET_KEY).expect("Failed to read RSA secret key");
 
         println!("Uploading RSA auth subkey by fingerprint to auth slot...");
         upload_subkey_by_fingerprint(
@@ -398,7 +417,8 @@ mod card_tests {
             RSA_AUTH_FP,
             CardKeySlot::Authentication,
             ADMIN_PIN,
-        ).expect("Failed to upload auth key by fingerprint");
+        )
+        .expect("Failed to upload auth key by fingerprint");
         println!("Auth key uploaded successfully.");
 
         // Verify fingerprint on card
@@ -414,10 +434,8 @@ mod card_tests {
     fn test_cv25519_full_workflow() {
         reset_card_to_defaults();
 
-        let secret_key = fs::read(CV25519_SECRET_KEY)
-            .expect("Failed to read CV25519 secret key");
-        let public_key = fs::read(CV25519_PUBLIC_KEY)
-            .expect("Failed to read CV25519 public key");
+        let secret_key = fs::read(CV25519_SECRET_KEY).expect("Failed to read CV25519 secret key");
+        let public_key = fs::read(CV25519_PUBLIC_KEY).expect("Failed to read CV25519 public key");
 
         // Upload signing subkey
         println!("Step 1: Uploading CV25519 signing subkey...");
@@ -430,8 +448,13 @@ mod card_tests {
 
         // Upload encryption subkey
         println!("Step 3: Uploading CV25519 encryption subkey...");
-        upload_key_to_card(&secret_key, KEY_PASSWORD, CardKeySlot::Decryption, ADMIN_PIN)
-            .expect("Failed to upload encryption key");
+        upload_key_to_card(
+            &secret_key,
+            KEY_PASSWORD,
+            CardKeySlot::Decryption,
+            ADMIN_PIN,
+        )
+        .expect("Failed to upload encryption key");
 
         // Verify encryption fingerprint
         println!("Step 4: Verifying encryption key fingerprint...");
@@ -440,8 +463,8 @@ mod card_tests {
         // Test signing
         println!("Step 5: Testing signing...");
         let msg = b"OpenPGP on smartcard.";
-        let signature = sign_bytes_detached_on_card(msg, &public_key, USER_PIN)
-            .expect("Failed to sign");
+        let signature =
+            sign_bytes_detached_on_card(msg, &public_key, USER_PIN).expect("Failed to sign");
         println!("Signature created.");
 
         // Verify signature
@@ -453,13 +476,12 @@ mod card_tests {
 
         // Test encryption/decryption
         println!("Step 7: Testing encryption...");
-        let encrypted = encrypt_bytes(&public_key, msg, true)
-            .expect("Failed to encrypt");
+        let encrypted = encrypt_bytes(&public_key, msg, true).expect("Failed to encrypt");
         println!("Encrypted {} bytes", encrypted.len());
 
         println!("Step 8: Testing decryption on card...");
-        let decrypted = decrypt_bytes_on_card(&encrypted, &public_key, USER_PIN)
-            .expect("Failed to decrypt");
+        let decrypted =
+            decrypt_bytes_on_card(&encrypted, &public_key, USER_PIN).expect("Failed to decrypt");
         assert_eq!(msg.to_vec(), decrypted, "Decryption mismatch");
         println!("✓ Decryption verified successfully!");
 
@@ -472,10 +494,8 @@ mod card_tests {
     fn test_rsa_full_workflow() {
         reset_card_to_defaults();
 
-        let secret_key = fs::read(RSA_SECRET_KEY)
-            .expect("Failed to read RSA secret key");
-        let public_key = fs::read(RSA_PUBLIC_KEY)
-            .expect("Failed to read RSA public key");
+        let secret_key = fs::read(RSA_SECRET_KEY).expect("Failed to read RSA secret key");
+        let public_key = fs::read(RSA_PUBLIC_KEY).expect("Failed to read RSA public key");
 
         // Upload signing subkey
         println!("Step 1: Uploading RSA signing subkey...");
@@ -488,8 +508,13 @@ mod card_tests {
 
         // Upload encryption subkey
         println!("Step 3: Uploading RSA encryption subkey...");
-        upload_key_to_card(&secret_key, KEY_PASSWORD, CardKeySlot::Decryption, ADMIN_PIN)
-            .expect("Failed to upload encryption key");
+        upload_key_to_card(
+            &secret_key,
+            KEY_PASSWORD,
+            CardKeySlot::Decryption,
+            ADMIN_PIN,
+        )
+        .expect("Failed to upload encryption key");
 
         // Verify encryption fingerprint
         println!("Step 4: Verifying encryption key fingerprint...");
@@ -498,8 +523,8 @@ mod card_tests {
         // Test signing
         println!("Step 5: Testing signing...");
         let msg = b"OpenPGP on smartcard with RSA4096.";
-        let signature = sign_bytes_detached_on_card(msg, &public_key, USER_PIN)
-            .expect("Failed to sign");
+        let signature =
+            sign_bytes_detached_on_card(msg, &public_key, USER_PIN).expect("Failed to sign");
         println!("Signature created.");
 
         // Verify signature
@@ -511,13 +536,12 @@ mod card_tests {
 
         // Test encryption/decryption
         println!("Step 7: Testing encryption...");
-        let encrypted = encrypt_bytes(&public_key, msg, true)
-            .expect("Failed to encrypt");
+        let encrypted = encrypt_bytes(&public_key, msg, true).expect("Failed to encrypt");
         println!("Encrypted {} bytes", encrypted.len());
 
         println!("Step 8: Testing decryption on card...");
-        let decrypted = decrypt_bytes_on_card(&encrypted, &public_key, USER_PIN)
-            .expect("Failed to decrypt");
+        let decrypted =
+            decrypt_bytes_on_card(&encrypted, &public_key, USER_PIN).expect("Failed to decrypt");
         assert_eq!(msg.to_vec(), decrypted, "Decryption mismatch");
         println!("✓ Decryption verified successfully!");
 
@@ -530,15 +554,20 @@ mod card_tests {
     fn test_nistp256_full_workflow() {
         reset_card_to_defaults();
 
-        let secret_key = fs::read(NISTP256_SECRET_KEY)
-            .expect("Failed to read NIST P-256 secret key");
-        let public_key = fs::read(NISTP256_PUBLIC_KEY)
-            .expect("Failed to read NIST P-256 public key");
+        let secret_key =
+            fs::read(NISTP256_SECRET_KEY).expect("Failed to read NIST P-256 secret key");
+        let public_key =
+            fs::read(NISTP256_PUBLIC_KEY).expect("Failed to read NIST P-256 public key");
 
         // Upload signing subkey
         println!("Step 1: Uploading NIST P-256 signing subkey...");
-        upload_key_to_card(&secret_key, NIST_KEY_PASSWORD, CardKeySlot::Signing, ADMIN_PIN)
-            .expect("Failed to upload signing key");
+        upload_key_to_card(
+            &secret_key,
+            NIST_KEY_PASSWORD,
+            CardKeySlot::Signing,
+            ADMIN_PIN,
+        )
+        .expect("Failed to upload signing key");
 
         // Verify signing fingerprint
         println!("Step 2: Verifying signing key fingerprint...");
@@ -546,8 +575,13 @@ mod card_tests {
 
         // Upload encryption subkey
         println!("Step 3: Uploading NIST P-256 encryption subkey...");
-        upload_key_to_card(&secret_key, NIST_KEY_PASSWORD, CardKeySlot::Decryption, ADMIN_PIN)
-            .expect("Failed to upload encryption key");
+        upload_key_to_card(
+            &secret_key,
+            NIST_KEY_PASSWORD,
+            CardKeySlot::Decryption,
+            ADMIN_PIN,
+        )
+        .expect("Failed to upload encryption key");
 
         // Verify encryption fingerprint
         println!("Step 4: Verifying encryption key fingerprint...");
@@ -556,8 +590,8 @@ mod card_tests {
         // Test signing
         println!("Step 5: Testing signing...");
         let msg = b"OpenPGP on smartcard with NIST P-256.";
-        let signature = sign_bytes_detached_on_card(msg, &public_key, USER_PIN)
-            .expect("Failed to sign");
+        let signature =
+            sign_bytes_detached_on_card(msg, &public_key, USER_PIN).expect("Failed to sign");
         println!("Signature created.");
 
         // Verify signature
@@ -569,13 +603,12 @@ mod card_tests {
 
         // Test encryption/decryption
         println!("Step 7: Testing encryption...");
-        let encrypted = encrypt_bytes(&public_key, msg, true)
-            .expect("Failed to encrypt");
+        let encrypted = encrypt_bytes(&public_key, msg, true).expect("Failed to encrypt");
         println!("Encrypted {} bytes", encrypted.len());
 
         println!("Step 8: Testing decryption on card...");
-        let decrypted = decrypt_bytes_on_card(&encrypted, &public_key, USER_PIN)
-            .expect("Failed to decrypt");
+        let decrypted =
+            decrypt_bytes_on_card(&encrypted, &public_key, USER_PIN).expect("Failed to decrypt");
         assert_eq!(msg.to_vec(), decrypted, "Decryption mismatch");
         println!("✓ Decryption verified successfully!");
 
@@ -588,15 +621,20 @@ mod card_tests {
     fn test_nistp384_full_workflow() {
         reset_card_to_defaults();
 
-        let secret_key = fs::read(NISTP384_SECRET_KEY)
-            .expect("Failed to read NIST P-384 secret key");
-        let public_key = fs::read(NISTP384_PUBLIC_KEY)
-            .expect("Failed to read NIST P-384 public key");
+        let secret_key =
+            fs::read(NISTP384_SECRET_KEY).expect("Failed to read NIST P-384 secret key");
+        let public_key =
+            fs::read(NISTP384_PUBLIC_KEY).expect("Failed to read NIST P-384 public key");
 
         // Upload signing subkey
         println!("Step 1: Uploading NIST P-384 signing subkey...");
-        upload_key_to_card(&secret_key, NIST_KEY_PASSWORD, CardKeySlot::Signing, ADMIN_PIN)
-            .expect("Failed to upload signing key");
+        upload_key_to_card(
+            &secret_key,
+            NIST_KEY_PASSWORD,
+            CardKeySlot::Signing,
+            ADMIN_PIN,
+        )
+        .expect("Failed to upload signing key");
 
         // Verify signing fingerprint
         println!("Step 2: Verifying signing key fingerprint...");
@@ -604,8 +642,13 @@ mod card_tests {
 
         // Upload encryption subkey
         println!("Step 3: Uploading NIST P-384 encryption subkey...");
-        upload_key_to_card(&secret_key, NIST_KEY_PASSWORD, CardKeySlot::Decryption, ADMIN_PIN)
-            .expect("Failed to upload encryption key");
+        upload_key_to_card(
+            &secret_key,
+            NIST_KEY_PASSWORD,
+            CardKeySlot::Decryption,
+            ADMIN_PIN,
+        )
+        .expect("Failed to upload encryption key");
 
         // Verify encryption fingerprint
         println!("Step 4: Verifying encryption key fingerprint...");
@@ -614,8 +657,8 @@ mod card_tests {
         // Test signing
         println!("Step 5: Testing signing...");
         let msg = b"OpenPGP on smartcard with NIST P-384.";
-        let signature = sign_bytes_detached_on_card(msg, &public_key, USER_PIN)
-            .expect("Failed to sign");
+        let signature =
+            sign_bytes_detached_on_card(msg, &public_key, USER_PIN).expect("Failed to sign");
         println!("Signature created.");
 
         // Verify signature
@@ -627,13 +670,12 @@ mod card_tests {
 
         // Test encryption/decryption
         println!("Step 7: Testing encryption...");
-        let encrypted = encrypt_bytes(&public_key, msg, true)
-            .expect("Failed to encrypt");
+        let encrypted = encrypt_bytes(&public_key, msg, true).expect("Failed to encrypt");
         println!("Encrypted {} bytes", encrypted.len());
 
         println!("Step 8: Testing decryption on card...");
-        let decrypted = decrypt_bytes_on_card(&encrypted, &public_key, USER_PIN)
-            .expect("Failed to decrypt");
+        let decrypted =
+            decrypt_bytes_on_card(&encrypted, &public_key, USER_PIN).expect("Failed to decrypt");
         assert_eq!(msg.to_vec(), decrypted, "Decryption mismatch");
         println!("✓ Decryption verified successfully!");
 
@@ -648,15 +690,20 @@ mod card_tests {
     fn test_nistp521_upload_workflow() {
         reset_card_to_defaults();
 
-        let secret_key = fs::read(NISTP521_SECRET_KEY)
-            .expect("Failed to read NIST P-521 secret key");
-        let _public_key = fs::read(NISTP521_PUBLIC_KEY)
-            .expect("Failed to read NIST P-521 public key");
+        let secret_key =
+            fs::read(NISTP521_SECRET_KEY).expect("Failed to read NIST P-521 secret key");
+        let _public_key =
+            fs::read(NISTP521_PUBLIC_KEY).expect("Failed to read NIST P-521 public key");
 
         // Upload signing subkey
         println!("Step 1: Uploading NIST P-521 signing subkey...");
-        upload_key_to_card(&secret_key, NIST_KEY_PASSWORD, CardKeySlot::Signing, ADMIN_PIN)
-            .expect("Failed to upload signing key");
+        upload_key_to_card(
+            &secret_key,
+            NIST_KEY_PASSWORD,
+            CardKeySlot::Signing,
+            ADMIN_PIN,
+        )
+        .expect("Failed to upload signing key");
 
         // Verify signing fingerprint
         println!("Step 2: Verifying signing key fingerprint...");
@@ -664,8 +711,13 @@ mod card_tests {
 
         // Upload encryption subkey
         println!("Step 3: Uploading NIST P-521 encryption subkey...");
-        upload_key_to_card(&secret_key, NIST_KEY_PASSWORD, CardKeySlot::Decryption, ADMIN_PIN)
-            .expect("Failed to upload encryption key");
+        upload_key_to_card(
+            &secret_key,
+            NIST_KEY_PASSWORD,
+            CardKeySlot::Decryption,
+            ADMIN_PIN,
+        )
+        .expect("Failed to upload encryption key");
 
         // Verify encryption fingerprint
         println!("Step 4: Verifying encryption key fingerprint...");
@@ -684,10 +736,8 @@ mod card_tests {
     fn test_primary_key_signing_workflow() {
         reset_card_to_defaults();
 
-        let secret_key = fs::read(CV25519_SECRET_KEY)
-            .expect("Failed to read CV25519 secret key");
-        let public_key = fs::read(CV25519_PUBLIC_KEY)
-            .expect("Failed to read CV25519 public key");
+        let secret_key = fs::read(CV25519_SECRET_KEY).expect("Failed to read CV25519 secret key");
+        let public_key = fs::read(CV25519_PUBLIC_KEY).expect("Failed to read CV25519 public key");
 
         // Upload PRIMARY key to signing slot (not subkey!)
         println!("Step 1: Uploading PRIMARY key to signing slot...");
@@ -700,8 +750,13 @@ mod card_tests {
 
         // Upload encryption subkey
         println!("Step 3: Uploading encryption subkey...");
-        upload_key_to_card(&secret_key, KEY_PASSWORD, CardKeySlot::Decryption, ADMIN_PIN)
-            .expect("Failed to upload encryption key");
+        upload_key_to_card(
+            &secret_key,
+            KEY_PASSWORD,
+            CardKeySlot::Decryption,
+            ADMIN_PIN,
+        )
+        .expect("Failed to upload encryption key");
 
         // Verify encryption fingerprint
         println!("Step 4: Verifying encryption key fingerprint...");
@@ -731,10 +786,8 @@ mod card_tests {
     fn test_sign_bytes_cv25519() {
         reset_card_to_defaults();
 
-        let secret_key = fs::read(CV25519_SECRET_KEY)
-            .expect("Failed to read CV25519 secret key");
-        let public_key = fs::read(CV25519_PUBLIC_KEY)
-            .expect("Failed to read CV25519 public key");
+        let secret_key = fs::read(CV25519_SECRET_KEY).expect("Failed to read CV25519 secret key");
+        let public_key = fs::read(CV25519_PUBLIC_KEY).expect("Failed to read CV25519 public key");
 
         println!("Uploading CV25519 signing key to card...");
         upload_key_to_card(&secret_key, KEY_PASSWORD, CardKeySlot::Signing, ADMIN_PIN)
@@ -761,10 +814,8 @@ mod card_tests {
     fn test_sign_bytes_rsa() {
         reset_card_to_defaults();
 
-        let secret_key = fs::read(RSA_SECRET_KEY)
-            .expect("Failed to read RSA secret key");
-        let public_key = fs::read(RSA_PUBLIC_KEY)
-            .expect("Failed to read RSA public key");
+        let secret_key = fs::read(RSA_SECRET_KEY).expect("Failed to read RSA secret key");
+        let public_key = fs::read(RSA_PUBLIC_KEY).expect("Failed to read RSA public key");
 
         println!("Uploading RSA signing key to card...");
         upload_key_to_card(&secret_key, KEY_PASSWORD, CardKeySlot::Signing, ADMIN_PIN)
@@ -793,20 +844,22 @@ mod card_tests {
     fn test_decrypt_bytes_cv25519() {
         reset_card_to_defaults();
 
-        let secret_key = fs::read(CV25519_SECRET_KEY)
-            .expect("Failed to read CV25519 secret key");
-        let public_key = fs::read(CV25519_PUBLIC_KEY)
-            .expect("Failed to read CV25519 public key");
+        let secret_key = fs::read(CV25519_SECRET_KEY).expect("Failed to read CV25519 secret key");
+        let public_key = fs::read(CV25519_PUBLIC_KEY).expect("Failed to read CV25519 public key");
 
         println!("Uploading CV25519 decryption key to card...");
-        upload_key_to_card(&secret_key, KEY_PASSWORD, CardKeySlot::Decryption, ADMIN_PIN)
-            .expect("Failed to upload decryption key");
+        upload_key_to_card(
+            &secret_key,
+            KEY_PASSWORD,
+            CardKeySlot::Decryption,
+            ADMIN_PIN,
+        )
+        .expect("Failed to upload decryption key");
 
         let message = b"Secret message for CV25519 card decryption.";
 
         println!("Encrypting message to CV25519 key...");
-        let encrypted = encrypt_bytes(&public_key, message, true)
-            .expect("Failed to encrypt");
+        let encrypted = encrypt_bytes(&public_key, message, true).expect("Failed to encrypt");
 
         println!("Encrypted message length: {} bytes", encrypted.len());
 
@@ -814,7 +867,11 @@ mod card_tests {
         let decrypted = decrypt_bytes_on_card(&encrypted, &public_key, USER_PIN)
             .expect("Failed to decrypt on card");
 
-        assert_eq!(message.to_vec(), decrypted, "Decrypted message doesn't match original");
+        assert_eq!(
+            message.to_vec(),
+            decrypted,
+            "Decrypted message doesn't match original"
+        );
         println!("Decryption successful!");
         println!("Original:  {:?}", String::from_utf8_lossy(message));
         println!("Decrypted: {:?}", String::from_utf8_lossy(&decrypted));
@@ -825,20 +882,22 @@ mod card_tests {
     fn test_decrypt_bytes_rsa() {
         reset_card_to_defaults();
 
-        let secret_key = fs::read(RSA_SECRET_KEY)
-            .expect("Failed to read RSA secret key");
-        let public_key = fs::read(RSA_PUBLIC_KEY)
-            .expect("Failed to read RSA public key");
+        let secret_key = fs::read(RSA_SECRET_KEY).expect("Failed to read RSA secret key");
+        let public_key = fs::read(RSA_PUBLIC_KEY).expect("Failed to read RSA public key");
 
         println!("Uploading RSA decryption key to card...");
-        upload_key_to_card(&secret_key, KEY_PASSWORD, CardKeySlot::Decryption, ADMIN_PIN)
-            .expect("Failed to upload decryption key");
+        upload_key_to_card(
+            &secret_key,
+            KEY_PASSWORD,
+            CardKeySlot::Decryption,
+            ADMIN_PIN,
+        )
+        .expect("Failed to upload decryption key");
 
         let message = b"Secret message for RSA4096 card decryption.";
 
         println!("Encrypting message to RSA key...");
-        let encrypted = encrypt_bytes(&public_key, message, true)
-            .expect("Failed to encrypt");
+        let encrypted = encrypt_bytes(&public_key, message, true).expect("Failed to encrypt");
 
         println!("Encrypted message length: {} bytes", encrypted.len());
 
@@ -846,7 +905,11 @@ mod card_tests {
         let decrypted = decrypt_bytes_on_card(&encrypted, &public_key, USER_PIN)
             .expect("Failed to decrypt on card");
 
-        assert_eq!(message.to_vec(), decrypted, "Decrypted message doesn't match original");
+        assert_eq!(
+            message.to_vec(),
+            decrypted,
+            "Decrypted message doesn't match original"
+        );
         println!("Decryption successful!");
         println!("Original:  {:?}", String::from_utf8_lossy(message));
         println!("Decrypted: {:?}", String::from_utf8_lossy(&decrypted));
@@ -859,10 +922,8 @@ mod card_tests {
     fn test_sign_and_verify_roundtrip_cv25519() {
         reset_card_to_defaults();
 
-        let secret_key = fs::read(CV25519_SECRET_KEY)
-            .expect("Failed to read CV25519 secret key");
-        let public_key = fs::read(CV25519_PUBLIC_KEY)
-            .expect("Failed to read CV25519 public key");
+        let secret_key = fs::read(CV25519_SECRET_KEY).expect("Failed to read CV25519 secret key");
+        let public_key = fs::read(CV25519_PUBLIC_KEY).expect("Failed to read CV25519 public key");
 
         upload_key_to_card(&secret_key, KEY_PASSWORD, CardKeySlot::Signing, ADMIN_PIN)
             .expect("Failed to upload signing key");
@@ -883,7 +944,11 @@ mod card_tests {
             let is_valid = verify_bytes_detached(&public_key, message, signature.as_bytes())
                 .expect("Failed to verify");
 
-            assert!(is_valid, "Signature verification failed for message {}", i + 1);
+            assert!(
+                is_valid,
+                "Signature verification failed for message {}",
+                i + 1
+            );
             println!("  Signature verified");
         }
     }
@@ -893,13 +958,16 @@ mod card_tests {
     fn test_encrypt_decrypt_roundtrip_rsa() {
         reset_card_to_defaults();
 
-        let secret_key = fs::read(RSA_SECRET_KEY)
-            .expect("Failed to read RSA secret key");
-        let public_key = fs::read(RSA_PUBLIC_KEY)
-            .expect("Failed to read RSA public key");
+        let secret_key = fs::read(RSA_SECRET_KEY).expect("Failed to read RSA secret key");
+        let public_key = fs::read(RSA_PUBLIC_KEY).expect("Failed to read RSA public key");
 
-        upload_key_to_card(&secret_key, KEY_PASSWORD, CardKeySlot::Decryption, ADMIN_PIN)
-            .expect("Failed to upload decryption key");
+        upload_key_to_card(
+            &secret_key,
+            KEY_PASSWORD,
+            CardKeySlot::Decryption,
+            ADMIN_PIN,
+        )
+        .expect("Failed to upload decryption key");
 
         let messages: Vec<&[u8]> = vec![
             b"Short",
@@ -911,13 +979,17 @@ mod card_tests {
         for (i, message) in messages.iter().enumerate() {
             println!("Test {}: message length = {} bytes", i + 1, message.len());
 
-            let encrypted = encrypt_bytes(&public_key, message, true)
-                .expect("Failed to encrypt");
+            let encrypted = encrypt_bytes(&public_key, message, true).expect("Failed to encrypt");
 
             let decrypted = decrypt_bytes_on_card(&encrypted, &public_key, USER_PIN)
                 .expect("Failed to decrypt");
 
-            assert_eq!(message.to_vec(), decrypted, "Decryption mismatch for message {}", i + 1);
+            assert_eq!(
+                message.to_vec(),
+                decrypted,
+                "Decryption mismatch for message {}",
+                i + 1
+            );
             println!("  Decryption verified");
         }
     }
@@ -953,7 +1025,10 @@ mod card_tests {
             println!("No card connected - testing error handling");
 
             let result = get_card_details(None);
-            assert!(result.is_err(), "Should return error when no card connected");
+            assert!(
+                result.is_err(),
+                "Should return error when no card connected"
+            );
 
             let error = result.unwrap_err();
             println!("Error when no card: {}", error);
@@ -987,8 +1062,8 @@ mod card_tests {
         verify_card_fingerprint("signature", CV25519_PRIMARY_FP);
 
         // 4. Get original expiry info
-        let original_info = parse_cert_bytes(&public_key, true)
-            .expect("Failed to parse original certificate");
+        let original_info =
+            parse_cert_bytes(&public_key, true).expect("Failed to parse original certificate");
         println!("Original certificate info:");
         println!("  Primary fingerprint: {}", original_info.fingerprint);
         println!("  Expiration: {:?}", original_info.expiration_time);
@@ -1000,8 +1075,8 @@ mod card_tests {
             .expect("Failed to update primary expiry on card");
 
         // 6. Verify the updated certificate
-        let updated_info = parse_cert_bytes(&updated_cert, true)
-            .expect("Failed to parse updated certificate");
+        let updated_info =
+            parse_cert_bytes(&updated_cert, true).expect("Failed to parse updated certificate");
         println!("\nUpdated certificate info:");
         println!("  Primary fingerprint: {}", updated_info.fingerprint);
         println!("  Expiration: {:?}", updated_info.expiration_time);
@@ -1044,17 +1119,21 @@ mod card_tests {
         verify_card_fingerprint("signature", CV25519_PRIMARY_FP);
 
         // 4. Get original certificate info including subkeys
-        let original_info = parse_cert_bytes(&public_key, true)
-            .expect("Failed to parse original certificate");
+        let original_info =
+            parse_cert_bytes(&public_key, true).expect("Failed to parse original certificate");
         println!("Original certificate info:");
         println!("  Primary fingerprint: {}", original_info.fingerprint);
         println!("  Number of subkeys: {}", original_info.subkeys.len());
         for sk in &original_info.subkeys {
-            println!("    - {} (expires: {:?})", sk.fingerprint, sk.expiration_time);
+            println!(
+                "    - {} (expires: {:?})",
+                sk.fingerprint, sk.expiration_time
+            );
         }
 
         // 5. Get subkey fingerprints to update
-        let subkey_fps: Vec<&str> = original_info.subkeys
+        let subkey_fps: Vec<&str> = original_info
+            .subkeys
             .iter()
             .map(|sk| sk.fingerprint.as_str())
             .collect();
@@ -1063,21 +1142,21 @@ mod card_tests {
         // 6. Update subkey expiry (6 months from now)
         println!("\nUpdating subkey expiry to 6 months from now...");
         let six_months_seconds: u64 = 180 * 24 * 60 * 60;
-        let updated_cert = update_subkeys_expiry_on_card(
-            &public_key,
-            &subkey_fps,
-            six_months_seconds,
-            USER_PIN,
-        ).expect("Failed to update subkeys expiry on card");
+        let updated_cert =
+            update_subkeys_expiry_on_card(&public_key, &subkey_fps, six_months_seconds, USER_PIN)
+                .expect("Failed to update subkeys expiry on card");
 
         // 7. Verify the updated certificate
-        let updated_info = parse_cert_bytes(&updated_cert, true)
-            .expect("Failed to parse updated certificate");
+        let updated_info =
+            parse_cert_bytes(&updated_cert, true).expect("Failed to parse updated certificate");
         println!("\nUpdated certificate info:");
         println!("  Primary fingerprint: {}", updated_info.fingerprint);
         println!("  Number of subkeys: {}", updated_info.subkeys.len());
         for sk in &updated_info.subkeys {
-            println!("    - {} (expires: {:?})", sk.fingerprint, sk.expiration_time);
+            println!(
+                "    - {} (expires: {:?})",
+                sk.fingerprint, sk.expiration_time
+            );
         }
 
         // Verify fingerprint is unchanged
@@ -1088,7 +1167,8 @@ mod card_tests {
 
         // Verify subkey count is unchanged
         assert_eq!(
-            original_info.subkeys.len(), updated_info.subkeys.len(),
+            original_info.subkeys.len(),
+            updated_info.subkeys.len(),
             "Number of subkeys should not change"
         );
 
@@ -1128,13 +1208,15 @@ mod card_tests {
         // 4. Update primary key expiry first
         println!("\nStep 1: Updating primary key expiry...");
         let one_year_seconds: u64 = 365 * 24 * 60 * 60;
-        let updated_with_primary = update_primary_expiry_on_card(&public_key, one_year_seconds, USER_PIN)
-            .expect("Failed to update primary expiry");
+        let updated_with_primary =
+            update_primary_expiry_on_card(&public_key, one_year_seconds, USER_PIN)
+                .expect("Failed to update primary expiry");
 
         // 5. Get subkey fingerprints
-        let info = parse_cert_bytes(&updated_with_primary, true)
-            .expect("Failed to parse certificate");
-        let subkey_fps: Vec<&str> = info.subkeys
+        let info =
+            parse_cert_bytes(&updated_with_primary, true).expect("Failed to parse certificate");
+        let subkey_fps: Vec<&str> = info
+            .subkeys
             .iter()
             .map(|sk| sk.fingerprint.as_str())
             .collect();
@@ -1146,22 +1228,33 @@ mod card_tests {
             &subkey_fps,
             one_year_seconds,
             USER_PIN,
-        ).expect("Failed to update subkeys expiry");
+        )
+        .expect("Failed to update subkeys expiry");
 
         // 7. Verify final certificate
-        let final_info = parse_cert_bytes(&updated_full, true)
-            .expect("Failed to parse final certificate");
+        let final_info =
+            parse_cert_bytes(&updated_full, true).expect("Failed to parse final certificate");
         println!("\nFinal certificate info:");
         println!("  Primary fingerprint: {}", final_info.fingerprint);
         println!("  Primary expiration: {:?}", final_info.expiration_time);
         for sk in &final_info.subkeys {
-            println!("    - {} (expires: {:?})", sk.fingerprint, sk.expiration_time);
+            println!(
+                "    - {} (expires: {:?})",
+                sk.fingerprint, sk.expiration_time
+            );
         }
 
         // Verify all keys have expiration
-        assert!(final_info.expiration_time.is_some(), "Primary key should have expiration");
+        assert!(
+            final_info.expiration_time.is_some(),
+            "Primary key should have expiration"
+        );
         for sk in &final_info.subkeys {
-            assert!(sk.expiration_time.is_some(), "Subkey {} should have expiration", sk.fingerprint);
+            assert!(
+                sk.expiration_time.is_some(),
+                "Subkey {} should have expiration",
+                sk.fingerprint
+            );
         }
 
         println!("\n✓ Full key expiry update successful!");
@@ -1174,26 +1267,40 @@ mod card_tests {
     fn test_find_cards_for_key() {
         reset_card_to_defaults();
 
-        let secret_key = std::fs::read(CV25519_SECRET_KEY)
-            .expect("Failed to read CV25519 secret key");
-        let public_key = std::fs::read(CV25519_PUBLIC_KEY)
-            .expect("Failed to read CV25519 public key");
+        let secret_key =
+            std::fs::read(CV25519_SECRET_KEY).expect("Failed to read CV25519 secret key");
+        let public_key =
+            std::fs::read(CV25519_PUBLIC_KEY).expect("Failed to read CV25519 public key");
 
         // Upload signing and encryption subkeys
         upload_key_to_card(&secret_key, KEY_PASSWORD, CardKeySlot::Signing, ADMIN_PIN)
             .expect("Failed to upload signing key");
-        upload_key_to_card(&secret_key, KEY_PASSWORD, CardKeySlot::Decryption, ADMIN_PIN)
-            .expect("Failed to upload encryption key");
+        upload_key_to_card(
+            &secret_key,
+            KEY_PASSWORD,
+            CardKeySlot::Decryption,
+            ADMIN_PIN,
+        )
+        .expect("Failed to upload encryption key");
 
         // Find cards for this key
-        let matches = find_cards_for_key(&public_key)
-            .expect("Failed to find cards for key");
+        let matches = find_cards_for_key(&public_key).expect("Failed to find cards for key");
 
-        assert!(!matches.is_empty(), "Should find at least one matching card");
+        assert!(
+            !matches.is_empty(),
+            "Should find at least one matching card"
+        );
 
         let m = &matches[0];
-        println!("Card {} has {} matching slots", m.card.ident, m.matching_slots.len());
-        assert!(m.matching_slots.len() >= 2, "Should match signing + encryption slots");
+        println!(
+            "Card {} has {} matching slots",
+            m.card.ident,
+            m.matching_slots.len()
+        );
+        assert!(
+            m.matching_slots.len() >= 2,
+            "Should match signing + encryption slots"
+        );
 
         for slot in &m.matching_slots {
             println!("  {:?} slot: {}", slot.slot, slot.fingerprint);

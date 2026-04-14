@@ -9,17 +9,19 @@ use openpgp_card::ocard::crypto::{Cryptogram, Hash};
 use openpgp_card::Card;
 use secrecy::SecretString;
 
-use super::types::CardError;
 use super::get_card_backend;
+use super::types::CardError;
 use crate::error::{Error, Result};
 use crate::internal::parse_public_key;
-use pgp::composed::{DetachedSignature, Esk, Message, PlainSessionKey, RawSessionKey, SignedPublicKey};
+use pgp::composed::{
+    DetachedSignature, Esk, Message, PlainSessionKey, RawSessionKey, SignedPublicKey,
+};
 use pgp::crypto::hash::HashAlgorithm;
 use pgp::crypto::sym::SymmetricKeyAlgorithm;
 use pgp::packet::{Signature, SignatureConfig, SignatureType, Subpacket, SubpacketData};
 use pgp::types::{
-    EskType, Fingerprint, KeyDetails, Mpi, PkeskBytes, PkeskVersion,
-    PublicParams, SignatureBytes, Timestamp,
+    EskType, Fingerprint, KeyDetails, Mpi, PkeskBytes, PkeskVersion, PublicParams, SignatureBytes,
+    Timestamp,
 };
 
 /// Sign bytes using the signing key on the smart card.
@@ -67,8 +69,11 @@ pub fn sign_bytes_detached_on_card(data: &[u8], public_cert: &[u8], pin: &[u8]) 
 
 /// Convert a PIN byte slice to SecretString.
 fn pin_to_secret(pin: &[u8]) -> Result<SecretString> {
-    let pin_str = std::str::from_utf8(pin)
-        .map_err(|_| Error::Card(CardError::InvalidData("PIN must be valid UTF-8".to_string())))?;
+    let pin_str = std::str::from_utf8(pin).map_err(|_| {
+        Error::Card(CardError::InvalidData(
+            "PIN must be valid UTF-8".to_string(),
+        ))
+    })?;
     Ok(SecretString::new(pin_str.to_string()))
 }
 
@@ -130,31 +135,35 @@ fn get_signing_key_info(public_key: &SignedPublicKey) -> Result<SigningKeyInfo> 
 /// Get the fingerprint of the key currently in the card's signing slot.
 fn get_card_signing_fingerprint() -> Result<String> {
     let backend = get_card_backend(None)?;
-    let mut card = Card::new(backend)
+    let mut card = Card::new(backend).map_err(|e| Error::Card(CardError::from(e)))?;
+
+    let mut tx = card
+        .transaction()
         .map_err(|e| Error::Card(CardError::from(e)))?;
 
-    let mut tx = card.transaction()
-        .map_err(|e| Error::Card(CardError::from(e)))?;
-
-    let fps = tx.fingerprints()
+    let fps = tx
+        .fingerprints()
         .map_err(|e| Error::Card(CardError::from(e)))?;
 
     fps.signature()
         .map(|fp| hex::encode(fp.as_bytes()))
-        .ok_or_else(|| Error::Card(CardError::InvalidData(
-            "No signing key fingerprint on card".to_string()
-        )))
+        .ok_or_else(|| {
+            Error::Card(CardError::InvalidData(
+                "No signing key fingerprint on card".to_string(),
+            ))
+        })
 }
 
 /// Check if the public params indicate a signing-capable key
 fn can_sign(params: &PublicParams) -> bool {
-    matches!(params,
-        PublicParams::RSA(_) |
-        PublicParams::DSA(_) |
-        PublicParams::ECDSA(_) |
-        PublicParams::EdDSALegacy(_) |
-        PublicParams::Ed25519(_) |
-        PublicParams::Ed448(_)
+    matches!(
+        params,
+        PublicParams::RSA(_)
+            | PublicParams::DSA(_)
+            | PublicParams::ECDSA(_)
+            | PublicParams::EdDSALegacy(_)
+            | PublicParams::Ed25519(_)
+            | PublicParams::Ed448(_)
     )
 }
 
@@ -177,35 +186,30 @@ fn select_hash_for_params(params: &PublicParams) -> HashAlgorithm {
 }
 
 /// Create a signature using the smart card.
-fn create_card_signature(
-    data: &[u8],
-    key_info: &SigningKeyInfo,
-    pin: &[u8],
-) -> Result<Signature> {
+fn create_card_signature(data: &[u8], key_info: &SigningKeyInfo, pin: &[u8]) -> Result<Signature> {
     // Create signature config
-    let mut config = SignatureConfig::v4(
-        SignatureType::Binary,
-        key_info.algorithm,
-        key_info.hash_alg,
-    );
+    let mut config =
+        SignatureConfig::v4(SignatureType::Binary, key_info.algorithm, key_info.hash_alg);
 
     // Add subpackets
     let now = Timestamp::now();
     config.hashed_subpackets.push(
         Subpacket::regular(SubpacketData::SignatureCreationTime(now))
-            .map_err(|e| Error::Crypto(e.to_string()))?
+            .map_err(|e| Error::Crypto(e.to_string()))?,
     );
 
     // Add issuer fingerprint
     config.hashed_subpackets.push(
-        Subpacket::regular(SubpacketData::IssuerFingerprint(key_info.fingerprint.clone()))
-            .map_err(|e| Error::Crypto(e.to_string()))?
+        Subpacket::regular(SubpacketData::IssuerFingerprint(
+            key_info.fingerprint.clone(),
+        ))
+        .map_err(|e| Error::Crypto(e.to_string()))?,
     );
 
     // Add issuer key ID
     config.unhashed_subpackets.push(
         Subpacket::regular(SubpacketData::IssuerKeyId(key_info.key_id))
-            .map_err(|e| Error::Crypto(e.to_string()))?
+            .map_err(|e| Error::Crypto(e.to_string()))?,
     );
 
     // Compute the hash for the signature
@@ -232,19 +236,23 @@ fn compute_signature_hash(
     use digest::DynDigest;
 
     // Create hasher
-    let mut hasher: Box<dyn DynDigest + Send> = hash_alg.new_hasher()
+    let mut hasher: Box<dyn DynDigest + Send> = hash_alg
+        .new_hasher()
         .map_err(|e| Error::Crypto(e.to_string()))?;
 
     // Hash the data first
-    config.hash_data_to_sign(&mut hasher, Cursor::new(data))
+    config
+        .hash_data_to_sign(&mut hasher, Cursor::new(data))
         .map_err(|e| Error::Crypto(e.to_string()))?;
 
     // Hash the signature packet metadata
-    let sig_len = config.hash_signature_data(&mut hasher)
+    let sig_len = config
+        .hash_signature_data(&mut hasher)
         .map_err(|e| Error::Crypto(e.to_string()))?;
 
     // Add trailer
-    let trailer = config.trailer(sig_len)
+    let trailer = config
+        .trailer(sig_len)
         .map_err(|e| Error::Crypto(e.to_string()))?;
     hasher.update(&trailer);
 
@@ -259,10 +267,10 @@ fn sign_on_card(
     pin: &[u8],
 ) -> Result<Vec<u8>> {
     let backend = get_card_backend(None)?;
-    let mut card = Card::new(backend)
-        .map_err(|e| Error::Card(CardError::from(e)))?;
+    let mut card = Card::new(backend).map_err(|e| Error::Card(CardError::from(e)))?;
 
-    let mut tx = card.transaction()
+    let mut tx = card
+        .transaction()
         .map_err(|e| Error::Card(CardError::from(e)))?;
 
     // Verify PIN for signing
@@ -274,41 +282,48 @@ fn sign_on_card(
     let low_tx = tx.card();
 
     // Convert hash to openpgp-card Hash type based on algorithm and key type
-    let card_hash = match public_params {
-        PublicParams::EdDSALegacy(_) | PublicParams::Ed25519(_) => {
-            // EdDSA uses the raw hash data
-            Hash::EdDSA(hash)
-        }
-        PublicParams::ECDSA(_) => {
-            // ECDSA uses the raw hash data
-            Hash::ECDSA(hash)
-        }
-        _ => {
-            // RSA uses algorithm-specific hash type
-            match hash_alg {
-                HashAlgorithm::Sha256 => Hash::SHA256(hash.try_into().map_err(|_|
-                    Error::Crypto("Invalid hash length for SHA256".to_string()))?),
-                HashAlgorithm::Sha384 => Hash::SHA384(hash.try_into().map_err(|_|
-                    Error::Crypto("Invalid hash length for SHA384".to_string()))?),
-                HashAlgorithm::Sha512 => Hash::SHA512(hash.try_into().map_err(|_|
-                    Error::Crypto("Invalid hash length for SHA512".to_string()))?),
-                _ => return Err(Error::Crypto(format!("Unsupported hash algorithm: {:?}", hash_alg))),
+    let card_hash =
+        match public_params {
+            PublicParams::EdDSALegacy(_) | PublicParams::Ed25519(_) => {
+                // EdDSA uses the raw hash data
+                Hash::EdDSA(hash)
             }
-        }
-    };
+            PublicParams::ECDSA(_) => {
+                // ECDSA uses the raw hash data
+                Hash::ECDSA(hash)
+            }
+            _ => {
+                // RSA uses algorithm-specific hash type
+                match hash_alg {
+                    HashAlgorithm::Sha256 => Hash::SHA256(hash.try_into().map_err(|_| {
+                        Error::Crypto("Invalid hash length for SHA256".to_string())
+                    })?),
+                    HashAlgorithm::Sha384 => Hash::SHA384(hash.try_into().map_err(|_| {
+                        Error::Crypto("Invalid hash length for SHA384".to_string())
+                    })?),
+                    HashAlgorithm::Sha512 => Hash::SHA512(hash.try_into().map_err(|_| {
+                        Error::Crypto("Invalid hash length for SHA512".to_string())
+                    })?),
+                    _ => {
+                        return Err(Error::Crypto(format!(
+                            "Unsupported hash algorithm: {:?}",
+                            hash_alg
+                        )))
+                    }
+                }
+            }
+        };
 
     // Perform the signature operation
-    let signature = low_tx.signature_for_hash(card_hash)
+    let signature = low_tx
+        .signature_for_hash(card_hash)
         .map_err(|e| Error::Card(CardError::from(e)))?;
 
     Ok(signature)
 }
 
 /// Create SignatureBytes from raw card output.
-fn create_signature_bytes(
-    raw_sig: &[u8],
-    public_params: &PublicParams,
-) -> Result<SignatureBytes> {
+fn create_signature_bytes(raw_sig: &[u8], public_params: &PublicParams) -> Result<SignatureBytes> {
     use pgp::bytes::Bytes;
 
     match public_params {
@@ -381,8 +396,7 @@ pub fn decrypt_bytes_on_card(data: &[u8], public_cert: &[u8], pin: &[u8]) -> Res
     // Parse the encrypted message (try armored first, then binary)
     let message = match Message::from_armor(Cursor::new(data)) {
         Ok((msg, _headers)) => msg,
-        Err(_) => Message::from_bytes(data)
-            .map_err(|e| Error::Parse(e.to_string()))?,
+        Err(_) => Message::from_bytes(data).map_err(|e| Error::Parse(e.to_string()))?,
     };
 
     // Extract the encrypted message with its ESK packets
@@ -401,8 +415,7 @@ pub fn decrypt_bytes_on_card(data: &[u8], public_cert: &[u8], pin: &[u8]) -> Res
             // Check if this PKESK matches our encryption key
             if pkesk.match_identity(&enc_key_info) {
                 // Extract encrypted values and decrypt on card
-                let values = pkesk.values()
-                    .map_err(|e| Error::Crypto(e.to_string()))?;
+                let values = pkesk.values().map_err(|e| Error::Crypto(e.to_string()))?;
 
                 let esk_type = match pkesk.version() {
                     PkeskVersion::V3 => EskType::V3_4,
@@ -411,12 +424,7 @@ pub fn decrypt_bytes_on_card(data: &[u8], public_cert: &[u8], pin: &[u8]) -> Res
                 };
 
                 // Decrypt the session key on the card
-                let decrypted = decrypt_session_key_on_card(
-                    values,
-                    &enc_key_info,
-                    pin,
-                    esk_type,
-                )?;
+                let decrypted = decrypt_session_key_on_card(values, &enc_key_info, pin, esk_type)?;
 
                 session_key = Some(decrypted);
                 break;
@@ -428,19 +436,22 @@ pub fn decrypt_bytes_on_card(data: &[u8], public_cert: &[u8], pin: &[u8]) -> Res
         .ok_or_else(|| Error::Crypto("No matching PKESK found for card key".to_string()))?;
 
     // Decrypt the message with the session key
-    let decrypted = message.decrypt_with_session_key(session_key)
+    let decrypted = message
+        .decrypt_with_session_key(session_key)
         .map_err(|e| Error::Crypto(e.to_string()))?;
 
     // Handle compression if present
     let mut decompressed = if decrypted.is_compressed() {
-        decrypted.decompress()
+        decrypted
+            .decompress()
             .map_err(|e| Error::Crypto(e.to_string()))?
     } else {
         decrypted
     };
 
     // Extract the plaintext data
-    decompressed.as_data_vec()
+    decompressed
+        .as_data_vec()
         .map_err(|e| Error::Crypto(e.to_string()))
 }
 
@@ -454,7 +465,9 @@ struct EncryptionKeyInfo {
 
 impl KeyDetails for EncryptionKeyInfo {
     fn version(&self) -> pgp::types::KeyVersion {
-        self.fingerprint.version().unwrap_or(pgp::types::KeyVersion::V4)
+        self.fingerprint
+            .version()
+            .unwrap_or(pgp::types::KeyVersion::V4)
     }
 
     fn legacy_key_id(&self) -> pgp::types::KeyId {
@@ -527,11 +540,12 @@ fn get_encryption_key_info(public_key: &SignedPublicKey) -> Result<EncryptionKey
 
 /// Check if the algorithm supports encryption
 fn can_encrypt_algorithm(params: &PublicParams) -> bool {
-    matches!(params,
-        PublicParams::RSA(_) |
-        PublicParams::ECDH(_) |
-        PublicParams::X25519(_) |
-        PublicParams::X448(_)
+    matches!(
+        params,
+        PublicParams::RSA(_)
+            | PublicParams::ECDH(_)
+            | PublicParams::X25519(_)
+            | PublicParams::X448(_)
     )
 }
 
@@ -543,10 +557,10 @@ fn decrypt_session_key_on_card(
     esk_type: EskType,
 ) -> Result<PlainSessionKey> {
     let backend = get_card_backend(None)?;
-    let mut card = Card::new(backend)
-        .map_err(|e| Error::Card(CardError::from(e)))?;
+    let mut card = Card::new(backend).map_err(|e| Error::Card(CardError::from(e)))?;
 
-    let mut tx = card.transaction()
+    let mut tx = card
+        .transaction()
         .map_err(|e| Error::Card(CardError::from(e)))?;
 
     // Verify PIN for decryption
@@ -563,10 +577,17 @@ fn decrypt_session_key_on_card(
             // RSA decryption - get the raw bytes from MPI
             let ciphertext: &[u8] = mpi.as_ref();
             let cryptogram = Cryptogram::RSA(ciphertext);
-            low_tx.decipher(cryptogram)
+            low_tx
+                .decipher(cryptogram)
                 .map_err(|e| Error::Card(CardError::from(e)))?
         }
-        (PkeskBytes::Ecdh { public_point, encrypted_session_key }, PublicParams::ECDH(ecdh_params)) => {
+        (
+            PkeskBytes::Ecdh {
+                public_point,
+                encrypted_session_key,
+            },
+            PublicParams::ECDH(ecdh_params),
+        ) => {
             // ECDH decryption - card returns the shared secret
             let point_bytes: &[u8] = public_point.as_ref();
 
@@ -579,32 +600,57 @@ fn decrypt_session_key_on_card(
             };
 
             let cryptogram = Cryptogram::ECDH(card_point);
-            let shared_secret = low_tx.decipher(cryptogram)
+            let shared_secret = low_tx
+                .decipher(cryptogram)
                 .map_err(|e| Error::Card(CardError::from(e)))?;
 
             // Unwrap the session key using the shared secret
-            ecdh_unwrap_session_key(&shared_secret, encrypted_session_key.as_ref(), ecdh_params, &key_info.fingerprint)?
+            ecdh_unwrap_session_key(
+                &shared_secret,
+                encrypted_session_key.as_ref(),
+                ecdh_params,
+                &key_info.fingerprint,
+            )?
         }
-        (PkeskBytes::X25519 { ephemeral, session_key, .. }, PublicParams::X25519(_)) => {
+        (
+            PkeskBytes::X25519 {
+                ephemeral,
+                session_key,
+                ..
+            },
+            PublicParams::X25519(_),
+        ) => {
             // X25519 native format
             let cryptogram = Cryptogram::ECDH(ephemeral.as_ref());
-            let shared_secret = low_tx.decipher(cryptogram)
+            let shared_secret = low_tx
+                .decipher(cryptogram)
                 .map_err(|e| Error::Card(CardError::from(e)))?;
 
             x25519_unwrap_session_key(&shared_secret, session_key.as_ref())?
         }
-        (PkeskBytes::Ecdh { public_point, encrypted_session_key }, PublicParams::X25519(_)) => {
+        (
+            PkeskBytes::Ecdh {
+                public_point,
+                encrypted_session_key,
+            },
+            PublicParams::X25519(_),
+        ) => {
             // Legacy PKESK with X25519 key
             let point_bytes: &[u8] = public_point.as_ref();
             let card_point = strip_cv25519_prefix(point_bytes)?;
 
             let cryptogram = Cryptogram::ECDH(card_point);
-            let shared_secret = low_tx.decipher(cryptogram)
+            let shared_secret = low_tx
+                .decipher(cryptogram)
                 .map_err(|e| Error::Card(CardError::from(e)))?;
 
             x25519_unwrap_session_key(&shared_secret, encrypted_session_key.as_ref())?
         }
-        _ => return Err(Error::Crypto("Mismatched PKESK values and key params".to_string())),
+        _ => {
+            return Err(Error::Crypto(
+                "Mismatched PKESK values and key params".to_string(),
+            ))
+        }
     };
 
     // Build the PlainSessionKey from decrypted data
@@ -617,7 +663,9 @@ fn decrypt_session_key_on_card(
             }
             let sym_alg = SymmetricKeyAlgorithm::from(decrypted[0]);
             if sym_alg == SymmetricKeyAlgorithm::Plaintext {
-                return Err(Error::Crypto("Session key algorithm cannot be plaintext".to_string()));
+                return Err(Error::Crypto(
+                    "Session key algorithm cannot be plaintext".to_string(),
+                ));
             }
 
             let key_size = sym_alg.key_size();
@@ -625,17 +673,15 @@ fn decrypt_session_key_on_card(
             if decrypted.len() != key_size + 3 {
                 return Err(Error::Crypto(format!(
                     "Unexpected decrypted key length ({}) for sym_alg {:?}",
-                    decrypted.len(), sym_alg
+                    decrypted.len(),
+                    sym_alg
                 )));
             }
 
             // Extract just the session key (skip algo byte, exclude checksum)
             let key = RawSessionKey::from(&decrypted[1..=key_size]);
 
-            Ok(PlainSessionKey::V3_4 {
-                sym_alg,
-                key,
-            })
+            Ok(PlainSessionKey::V3_4 { sym_alg, key })
         }
         EskType::V6 => {
             if decrypted.len() < 2 {
@@ -681,9 +727,9 @@ fn ecdh_unwrap_session_key(
     fingerprint: &Fingerprint,
 ) -> Result<Vec<u8>> {
     use pgp::crypto::ecdh::derive_session_key;
-    use pgp::types::EcdhPublicParams;
     use pgp::crypto::hash::HashAlgorithm;
     use pgp::crypto::sym::SymmetricKeyAlgorithm;
+    use pgp::types::EcdhPublicParams;
 
     // Get the KDF parameters based on the curve type
     let (hash_algo, sym_algo): (HashAlgorithm, SymmetricKeyAlgorithm) = match ecdh_params {
@@ -695,7 +741,10 @@ fn ecdh_unwrap_session_key(
         EcdhPublicParams::Brainpool384 { hash, alg_sym, .. } => (*hash, *alg_sym),
         EcdhPublicParams::Brainpool512 { hash, alg_sym, .. } => (*hash, *alg_sym),
         EcdhPublicParams::Unsupported { curve, .. } => {
-            return Err(Error::Crypto(format!("Unsupported ECDH curve: {:?}", curve)));
+            return Err(Error::Crypto(format!(
+                "Unsupported ECDH curve: {:?}",
+                curve
+            )));
         }
     };
 
@@ -721,8 +770,8 @@ fn x25519_unwrap_session_key(
     shared_secret: &[u8],
     encrypted_session_key: &[u8],
 ) -> Result<Vec<u8>> {
-    use aes_kw::Kek;
     use aes::Aes256;
+    use aes_kw::Kek;
     use hkdf::Hkdf;
     use sha2::Sha256;
 
@@ -735,7 +784,8 @@ fn x25519_unwrap_session_key(
     let kek_key = Kek::<Aes256>::try_from(kek.as_slice())
         .map_err(|e| Error::Crypto(format!("Invalid KEK: {:?}", e)))?;
 
-    let unwrapped = kek_key.unwrap_vec(encrypted_session_key)
+    let unwrapped = kek_key
+        .unwrap_vec(encrypted_session_key)
         .map_err(|e| Error::Crypto(format!("AES unwrap failed: {:?}", e)))?;
 
     Ok(unwrapped)
@@ -917,7 +967,7 @@ pub fn update_primary_expiry_on_card(
     expirytime: u64,
     pin: &[u8],
 ) -> Result<Vec<u8>> {
-    use pgp::types::{Duration as PgpDuration, Tag, KeyDetails};
+    use pgp::types::{Duration as PgpDuration, KeyDetails, Tag};
 
     let public_key = parse_public_key(certdata)?;
     let card_signer = get_primary_key_for_card_signing(&public_key, pin)?;
@@ -932,66 +982,67 @@ pub fn update_primary_expiry_on_card(
     let expiry_secs = now_secs.saturating_sub(creation_secs) + expirytime;
     let expiry_duration = PgpDuration::from_secs(expiry_secs as u32);
 
-    let password = pgp::types::Password::from("");  // Not used for card signing
+    let password = pgp::types::Password::from(""); // Not used for card signing
 
     // Helper closure to update subpackets in a signature
-    let update_subpackets = |existing_config: &SignatureConfig| -> Result<(Vec<Subpacket>, Vec<Subpacket>)> {
-        let mut new_hashed_subpackets: Vec<Subpacket> = Vec::new();
-        let mut has_creation_time = false;
-        let mut has_expiry_time = false;
+    let update_subpackets =
+        |existing_config: &SignatureConfig| -> Result<(Vec<Subpacket>, Vec<Subpacket>)> {
+            let mut new_hashed_subpackets: Vec<Subpacket> = Vec::new();
+            let mut has_creation_time = false;
+            let mut has_expiry_time = false;
 
-        for subpacket in existing_config.hashed_subpackets() {
-            match &subpacket.data {
-                SubpacketData::SignatureCreationTime(_) => {
-                    new_hashed_subpackets.push(
-                        Subpacket::regular(SubpacketData::SignatureCreationTime(Timestamp::now()))
+            for subpacket in existing_config.hashed_subpackets() {
+                match &subpacket.data {
+                    SubpacketData::SignatureCreationTime(_) => {
+                        new_hashed_subpackets.push(
+                            Subpacket::regular(SubpacketData::SignatureCreationTime(
+                                Timestamp::now(),
+                            ))
                             .map_err(|e| Error::Crypto(e.to_string()))?,
-                    );
-                    has_creation_time = true;
-                }
-                SubpacketData::KeyExpirationTime(_) => {
-                    new_hashed_subpackets.push(
-                        Subpacket::regular(SubpacketData::KeyExpirationTime(expiry_duration))
-                            .map_err(|e| Error::Crypto(e.to_string()))?,
-                    );
-                    has_expiry_time = true;
-                }
-                _ => {
-                    new_hashed_subpackets.push(subpacket.clone());
+                        );
+                        has_creation_time = true;
+                    }
+                    SubpacketData::KeyExpirationTime(_) => {
+                        new_hashed_subpackets.push(
+                            Subpacket::regular(SubpacketData::KeyExpirationTime(expiry_duration))
+                                .map_err(|e| Error::Crypto(e.to_string()))?,
+                        );
+                        has_expiry_time = true;
+                    }
+                    _ => {
+                        new_hashed_subpackets.push(subpacket.clone());
+                    }
                 }
             }
-        }
 
-        if !has_creation_time {
-            new_hashed_subpackets.push(
-                Subpacket::regular(SubpacketData::SignatureCreationTime(Timestamp::now()))
-                    .map_err(|e| Error::Crypto(e.to_string()))?,
-            );
-        }
+            if !has_creation_time {
+                new_hashed_subpackets.push(
+                    Subpacket::regular(SubpacketData::SignatureCreationTime(Timestamp::now()))
+                        .map_err(|e| Error::Crypto(e.to_string()))?,
+                );
+            }
 
-        if !has_expiry_time {
-            new_hashed_subpackets.push(
-                Subpacket::regular(SubpacketData::KeyExpirationTime(expiry_duration))
-                    .map_err(|e| Error::Crypto(e.to_string()))?,
-            );
-        }
+            if !has_expiry_time {
+                new_hashed_subpackets.push(
+                    Subpacket::regular(SubpacketData::KeyExpirationTime(expiry_duration))
+                        .map_err(|e| Error::Crypto(e.to_string()))?,
+                );
+            }
 
-        let new_unhashed_subpackets: Vec<Subpacket> = existing_config
-            .unhashed_subpackets()
-            .cloned()
-            .collect();
+            let new_unhashed_subpackets: Vec<Subpacket> =
+                existing_config.unhashed_subpackets().cloned().collect();
 
-        Ok((new_hashed_subpackets, new_unhashed_subpackets))
-    };
+            Ok((new_hashed_subpackets, new_unhashed_subpackets))
+        };
 
     // Update direct key signatures (sigclass 0x1f) - these also contain key expiration
     let mut new_direct_signatures: Vec<pgp::packet::Signature> = Vec::new();
     for existing_sig in &public_key.details.direct_signatures {
         // Only update direct key signatures (0x1f), not revocations
         if existing_sig.typ() == Some(SignatureType::Key) {
-            let existing_config = existing_sig
-                .config()
-                .ok_or_else(|| Error::Crypto("Cannot read existing direct signature config".to_string()))?;
+            let existing_config = existing_sig.config().ok_or_else(|| {
+                Error::Crypto("Cannot read existing direct signature config".to_string())
+            })?;
 
             let (new_hashed, new_unhashed) = update_subpackets(existing_config)?;
 
@@ -1056,7 +1107,10 @@ pub fn update_primary_expiry_on_card(
             }
         }
 
-        new_users.push(pgp::types::SignedUser::new(signed_user.id.clone(), combined_sigs));
+        new_users.push(pgp::types::SignedUser::new(
+            signed_user.id.clone(),
+            combined_sigs,
+        ));
     }
 
     // Rebuild the public key with new signatures
@@ -1150,7 +1204,7 @@ pub fn update_subkeys_expiry_on_card(
     let public_key = parse_public_key(certdata)?;
     let card_signer = get_primary_key_for_card_signing(&public_key, pin)?;
 
-    let password = pgp::types::Password::from("");  // Not used for card signing
+    let password = pgp::types::Password::from(""); // Not used for card signing
 
     // Normalize fingerprints for comparison (uppercase, no spaces)
     let normalized_fps: Vec<String> = fingerprints
@@ -1165,7 +1219,9 @@ pub fn update_subkeys_expiry_on_card(
     let mut new_public_subkeys = Vec::new();
     for subkey in &public_key.public_subkeys {
         let subkey_fp = hex::encode(subkey.key.fingerprint().as_bytes()).to_uppercase();
-        let should_update = normalized_fps.iter().any(|fp| subkey_fp.contains(fp) || fp.contains(&subkey_fp));
+        let should_update = normalized_fps
+            .iter()
+            .any(|fp| subkey_fp.contains(fp) || fp.contains(&subkey_fp));
 
         if should_update {
             // Calculate duration from subkey creation to (now + expirytime)
@@ -1178,11 +1234,13 @@ pub fn update_subkeys_expiry_on_card(
                 .signatures
                 .iter()
                 .find(|sig| sig.typ() == Some(SignatureType::SubkeyBinding))
-                .ok_or_else(|| Error::Crypto("No binding signature found for subkey".to_string()))?;
+                .ok_or_else(|| {
+                    Error::Crypto("No binding signature found for subkey".to_string())
+                })?;
 
-            let existing_config = existing_binding_sig
-                .config()
-                .ok_or_else(|| Error::Crypto("Cannot read existing binding signature config".to_string()))?;
+            let existing_config = existing_binding_sig.config().ok_or_else(|| {
+                Error::Crypto("Cannot read existing binding signature config".to_string())
+            })?;
 
             // Clone the existing hashed subpackets, updating only the ones we need to change
             let mut new_hashed_subpackets: Vec<Subpacket> = Vec::new();
@@ -1194,8 +1252,10 @@ pub fn update_subkeys_expiry_on_card(
                     SubpacketData::SignatureCreationTime(_) => {
                         // Replace with new creation time
                         new_hashed_subpackets.push(
-                            Subpacket::regular(SubpacketData::SignatureCreationTime(Timestamp::now()))
-                                .map_err(|e| Error::Crypto(e.to_string()))?,
+                            Subpacket::regular(SubpacketData::SignatureCreationTime(
+                                Timestamp::now(),
+                            ))
+                            .map_err(|e| Error::Crypto(e.to_string()))?,
                         );
                         has_creation_time = true;
                     }
@@ -1231,10 +1291,8 @@ pub fn update_subkeys_expiry_on_card(
             }
 
             // Clone unhashed subpackets as-is
-            let new_unhashed_subpackets: Vec<Subpacket> = existing_config
-                .unhashed_subpackets()
-                .cloned()
-                .collect();
+            let new_unhashed_subpackets: Vec<Subpacket> =
+                existing_config.unhashed_subpackets().cloned().collect();
 
             // Create the signature config based on the existing signature
             let mut config = SignatureConfig::v4(
