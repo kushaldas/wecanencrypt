@@ -201,6 +201,8 @@ pub use keyring::{
 pub use ssh::{
     get_ssh_pubkey,
     get_signing_pubkey,
+    ssh_sign_raw,
+    SshSignResult,
 };
 
 // Re-export keystore types when feature is enabled

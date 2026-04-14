@@ -3127,6 +3127,7 @@ dependencies = [
  "card-backend-pcsc",
  "chrono",
  "digest",
+ "ed25519-dalek",
  "hex",
  "hex-literal",
  "hickory-proto",
