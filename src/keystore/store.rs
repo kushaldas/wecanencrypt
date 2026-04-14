@@ -819,6 +819,47 @@ impl KeyStore {
         }
     }
 
+    /// Find certificate by subkey fingerprint.
+    ///
+    /// Searches for a certificate that contains a subkey with the given
+    /// fingerprint. This is useful when a signature's issuer is a subkey
+    /// rather than the primary key.
+    ///
+    /// # Arguments
+    /// * `subkey_fp` - The subkey fingerprint to search for (hex string)
+    ///
+    /// # Returns
+    /// The certificate data if found, or `None` if not found.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use wecanencrypt::KeyStore;
+    ///
+    /// let store = KeyStore::open("keys.db").unwrap();
+    ///
+    /// // Find by subkey fingerprint
+    /// if let Some(cert) = store.find_by_subkey_fingerprint("ABCD1234...").unwrap() {
+    ///     println!("Found parent certificate");
+    /// }
+    /// ```
+    pub fn find_by_subkey_fingerprint(&self, subkey_fp: &str) -> Result<Option<Vec<u8>>> {
+        let result: std::result::Result<String, _> = self.conn.query_row(
+            "SELECT fingerprint FROM subkeys WHERE subkey_fingerprint = ?1",
+            [subkey_fp],
+            |row| row.get(0),
+        );
+
+        match result {
+            Ok(fp) => {
+                let data = self.export_cert(&fp)?;
+                Ok(Some(data))
+            }
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     /// Save a card-key association.
     ///
     /// Records that a specific card slot holds a key belonging to a certificate.
