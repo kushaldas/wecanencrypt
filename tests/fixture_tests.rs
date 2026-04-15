@@ -402,7 +402,7 @@ mod ssh_sign {
     use wecanencrypt::{create_key, CipherSuite, SshHashAlgorithm, SubkeyFlags};
 
     const PASSWORD: &str = "test-ssh-sign";
-    const UID: &str = "SSH Test <ssh@example.com>";
+    const UID: &str = "SSH Test <ssh@test.com>";
 
     /// Generate a key pair with all subkeys (including authentication).
     /// Returns (secret_key_bytes, public_key_armored_string).

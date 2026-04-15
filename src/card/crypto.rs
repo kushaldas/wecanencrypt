@@ -1342,6 +1342,99 @@ pub fn update_subkeys_expiry_on_card(
     Ok(armored.into_bytes())
 }
 
+/// Perform an SSH authentication operation using the card's authentication key.
+///
+/// This executes the INTERNAL AUTHENTICATE command on the card, which is used
+/// for SSH authentication with Ed25519 and ECDSA keys. For RSA, use
+/// [`ssh_authenticate_for_hash_on_card`] instead.
+///
+/// # Arguments
+///
+/// * `data` - The data to authenticate (for Ed25519: raw message; for ECDSA: pre-hashed digest)
+/// * `pin` - The user PIN for the card
+/// * `ident` - Optional card identifier. If None, uses the first available card.
+///
+/// # Returns
+///
+/// The raw signature bytes from the card.
+pub fn ssh_authenticate_on_card(data: &[u8], pin: &[u8], ident: Option<&str>) -> Result<Vec<u8>> {
+    let backend = get_card_backend(ident)?;
+    let mut card = Card::new(backend)
+        .map_err(|e| Error::Card(CardError::CommunicationError(e.to_string())))?;
+    let mut tx = card
+        .transaction()
+        .map_err(|e| Error::Card(CardError::CommunicationError(e.to_string())))?;
+
+    // Verify user PIN
+    let pin_str = SecretString::from(
+        std::str::from_utf8(pin)
+            .map_err(|_| Error::Card(CardError::InvalidData("PIN is not valid UTF-8".into())))?
+            .to_string(),
+    );
+    tx.verify_user_pin(pin_str)
+        .map_err(|e| Error::Card(CardError::from(e)))?;
+
+    // Perform internal authenticate via the inner ocard::Transaction
+    let signature = tx
+        .card()
+        .internal_authenticate(data.to_vec())
+        .map_err(|e| {
+            Error::Card(CardError::CommunicationError(format!(
+                "Internal authenticate failed: {}",
+                e
+            )))
+        })?;
+
+    Ok(signature)
+}
+
+/// Perform an SSH authentication operation for RSA keys using hash-based authentication.
+///
+/// RSA SSH authentication requires `authenticate_for_hash` which wraps the
+/// digest in the appropriate PKCS#1 DigestInfo structure before sending to
+/// the card.
+///
+/// # Arguments
+///
+/// * `hash` - The hash algorithm and pre-hashed digest
+/// * `pin` - The user PIN for the card
+/// * `ident` - Optional card identifier
+///
+/// # Returns
+///
+/// The raw RSA signature bytes.
+pub fn ssh_authenticate_for_hash_on_card(
+    hash: Hash,
+    pin: &[u8],
+    ident: Option<&str>,
+) -> Result<Vec<u8>> {
+    let backend = get_card_backend(ident)?;
+    let mut card = Card::new(backend)
+        .map_err(|e| Error::Card(CardError::CommunicationError(e.to_string())))?;
+    let mut tx = card
+        .transaction()
+        .map_err(|e| Error::Card(CardError::CommunicationError(e.to_string())))?;
+
+    // Verify user PIN
+    let pin_str = SecretString::from(
+        std::str::from_utf8(pin)
+            .map_err(|_| Error::Card(CardError::InvalidData("PIN is not valid UTF-8".into())))?
+            .to_string(),
+    );
+    tx.verify_user_pin(pin_str)
+        .map_err(|e| Error::Card(CardError::from(e)))?;
+
+    // Perform authenticate with hash via the inner ocard::Transaction
+    let signature = tx.card().authenticate_for_hash(hash).map_err(|e| {
+        Error::Card(CardError::CommunicationError(format!(
+            "Authenticate for hash failed: {}",
+            e
+        )))
+    })?;
+
+    Ok(signature)
+}
+
 #[cfg(test)]
 mod tests {
     // Tests require a virtual card or physical YubiKey
