@@ -515,6 +515,111 @@ mod signing {
         let result = sign_bytes(&secret_key, message, "wrong-password");
         assert!(result.is_err());
     }
+
+    #[test]
+    fn test_sign_with_primary_key_variants() {
+        use wecanencrypt::{
+            sign_bytes_cleartext_with_primary_key, sign_bytes_detached_with_primary_key,
+            sign_bytes_with_primary_key,
+        };
+
+        let (secret_key, _) = generate_test_key();
+        let public_key = get_pub_key(&secret_key).unwrap();
+        let message = b"Test primary key signing";
+
+        // Binary signature with primary key
+        let signed = sign_bytes_with_primary_key(&secret_key, message, TEST_PASSWORD).unwrap();
+        let valid = verify_bytes(public_key.as_bytes(), &signed).unwrap();
+        assert!(valid);
+
+        // Cleartext signature with primary key
+        let signed =
+            sign_bytes_cleartext_with_primary_key(&secret_key, message, TEST_PASSWORD).unwrap();
+        let valid = verify_bytes(public_key.as_bytes(), &signed).unwrap();
+        assert!(valid);
+
+        // Detached signature with primary key
+        let signature =
+            sign_bytes_detached_with_primary_key(&secret_key, message, TEST_PASSWORD).unwrap();
+        let valid =
+            verify_bytes_detached(public_key.as_bytes(), message, signature.as_bytes()).unwrap();
+        assert!(valid);
+    }
+
+    #[test]
+    fn test_sign_prefers_signing_subkey() {
+        // Generate a key with all subkeys (including a signing subkey)
+        let key = create_key(
+            TEST_PASSWORD,
+            &[TEST_UID],
+            CipherSuite::Cv25519,
+            None,
+            None,
+            None,
+            SubkeyFlags::all(),
+            false, // primary cannot sign
+            true,
+        )
+        .unwrap();
+        let public_key = get_pub_key(&key.secret_key).unwrap();
+
+        // The default sign_bytes should use the signing subkey and still verify
+        let message = b"Signed by subkey";
+        let signed = sign_bytes(&key.secret_key, message, TEST_PASSWORD).unwrap();
+        let valid = verify_bytes(public_key.as_bytes(), &signed).unwrap();
+        assert!(valid);
+
+        // Detached too
+        let sig = sign_bytes_detached(&key.secret_key, message, TEST_PASSWORD).unwrap();
+        let valid =
+            verify_bytes_detached(public_key.as_bytes(), message, sig.as_bytes()).unwrap();
+        assert!(valid);
+
+        // Cleartext too
+        let signed = sign_bytes_cleartext(&key.secret_key, message, TEST_PASSWORD).unwrap();
+        let valid = verify_bytes(public_key.as_bytes(), &signed).unwrap();
+        assert!(valid);
+    }
+
+    #[test]
+    fn test_sign_primary_vs_subkey_produces_different_signatures() {
+        use wecanencrypt::sign_bytes_detached_with_primary_key;
+
+        // Key where primary CAN sign and also has a signing subkey
+        let key = create_key(
+            TEST_PASSWORD,
+            &[TEST_UID],
+            CipherSuite::Cv25519,
+            None,
+            None,
+            None,
+            SubkeyFlags::all(),
+            true, // primary can sign
+            true,
+        )
+        .unwrap();
+        let public_key = get_pub_key(&key.secret_key).unwrap();
+
+        let message = b"Compare signatures";
+
+        // Default: uses signing subkey
+        let sig_subkey =
+            sign_bytes_detached(&key.secret_key, message, TEST_PASSWORD).unwrap();
+        // Forced: uses primary key
+        let sig_primary =
+            sign_bytes_detached_with_primary_key(&key.secret_key, message, TEST_PASSWORD).unwrap();
+
+        // Both must verify
+        let valid =
+            verify_bytes_detached(public_key.as_bytes(), message, sig_subkey.as_bytes()).unwrap();
+        assert!(valid, "subkey signature should verify");
+        let valid =
+            verify_bytes_detached(public_key.as_bytes(), message, sig_primary.as_bytes()).unwrap();
+        assert!(valid, "primary key signature should verify");
+
+        // The signatures should differ (different issuer keys)
+        assert_ne!(sig_subkey, sig_primary);
+    }
 }
 
 // =============================================================================

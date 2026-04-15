@@ -1291,6 +1291,11 @@ mod new_cipher_suites {
         test_cipher_suite(CipherSuite::Cv25519Modern, "Cv25519Modern");
     }
 
+    #[test]
+    fn test_cv448_modern_key_generation_and_operations() {
+        test_cipher_suite(CipherSuite::Cv448Modern, "Cv448Modern");
+    }
+
     /// Test that fixture keys can be parsed and used
     #[test]
     fn test_parse_fixture_nistp256() {
@@ -1507,6 +1512,19 @@ mod new_cipher_suites {
         assert_eq!(
             "x25519".parse::<CipherSuite>().unwrap(),
             CipherSuite::Cv25519Modern
+        );
+
+        assert_eq!(
+            "cv448modern".parse::<CipherSuite>().unwrap(),
+            CipherSuite::Cv448Modern
+        );
+        assert_eq!(
+            "ed448".parse::<CipherSuite>().unwrap(),
+            CipherSuite::Cv448Modern
+        );
+        assert_eq!(
+            "x448".parse::<CipherSuite>().unwrap(),
+            CipherSuite::Cv448Modern
         );
 
         assert!("invalid".parse::<CipherSuite>().is_err());
