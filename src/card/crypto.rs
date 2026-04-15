@@ -183,6 +183,7 @@ fn select_hash_for_params(params: &PublicParams) -> HashAlgorithm {
             }
         }
         PublicParams::EdDSALegacy(_) | PublicParams::Ed25519(_) => HashAlgorithm::Sha256,
+        PublicParams::Ed448(_) => HashAlgorithm::Sha512,
         PublicParams::RSA(_) => HashAlgorithm::Sha256,
         _ => HashAlgorithm::Sha256,
     }
