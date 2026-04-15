@@ -39,7 +39,7 @@ jobs:
       - name: Install jcecard IFD handler
         run: |
           wget https://kushaldas.in/ifd-jcecard.tar.gz
-          echo "7cd24695ddfab4708bfac5922a7d2cce9e331759d0730888a95546002efec309  ifd-jcecard.tar.gz" | sha256sum -c -
+          echo "7189722f005f902fc7cee90b3cbfca30305c4195a4f083f6678de23204ccda30  ifd-jcecard.tar.gz" | sha256sum -c -
           tar xvf ifd-jcecard.tar.gz
           cd ifd-jcecard
           sudo ./install-jcecard.sh

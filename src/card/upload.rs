@@ -391,7 +391,7 @@ fn upload_via_openpgp_card(
         .transaction()
         .map_err(|e| Error::Card(CardError::CommunicationError(e.to_string())))?;
 
-    // Verify admin PIN and get admin card — use Zeroizing for intermediate String
+    // Verify admin PIN and get admin card — zeroize the intermediate String
     let pin_str = std::str::from_utf8(admin_pin).map_err(|_| {
         Error::Card(CardError::InvalidData(
             "Admin PIN must be valid UTF-8".to_string(),
@@ -399,7 +399,6 @@ fn upload_via_openpgp_card(
     })?;
     let mut pin_owned = pin_str.to_string();
     let pin_secret: SecretString = pin_owned.clone().into();
-    // Zeroize the intermediate String immediately
     zeroize::Zeroize::zeroize(&mut pin_owned);
 
     let mut admin = tx

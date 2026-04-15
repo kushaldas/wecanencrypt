@@ -103,22 +103,16 @@ mod card_tests {
     const RSA_AUTH_FP: &str = "b5871e65b9f6e5cf02c43e49b85db676bef37b03";
 
     // NIST P-256 key fingerprints
-    const NISTP256_PRIMARY_FP: &str = "ea05a76601daef5cd035a2cf015f97430a6fd047";
     const NISTP256_SIGNING_FP: &str = "0c2987bbc6f594f93bb69f3de800ca48a39efa1a";
     const NISTP256_ENCRYPT_FP: &str = "30f08a9908f8dcc812598d8ddc808202a07f17ac";
-    const NISTP256_AUTH_FP: &str = "685dc145a492e63b984a948381efce6f3d51fdbc";
 
     // NIST P-384 key fingerprints
-    const NISTP384_PRIMARY_FP: &str = "41f3eede2e88cd725eda15d98b0ea682f000ed61";
     const NISTP384_SIGNING_FP: &str = "9850241faa91b89c4528299cb1b1e916eaeebdd1";
     const NISTP384_ENCRYPT_FP: &str = "3f092693762a1864b7cdedc546d95dbe5bcb67da";
-    const NISTP384_AUTH_FP: &str = "6f98ef07f705a9c12afaf8d9fd412a1563e6fdf2";
 
     // NIST P-521 key fingerprints
-    const NISTP521_PRIMARY_FP: &str = "c18f906d8776698d73b08a9496211be971a86030";
     const NISTP521_SIGNING_FP: &str = "d4af1821f5f0cda5594d126a4665cfb34310e908";
     const NISTP521_ENCRYPT_FP: &str = "932ed7a86a9e587d5026dbf2dea8a57e7f4bc1d9";
-    const NISTP521_AUTH_FP: &str = "f18ab9f7e1a1ff88f76a4025bf2ea49f18178c08";
 
     // ==================== Helper Functions ====================
 
