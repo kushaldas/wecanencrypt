@@ -8,7 +8,7 @@
 use card_backend_pcsc::PcscBackend;
 use openpgp_card::ocard::{data::UserInteractionFlag, OpenPGP};
 use openpgp_card::Card;
-use secrecy::{SecretString, SecretVec};
+use secrecy::{SecretBox, SecretString};
 
 use super::types::{CardError, CardInfo, CardKeyMatch, CardSummary, KeySlot, SlotMatch, TouchMode};
 use crate::error::{Error, Result};
@@ -181,14 +181,17 @@ pub(crate) fn get_card_backend(ident: Option<&str>) -> Result<PcscBackend> {
     }
 }
 
-/// Convert a PIN byte slice to SecretString.
+/// Convert a PIN byte slice to SecretString, zeroizing the intermediate allocation.
 fn pin_to_secret(pin: &[u8]) -> Result<SecretString> {
     let pin_str = std::str::from_utf8(pin).map_err(|_| {
         Error::Card(CardError::InvalidData(
             "PIN must be valid UTF-8".to_string(),
         ))
     })?;
-    Ok(SecretString::new(pin_str.to_string()))
+    let mut pin_owned = pin_str.to_string();
+    let secret = pin_owned.clone().into();
+    zeroize::Zeroize::zeroize(&mut pin_owned);
+    Ok(secret)
 }
 
 /// Get detailed information about a connected smart card.
@@ -649,7 +652,7 @@ pub fn set_touch_mode(
         .transaction()
         .map_err(|e: openpgp_card::Error| Error::Card(CardError::CardError(e.to_string())))?;
 
-    let secret_pin = SecretVec::new(admin_pin.to_vec());
+    let secret_pin = SecretBox::new(Box::from(admin_pin.to_vec()));
     tx.verify_pw3(secret_pin)
         .map_err(|e: openpgp_card::Error| Error::Card(CardError::CardError(e.to_string())))?;
 
@@ -715,7 +718,7 @@ pub fn set_cardholder_name(name: &str, admin_pin: &[u8], ident: Option<&str>) ->
         .transaction()
         .map_err(|e: openpgp_card::Error| Error::Card(CardError::CardError(e.to_string())))?;
 
-    let secret_pin = SecretVec::new(admin_pin.to_vec());
+    let secret_pin = SecretBox::new(Box::from(admin_pin.to_vec()));
     tx.verify_pw3(secret_pin)
         .map_err(|e: openpgp_card::Error| Error::Card(CardError::CardError(e.to_string())))?;
 
@@ -751,7 +754,7 @@ pub fn set_public_key_url(url: &str, admin_pin: &[u8], ident: Option<&str>) -> R
         .transaction()
         .map_err(|e: openpgp_card::Error| Error::Card(CardError::CardError(e.to_string())))?;
 
-    let secret_pin = SecretVec::new(admin_pin.to_vec());
+    let secret_pin = SecretBox::new(Box::from(admin_pin.to_vec()));
     tx.verify_pw3(secret_pin)
         .map_err(|e: openpgp_card::Error| Error::Card(CardError::CardError(e.to_string())))?;
 

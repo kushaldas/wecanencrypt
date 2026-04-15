@@ -1,15 +1,23 @@
 //! Key upload functionality for smart cards.
 //!
 //! This module provides functions to upload private keys to an OpenPGP smart card.
-//! Uses talktosc for direct APDU communication to avoid openpgp-card's algorithm validation issues.
+//! Uses openpgp-card's key import API for structured key upload with proper
+//! algorithm attribute negotiation and TLV encoding.
 
+use std::cell::RefCell;
 use std::io::Cursor;
 
+use openpgp_card::ocard::crypto::{CardUploadableKey, EccType, PrivateKeyMaterial};
+use openpgp_card::ocard::data::{Fingerprint, KeyGenerationTime};
+use openpgp_card::Card;
+use secrecy::SecretString;
 use zeroize::Zeroizing;
 
 use crate::error::{Error, Result};
 use pgp::composed::{Deserializable, SignedSecretKey};
 use pgp::types::{KeyDetails, Password, PlainSecretParams, PublicParams};
+
+use super::types::CardError;
 
 /// Key slot on the card
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,35 +31,11 @@ pub enum CardKeySlot {
 }
 
 impl CardKeySlot {
-    fn crt_tag(&self) -> &[u8] {
+    fn to_openpgp_key_type(self) -> openpgp_card::ocard::KeyType {
         match self {
-            CardKeySlot::Decryption => &[0xB8, 0x00],
-            CardKeySlot::Signing => &[0xB6, 0x00],
-            CardKeySlot::Authentication => &[0xA4, 0x00],
-        }
-    }
-
-    fn algo_p2(&self) -> u8 {
-        match self {
-            CardKeySlot::Decryption => 0xC2,
-            CardKeySlot::Signing => 0xC1,
-            CardKeySlot::Authentication => 0xC3,
-        }
-    }
-
-    fn fp_p2(&self) -> u8 {
-        match self {
-            CardKeySlot::Decryption => 0xC8,
-            CardKeySlot::Signing => 0xC7,
-            CardKeySlot::Authentication => 0xC9,
-        }
-    }
-
-    fn time_p2(&self) -> u8 {
-        match self {
-            CardKeySlot::Decryption => 0xCF,
-            CardKeySlot::Signing => 0xCE,
-            CardKeySlot::Authentication => 0xD0,
+            CardKeySlot::Signing => openpgp_card::ocard::KeyType::Signing,
+            CardKeySlot::Decryption => openpgp_card::ocard::KeyType::Decryption,
+            CardKeySlot::Authentication => openpgp_card::ocard::KeyType::Authentication,
         }
     }
 }
@@ -92,7 +76,6 @@ pub fn upload_key_to_card(
     slot: CardKeySlot,
     admin_pin: &[u8],
 ) -> Result<()> {
-    // Parse the secret key
     let secret_key = parse_secret_key(secret_key_data)?;
     let password = if key_password.is_empty() {
         Password::empty()
@@ -103,11 +86,8 @@ pub fn upload_key_to_card(
         )
     };
 
-    // Find the appropriate subkey for the slot
     let key_info = find_key_for_slot(&secret_key, &password, slot)?;
-
-    // Upload to card using talktosc
-    upload_with_talktosc(&key_info, slot, admin_pin)
+    upload_via_openpgp_card(key_info, slot, admin_pin)
 }
 
 /// Upload the PRIMARY key to a specific card slot.
@@ -153,11 +133,8 @@ pub fn upload_primary_key_to_card(
         )
     };
 
-    // Extract primary key info
     let key_info = extract_primary_key_info(&secret_key, &password)?;
-
-    // Upload to card using talktosc
-    upload_with_talktosc(&key_info, slot, admin_pin)
+    upload_via_openpgp_card(key_info, slot, admin_pin)
 }
 
 /// Upload a specific subkey by fingerprint to a card slot.
@@ -213,7 +190,7 @@ pub fn upload_subkey_by_fingerprint(
     let primary_fp = hex::encode(secret_key.primary_key.fingerprint().as_bytes());
     if primary_fp == fp_normalized {
         let key_info = extract_primary_key_info(&secret_key, &password)?;
-        return upload_with_talktosc(&key_info, slot, admin_pin);
+        return upload_via_openpgp_card(key_info, slot, admin_pin);
     }
 
     // Search in subkeys
@@ -230,7 +207,7 @@ pub fn upload_subkey_by_fingerprint(
                 })
                 .map_err(|e| Error::Crypto(e.to_string()))??;
 
-            return upload_with_talktosc(&key_info, slot, admin_pin);
+            return upload_via_openpgp_card(key_info, slot, admin_pin);
         }
     }
 
@@ -240,58 +217,216 @@ pub fn upload_subkey_by_fingerprint(
     )))
 }
 
-/// Extract key info from the primary key
-fn extract_primary_key_info(
-    secret_key: &SignedSecretKey,
-    password: &Password,
-) -> Result<KeyUploadInfo> {
-    let primary = &secret_key.primary_key;
-    let timestamp = primary.created_at().as_secs();
-    let fingerprint = primary.fingerprint().as_bytes().to_vec();
-
-    primary
-        .unlock(password, |pub_p, priv_key| {
-            extract_key_info(pub_p, priv_key, timestamp, fingerprint.clone())
-        })
-        .map_err(|e| Error::Crypto(e.to_string()))?
-        .map_err(|e| Error::Crypto(e.to_string()))
-}
+// ---------------------------------------------------------------------------
+// Internal data structures
+// ---------------------------------------------------------------------------
 
 struct KeyUploadInfo {
-    key_type: KeyType,
-    scalar: Zeroizing<Vec<u8>>, // Private key scalar (zeroized on drop)
     fingerprint: Vec<u8>,
     timestamp: u32,
-    // RSA-specific
-    n_bits: Option<u16>,
-    e_bits: Option<u16>,
-    e_value: Option<Vec<u8>>,
-    p_value: Option<Zeroizing<Vec<u8>>>, // RSA prime p (zeroized on drop)
-    q_value: Option<Zeroizing<Vec<u8>>>, // RSA prime q (zeroized on drop)
+    key_material: KeyMaterial,
 }
 
-#[derive(Debug, Clone, Copy)]
-enum KeyType {
-    Ed25519,
-    Cv25519,
-    Rsa,
-    EcdsaP256,
-    EcdsaP384,
-    EcdsaP521,
-    EcdhP256,
-    EcdhP384,
-    EcdhP521,
+enum KeyMaterial {
+    Ecc {
+        scalar: Zeroizing<Vec<u8>>,
+        public_key: Vec<u8>,
+        oid: Vec<u8>,
+        ecc_type: EccType,
+    },
+    Rsa {
+        e: Vec<u8>,
+        n: Vec<u8>,
+        p: Zeroizing<Vec<u8>>,
+        q: Zeroizing<Vec<u8>>,
+        dp1: Zeroizing<Vec<u8>>,
+        dq1: Zeroizing<Vec<u8>>,
+        pq: Zeroizing<Vec<u8>>,
+    },
 }
+
+// ---------------------------------------------------------------------------
+// openpgp-card trait implementations
+// ---------------------------------------------------------------------------
+
+struct UploadableEccKey {
+    oid: Vec<u8>,
+    private_scalar: Zeroizing<Vec<u8>>,
+    public_point: Vec<u8>,
+    ecc_type: EccType,
+}
+
+impl openpgp_card::ocard::crypto::EccKey for UploadableEccKey {
+    fn oid(&self) -> &[u8] {
+        &self.oid
+    }
+    fn private(&self) -> Vec<u8> {
+        self.private_scalar.to_vec()
+    }
+    fn public(&self) -> Vec<u8> {
+        self.public_point.clone()
+    }
+    fn ecc_type(&self) -> EccType {
+        self.ecc_type
+    }
+}
+
+struct UploadableRsaKey {
+    e: Vec<u8>,
+    n: Vec<u8>,
+    p: Zeroizing<Vec<u8>>,
+    q: Zeroizing<Vec<u8>>,
+    dp1: Zeroizing<Vec<u8>>,
+    dq1: Zeroizing<Vec<u8>>,
+    pq: Zeroizing<Vec<u8>>,
+}
+
+impl openpgp_card::ocard::crypto::RSAKey for UploadableRsaKey {
+    fn e(&self) -> &[u8] {
+        &self.e
+    }
+    fn p(&self) -> &[u8] {
+        &self.p
+    }
+    fn q(&self) -> &[u8] {
+        &self.q
+    }
+    fn pq(&self) -> Box<[u8]> {
+        self.pq.to_vec().into_boxed_slice()
+    }
+    fn dp1(&self) -> Box<[u8]> {
+        self.dp1.to_vec().into_boxed_slice()
+    }
+    fn dq1(&self) -> Box<[u8]> {
+        self.dq1.to_vec().into_boxed_slice()
+    }
+    fn n(&self) -> &[u8] {
+        &self.n
+    }
+}
+
+struct UploadableKey {
+    material: RefCell<Option<PrivateKeyMaterial>>,
+    fp: [u8; 20],
+    ts: u32,
+}
+
+impl CardUploadableKey for UploadableKey {
+    fn private_key(&self) -> std::result::Result<PrivateKeyMaterial, openpgp_card::Error> {
+        self.material.borrow_mut().take().ok_or_else(|| {
+            openpgp_card::Error::InternalError("Key material already consumed".into())
+        })
+    }
+
+    fn timestamp(&self) -> KeyGenerationTime {
+        self.ts.into()
+    }
+
+    fn fingerprint(&self) -> std::result::Result<Fingerprint, openpgp_card::Error> {
+        Ok(self.fp.into())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Upload via openpgp-card
+// ---------------------------------------------------------------------------
+
+fn upload_via_openpgp_card(
+    key_info: KeyUploadInfo,
+    slot: CardKeySlot,
+    admin_pin: &[u8],
+) -> Result<()> {
+    let key_type = slot.to_openpgp_key_type();
+
+    // Build the PrivateKeyMaterial
+    let material = match key_info.key_material {
+        KeyMaterial::Ecc {
+            scalar,
+            public_key,
+            oid,
+            ecc_type,
+        } => PrivateKeyMaterial::E(Box::new(UploadableEccKey {
+            oid,
+            private_scalar: scalar,
+            public_point: public_key,
+            ecc_type,
+        })),
+        KeyMaterial::Rsa {
+            e,
+            n,
+            p,
+            q,
+            dp1,
+            dq1,
+            pq,
+        } => PrivateKeyMaterial::R(Box::new(UploadableRsaKey {
+            e,
+            n,
+            p,
+            q,
+            dp1,
+            dq1,
+            pq,
+        })),
+    };
+
+    // Build the fingerprint array
+    let fp: [u8; 20] = key_info
+        .fingerprint
+        .as_slice()
+        .try_into()
+        .map_err(|_| Error::Crypto("Fingerprint must be exactly 20 bytes".to_string()))?;
+
+    let uploadable = UploadableKey {
+        material: RefCell::new(Some(material)),
+        fp,
+        ts: key_info.timestamp,
+    };
+
+    // Connect to card
+    let backend = super::connection::get_card_backend(None)?;
+    let mut card = Card::new(backend)
+        .map_err(|e| Error::Card(CardError::CommunicationError(e.to_string())))?;
+    let mut tx = card
+        .transaction()
+        .map_err(|e| Error::Card(CardError::CommunicationError(e.to_string())))?;
+
+    // Verify admin PIN and get admin card — zeroize the intermediate String
+    let pin_str = std::str::from_utf8(admin_pin).map_err(|_| {
+        Error::Card(CardError::InvalidData(
+            "Admin PIN must be valid UTF-8".to_string(),
+        ))
+    })?;
+    let mut pin_owned = pin_str.to_string();
+    let pin_secret: SecretString = pin_owned.clone().into();
+    zeroize::Zeroize::zeroize(&mut pin_owned);
+
+    let mut admin = tx
+        .to_admin_card(pin_secret)
+        .map_err(|e| Error::Card(CardError::from(e)))?;
+
+    // Import the key
+    admin
+        .import_key(Box::new(uploadable), key_type)
+        .map_err(|e| {
+            Error::Card(CardError::CommunicationError(format!(
+                "Key import failed: {}",
+                e
+            )))
+        })?;
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Key parsing and extraction
+// ---------------------------------------------------------------------------
 
 /// Parse a secret key from armored or binary format
 fn parse_secret_key(data: &[u8]) -> Result<SignedSecretKey> {
-    // Try armored first
     match SignedSecretKey::from_armor_single(Cursor::new(data)) {
         Ok((key, _headers)) => Ok(key),
-        Err(_) => {
-            // Try binary
-            SignedSecretKey::from_bytes(data).map_err(|e| Error::Parse(e.to_string()))
-        }
+        Err(_) => SignedSecretKey::from_bytes(data).map_err(|e| Error::Parse(e.to_string())),
     }
 }
 
@@ -309,7 +444,6 @@ fn find_key_for_slot(
     }
 }
 
-/// Check if algorithm supports signing
 fn is_signing_algorithm(params: &PublicParams) -> bool {
     matches!(
         params,
@@ -320,7 +454,6 @@ fn is_signing_algorithm(params: &PublicParams) -> bool {
     )
 }
 
-/// Check if algorithm supports encryption
 fn is_encryption_algorithm(params: &PublicParams) -> bool {
     matches!(
         params,
@@ -328,16 +461,12 @@ fn is_encryption_algorithm(params: &PublicParams) -> bool {
     )
 }
 
-/// Find a signing-capable key (checks both algorithm and key flags)
 fn find_signing_key(secret_key: &SignedSecretKey, password: &Password) -> Result<KeyUploadInfo> {
-    // First check subkeys for a signing key
     for subkey in &secret_key.secret_subkeys {
         let pub_params = subkey.key.public_params();
-        // Check algorithm supports signing
         if !is_signing_algorithm(pub_params) {
             continue;
         }
-        // Check if binding signature has signing flag
         let has_signing_flag = subkey.signatures.iter().any(|sig| sig.key_flags().sign());
         if !has_signing_flag {
             continue;
@@ -356,7 +485,6 @@ fn find_signing_key(secret_key: &SignedSecretKey, password: &Password) -> Result
         return Ok(info);
     }
 
-    // Fall back to primary key
     let primary = &secret_key.primary_key;
     let pub_params = primary.public_params();
     if is_signing_algorithm(pub_params) {
@@ -375,16 +503,12 @@ fn find_signing_key(secret_key: &SignedSecretKey, password: &Password) -> Result
     Err(Error::Crypto("No signing-capable key found".to_string()))
 }
 
-/// Find an encryption-capable key (checks both algorithm and key flags)
 fn find_encryption_key(secret_key: &SignedSecretKey, password: &Password) -> Result<KeyUploadInfo> {
-    // First check subkeys
     for subkey in &secret_key.secret_subkeys {
         let pub_params = subkey.key.public_params();
-        // Check algorithm supports encryption
         if !is_encryption_algorithm(pub_params) {
             continue;
         }
-        // Check if binding signature has encryption flags
         let has_encryption_flags = subkey.signatures.iter().any(|sig| {
             let flags = sig.key_flags();
             flags.encrypt_comms() || flags.encrypt_storage()
@@ -406,7 +530,6 @@ fn find_encryption_key(secret_key: &SignedSecretKey, password: &Password) -> Res
         return Ok(info);
     }
 
-    // Fall back to primary key
     let primary = &secret_key.primary_key;
     let pub_params = primary.public_params();
     if is_encryption_algorithm(pub_params) {
@@ -425,6 +548,30 @@ fn find_encryption_key(secret_key: &SignedSecretKey, password: &Password) -> Res
     Err(Error::Crypto("No encryption-capable key found".to_string()))
 }
 
+/// Extract key info from the primary key
+fn extract_primary_key_info(
+    secret_key: &SignedSecretKey,
+    password: &Password,
+) -> Result<KeyUploadInfo> {
+    let primary = &secret_key.primary_key;
+    let timestamp = primary.created_at().as_secs();
+    let fingerprint = primary.fingerprint().as_bytes().to_vec();
+
+    primary
+        .unlock(password, |pub_p, priv_key| {
+            extract_key_info(pub_p, priv_key, timestamp, fingerprint.clone())
+        })
+        .map_err(|e| Error::Crypto(e.to_string()))?
+        .map_err(|e| Error::Crypto(e.to_string()))
+}
+
+// OID constants matching openpgp-card's oid module
+const OID_ED25519: &[u8] = &[0x2B, 0x06, 0x01, 0x04, 0x01, 0xDA, 0x47, 0x0F, 0x01];
+const OID_CV25519: &[u8] = &[0x2B, 0x06, 0x01, 0x04, 0x01, 0x97, 0x55, 0x01, 0x05, 0x01];
+const OID_NIST_P256: &[u8] = &[0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x03, 0x01, 0x07];
+const OID_NIST_P384: &[u8] = &[0x2B, 0x81, 0x04, 0x00, 0x22];
+const OID_NIST_P521: &[u8] = &[0x2B, 0x81, 0x04, 0x00, 0x23];
+
 fn extract_key_info(
     pub_params: &PublicParams,
     priv_params: &PlainSecretParams,
@@ -432,370 +579,179 @@ fn extract_key_info(
     fingerprint: Vec<u8>,
 ) -> pgp::errors::Result<KeyUploadInfo> {
     match (pub_params, priv_params) {
-        (PublicParams::EdDSALegacy(_), PlainSecretParams::Ed25519Legacy(ed_priv))
-        | (PublicParams::Ed25519(_), PlainSecretParams::Ed25519(ed_priv)) => Ok(KeyUploadInfo {
-            key_type: KeyType::Ed25519,
-            scalar: Zeroizing::new(ed_priv.to_bytes().to_vec()),
+        // Ed25519 (legacy v4 and modern v6)
+        (PublicParams::EdDSALegacy(ed_pub), PlainSecretParams::Ed25519Legacy(ed_priv)) => {
+            use pgp::types::EddsaLegacyPublicParams;
+            let public_key = match ed_pub {
+                EddsaLegacyPublicParams::Ed25519 { key } => key.as_bytes().to_vec(),
+                _ => return Err("Unsupported EdDSA curve for card".to_string().into()),
+            };
+            Ok(KeyUploadInfo {
+                fingerprint,
+                timestamp,
+                key_material: KeyMaterial::Ecc {
+                    scalar: Zeroizing::new(ed_priv.to_bytes().to_vec()),
+                    public_key,
+                    oid: OID_ED25519.to_vec(),
+                    ecc_type: EccType::EdDSA,
+                },
+            })
+        }
+        (PublicParams::Ed25519(ed_pub), PlainSecretParams::Ed25519(ed_priv)) => Ok(KeyUploadInfo {
             fingerprint,
             timestamp,
-            n_bits: None,
-            e_bits: None,
-            e_value: None,
-            p_value: None,
-            q_value: None,
+            key_material: KeyMaterial::Ecc {
+                scalar: Zeroizing::new(ed_priv.to_bytes().to_vec()),
+                public_key: ed_pub.key.as_bytes().to_vec(),
+                oid: OID_ED25519.to_vec(),
+                ecc_type: EccType::EdDSA,
+            },
         }),
+        // ECDH (Cv25519 and NIST curves)
         (PublicParams::ECDH(ecdh_pub), PlainSecretParams::ECDH(ecdh_priv)) => {
             use pgp::types::EcdhPublicParams;
             match ecdh_pub {
-                EcdhPublicParams::Curve25519 { .. } => {
-                    // CV25519 scalar needs to be in big-endian format for the card
-                    // rpgp stores it in little-endian (native x25519 format), so we reverse
+                EcdhPublicParams::Curve25519 { p, .. } => {
+                    // CV25519 scalar: rpgp stores little-endian, card expects big-endian
                     let scalar_le = ecdh_priv.to_bytes();
                     let scalar_be: Vec<u8> = scalar_le.iter().rev().copied().collect();
                     Ok(KeyUploadInfo {
-                        key_type: KeyType::Cv25519,
-                        scalar: Zeroizing::new(scalar_be),
                         fingerprint,
                         timestamp,
-                        n_bits: None,
-                        e_bits: None,
-                        e_value: None,
-                        p_value: None,
-                        q_value: None,
+                        key_material: KeyMaterial::Ecc {
+                            scalar: Zeroizing::new(scalar_be),
+                            public_key: p.as_bytes().to_vec(),
+                            oid: OID_CV25519.to_vec(),
+                            ecc_type: EccType::ECDH,
+                        },
                     })
                 }
-                EcdhPublicParams::P256 { .. } => Ok(KeyUploadInfo {
-                    key_type: KeyType::EcdhP256,
-                    scalar: Zeroizing::new(ecdh_priv.to_bytes()),
+                EcdhPublicParams::P256 { p, .. } => Ok(KeyUploadInfo {
                     fingerprint,
                     timestamp,
-                    n_bits: None,
-                    e_bits: None,
-                    e_value: None,
-                    p_value: None,
-                    q_value: None,
+                    key_material: KeyMaterial::Ecc {
+                        scalar: Zeroizing::new(ecdh_priv.to_bytes()),
+                        public_key: p.to_sec1_bytes().to_vec(),
+                        oid: OID_NIST_P256.to_vec(),
+                        ecc_type: EccType::ECDH,
+                    },
                 }),
-                EcdhPublicParams::P384 { .. } => Ok(KeyUploadInfo {
-                    key_type: KeyType::EcdhP384,
-                    scalar: Zeroizing::new(ecdh_priv.to_bytes()),
+                EcdhPublicParams::P384 { p, .. } => Ok(KeyUploadInfo {
                     fingerprint,
                     timestamp,
-                    n_bits: None,
-                    e_bits: None,
-                    e_value: None,
-                    p_value: None,
-                    q_value: None,
+                    key_material: KeyMaterial::Ecc {
+                        scalar: Zeroizing::new(ecdh_priv.to_bytes()),
+                        public_key: p.to_sec1_bytes().to_vec(),
+                        oid: OID_NIST_P384.to_vec(),
+                        ecc_type: EccType::ECDH,
+                    },
                 }),
-                EcdhPublicParams::P521 { .. } => Ok(KeyUploadInfo {
-                    key_type: KeyType::EcdhP521,
-                    scalar: Zeroizing::new(ecdh_priv.to_bytes()),
+                EcdhPublicParams::P521 { p, .. } => Ok(KeyUploadInfo {
                     fingerprint,
                     timestamp,
-                    n_bits: None,
-                    e_bits: None,
-                    e_value: None,
-                    p_value: None,
-                    q_value: None,
+                    key_material: KeyMaterial::Ecc {
+                        scalar: Zeroizing::new(ecdh_priv.to_bytes()),
+                        public_key: p.to_sec1_bytes().to_vec(),
+                        oid: OID_NIST_P521.to_vec(),
+                        ecc_type: EccType::ECDH,
+                    },
                 }),
                 _ => Err("Unsupported ECDH curve for card".to_string().into()),
             }
         }
+        // RSA
         (PublicParams::RSA(rsa_pub), PlainSecretParams::RSA(rsa_priv)) => {
-            use rsa::traits::PublicKeyParts;
+            use rsa::traits::{PrivateKeyParts, PublicKeyParts};
+            use rsa::{BigUint, RsaPrivateKey};
+
             let (d, p, q, _u) = rsa_priv.to_bytes();
-            let n = rsa_pub.key.n();
-            let e = rsa_pub.key.e();
+            let n_bn = rsa_pub.key.n().clone();
+            let e_bn = rsa_pub.key.e().clone();
+            let d_bn = BigUint::from_bytes_be(&d);
+            let p_bn = BigUint::from_bytes_be(&p);
+            let q_bn = BigUint::from_bytes_be(&q);
+
+            let mut rsa_key = RsaPrivateKey::from_components(n_bn, e_bn, d_bn, vec![p_bn, q_bn])
+                .map_err(|e| format!("Invalid RSA key: {}", e))?;
+            rsa_key
+                .precompute()
+                .map_err(|e| format!("RSA precompute failed: {}", e))?;
+
+            let dp1 = rsa_key
+                .dp()
+                .ok_or_else(|| String::from("Missing dp1"))?
+                .to_bytes_be();
+            let dq1 = rsa_key
+                .dq()
+                .ok_or_else(|| String::from("Missing dq1"))?
+                .to_bytes_be();
+            let pq = rsa_key
+                .qinv()
+                .ok_or_else(|| String::from("Missing qinv"))?
+                .to_biguint()
+                .ok_or_else(|| String::from("qinv is negative"))?
+                .to_bytes_be();
 
             Ok(KeyUploadInfo {
-                key_type: KeyType::Rsa,
-                scalar: Zeroizing::new(d), // d for RSA
                 fingerprint,
                 timestamp,
-                n_bits: Some(n.bits() as u16),
-                e_bits: Some(e.bits() as u16),
-                e_value: Some(e.to_bytes_be()),
-                p_value: Some(Zeroizing::new(p)),
-                q_value: Some(Zeroizing::new(q)),
+                key_material: KeyMaterial::Rsa {
+                    e: rsa_pub.key.e().to_bytes_be(),
+                    n: rsa_pub.key.n().to_bytes_be(),
+                    p: Zeroizing::new(p),
+                    q: Zeroizing::new(q),
+                    dp1: Zeroizing::new(dp1),
+                    dq1: Zeroizing::new(dq1),
+                    pq: Zeroizing::new(pq),
+                },
             })
         }
+        // ECDSA (NIST curves)
         (PublicParams::ECDSA(ecdsa_pub), PlainSecretParams::ECDSA(ecdsa_priv)) => {
             use pgp::types::EcdsaPublicParams;
-            let key_type = match ecdsa_pub {
-                EcdsaPublicParams::P256 { .. } => KeyType::EcdsaP256,
-                EcdsaPublicParams::P384 { .. } => KeyType::EcdsaP384,
-                EcdsaPublicParams::P521 { .. } => KeyType::EcdsaP521,
-                _ => return Err("Unsupported ECDSA curve for card".to_string().into()),
-            };
-            Ok(KeyUploadInfo {
-                key_type,
-                scalar: Zeroizing::new(ecdsa_priv.to_bytes()),
-                fingerprint,
-                timestamp,
-                n_bits: None,
-                e_bits: None,
-                e_value: None,
-                p_value: None,
-                q_value: None,
-            })
+            match ecdsa_pub {
+                EcdsaPublicParams::P256 { key } => {
+                    use p256::elliptic_curve::sec1::ToEncodedPoint;
+                    Ok(KeyUploadInfo {
+                        fingerprint,
+                        timestamp,
+                        key_material: KeyMaterial::Ecc {
+                            scalar: Zeroizing::new(ecdsa_priv.to_bytes()),
+                            public_key: key.to_encoded_point(false).as_bytes().to_vec(),
+                            oid: OID_NIST_P256.to_vec(),
+                            ecc_type: EccType::ECDSA,
+                        },
+                    })
+                }
+                EcdsaPublicParams::P384 { key } => {
+                    use p384::elliptic_curve::sec1::ToEncodedPoint;
+                    Ok(KeyUploadInfo {
+                        fingerprint,
+                        timestamp,
+                        key_material: KeyMaterial::Ecc {
+                            scalar: Zeroizing::new(ecdsa_priv.to_bytes()),
+                            public_key: key.to_encoded_point(false).as_bytes().to_vec(),
+                            oid: OID_NIST_P384.to_vec(),
+                            ecc_type: EccType::ECDSA,
+                        },
+                    })
+                }
+                EcdsaPublicParams::P521 { key } => {
+                    use p521::elliptic_curve::sec1::ToEncodedPoint;
+                    Ok(KeyUploadInfo {
+                        fingerprint,
+                        timestamp,
+                        key_material: KeyMaterial::Ecc {
+                            scalar: Zeroizing::new(ecdsa_priv.to_bytes()),
+                            public_key: key.to_encoded_point(false).as_bytes().to_vec(),
+                            oid: OID_NIST_P521.to_vec(),
+                            ecc_type: EccType::ECDSA,
+                        },
+                    })
+                }
+                _ => Err("Unsupported ECDSA curve for card".to_string().into()),
+            }
         }
         _ => Err("Unsupported key type for card upload".to_string().into()),
     }
-}
-
-/// Upload key to card using talktosc
-fn upload_with_talktosc(
-    key_info: &KeyUploadInfo,
-    slot: CardKeySlot,
-    admin_pin: &[u8],
-) -> Result<()> {
-    use talktosc::apdus::APDU;
-    use talktosc::{create_connection, disconnect, send_and_parse};
-
-    // Create connection to card
-    let card = create_connection().map_err(|e| {
-        Error::Card(super::types::CardError::CommunicationError(format!(
-            "Failed to connect to card: {}",
-            e
-        )))
-    })?;
-
-    // Select OpenPGP application
-    let select_apdu = APDU::new(
-        0x00,
-        0xA4,
-        0x04,
-        0x00,
-        Some(vec![0xD2, 0x76, 0x00, 0x01, 0x24, 0x01]),
-    );
-    let resp = send_and_parse(&card, select_apdu);
-    if resp.is_err() {
-        disconnect(card);
-        return Err(Error::Card(super::types::CardError::CommunicationError(
-            "Failed to select OpenPGP applet".to_string(),
-        )));
-    }
-
-    // Verify admin PIN (PW3) — use Zeroizing for the PIN copy
-    let pin_buf = Zeroizing::new(admin_pin.to_vec());
-    let pw3_apdu = talktosc::apdus::create_apdu_verify_pw3(pin_buf.to_vec());
-    let resp = send_and_parse(&card, pw3_apdu);
-    if resp.is_err() {
-        disconnect(card);
-        return Err(Error::Card(super::types::CardError::PinIncorrect {
-            retries_remaining: 3,
-        }));
-    }
-
-    // Build and send algorithm attributes
-    let algo_attrs = build_algo_attributes(key_info);
-    let algo_apdu = APDU::create_big_apdu(0x00, 0xDA, 0x00, slot.algo_p2(), algo_attrs);
-    let resp = send_and_parse(&card, algo_apdu);
-    if resp.is_err() {
-        disconnect(card);
-        return Err(Error::Card(super::types::CardError::CommunicationError(
-            "Failed to set algorithm attributes".to_string(),
-        )));
-    }
-
-    // Verify admin PIN again (required by some cards)
-    let pw3_apdu = talktosc::apdus::create_apdu_verify_pw3(pin_buf.to_vec());
-    drop(pin_buf); // Explicitly zeroize PIN buffer
-    let _ = send_and_parse(&card, pw3_apdu);
-
-    // Build and send key import data
-    let key_data = build_key_import_data(key_info, slot)?;
-    let import_apdu = APDU::create_big_apdu(0x00, 0xDB, 0x3F, 0xFF, key_data);
-    let resp = send_and_parse(&card, import_apdu);
-    if resp.is_err() {
-        disconnect(card);
-        return Err(Error::Card(super::types::CardError::CommunicationError(
-            "Failed to import key".to_string(),
-        )));
-    }
-
-    // Set fingerprint
-    let fp_apdu =
-        APDU::create_big_apdu(0x00, 0xDA, 0x00, slot.fp_p2(), key_info.fingerprint.clone());
-    let resp = send_and_parse(&card, fp_apdu);
-    if resp.is_err() {
-        disconnect(card);
-        return Err(Error::Card(super::types::CardError::CommunicationError(
-            "Failed to set fingerprint".to_string(),
-        )));
-    }
-
-    // Set timestamp
-    let time_value: Vec<u8> = key_info
-        .timestamp
-        .to_be_bytes()
-        .iter()
-        .skip_while(|&&e| e == 0)
-        .copied()
-        .collect();
-    let time_apdu = APDU::new(0x00, 0xDA, 0x00, slot.time_p2(), Some(time_value));
-    let resp = send_and_parse(&card, time_apdu);
-    if resp.is_err() {
-        disconnect(card);
-        return Err(Error::Card(super::types::CardError::CommunicationError(
-            "Failed to set timestamp".to_string(),
-        )));
-    }
-
-    disconnect(card);
-    Ok(())
-}
-
-fn build_algo_attributes(key_info: &KeyUploadInfo) -> Vec<u8> {
-    match key_info.key_type {
-        KeyType::Ed25519 => {
-            // EdDSA with Ed25519 OID: 1.3.6.1.4.1.11591.15.1
-            vec![0x16, 0x2B, 0x06, 0x01, 0x04, 0x01, 0xDA, 0x47, 0x0F, 0x01]
-        }
-        KeyType::Cv25519 => {
-            // ECDH with cv25519 OID: 1.3.6.1.4.1.3029.1.5.1
-            vec![
-                0x12, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x97, 0x55, 0x01, 0x05, 0x01,
-            ]
-        }
-        KeyType::EcdsaP256 => {
-            // ECDSA with NIST P-256 OID: 1.2.840.10045.3.1.7
-            vec![0x13, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x03, 0x01, 0x07]
-        }
-        KeyType::EcdsaP384 => {
-            // ECDSA with NIST P-384 OID: 1.3.132.0.34
-            vec![0x13, 0x2B, 0x81, 0x04, 0x00, 0x22]
-        }
-        KeyType::EcdsaP521 => {
-            // ECDSA with NIST P-521 OID: 1.3.132.0.35
-            vec![0x13, 0x2B, 0x81, 0x04, 0x00, 0x23]
-        }
-        KeyType::EcdhP256 => {
-            // ECDH with NIST P-256 OID: 1.2.840.10045.3.1.7
-            vec![0x12, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x03, 0x01, 0x07]
-        }
-        KeyType::EcdhP384 => {
-            // ECDH with NIST P-384 OID: 1.3.132.0.34
-            vec![0x12, 0x2B, 0x81, 0x04, 0x00, 0x22]
-        }
-        KeyType::EcdhP521 => {
-            // ECDH with NIST P-521 OID: 1.3.132.0.35
-            vec![0x12, 0x2B, 0x81, 0x04, 0x00, 0x23]
-        }
-        KeyType::Rsa => {
-            let mut attrs = vec![0x01]; // RSA algorithm ID
-
-            // n bit length (2 bytes)
-            if let Some(n_bits) = key_info.n_bits {
-                attrs.extend(n_bits.to_be_bytes());
-            }
-
-            // e bit length (2 bytes)
-            if let Some(e_bits) = key_info.e_bits {
-                attrs.extend(e_bits.to_be_bytes());
-            }
-
-            // Import format: 00 = standard (e, p, q)
-            attrs.push(0x00);
-
-            attrs
-        }
-    }
-}
-
-fn build_key_import_data(key_info: &KeyUploadInfo, slot: CardKeySlot) -> Result<Vec<u8>> {
-    let mut for4d: Vec<u8> = vec![0x4D];
-
-    match key_info.key_type {
-        KeyType::Ed25519
-        | KeyType::Cv25519
-        | KeyType::EcdsaP256
-        | KeyType::EcdsaP384
-        | KeyType::EcdsaP521
-        | KeyType::EcdhP256
-        | KeyType::EcdhP384
-        | KeyType::EcdhP521 => {
-            // Build 5F48 TLV (private key scalar)
-            let mut for5f48: Vec<u8> = vec![0x5F, 0x48];
-            let scalar_len = key_info.scalar.len();
-            if scalar_len > 0x7F {
-                // Use 2-byte length encoding for larger scalars (P-384: 48 bytes, P-521: 66 bytes)
-                for5f48.push(0x81);
-                for5f48.push(scalar_len as u8);
-            } else {
-                for5f48.push(scalar_len as u8);
-            }
-            for5f48.extend(key_info.scalar.as_slice());
-
-            // Build 7F48 TLV (template)
-            let mut for7f48 = vec![0x7F, 0x48];
-            if scalar_len > 0x7F {
-                for7f48.extend([0x03, 0x92, 0x81, scalar_len as u8]);
-            } else {
-                for7f48.extend([0x02, 0x92, scalar_len as u8]);
-            }
-
-            // Combine into main data
-            let mut maindata: Vec<u8> = slot.crt_tag().to_vec();
-            maindata.extend(&for7f48);
-            maindata.extend(&for5f48);
-
-            // Add length to 4D tag
-            let maindata_len = maindata.len();
-            if maindata_len > 0x7F {
-                for4d.push(0x81);
-            }
-            for4d.push(maindata_len as u8);
-            for4d.extend(maindata);
-        }
-        KeyType::Rsa => {
-            // Build result: e + p + q
-            let mut result: Vec<u8> = Vec::new();
-            if let Some(ref e) = key_info.e_value {
-                result.extend(e);
-            }
-            if let Some(ref p) = key_info.p_value {
-                result.extend(p.as_slice());
-            }
-            if let Some(ref q) = key_info.q_value {
-                result.extend(q.as_slice());
-            }
-
-            // Build 5F48 TLV
-            let mut for5f48: Vec<u8> = vec![0x5F, 0x48];
-            let len = result.len() as u16;
-            if len > 0xFF {
-                for5f48.push(0x82);
-            } else {
-                for5f48.push(0x81);
-            }
-            let length = len.to_be_bytes();
-            for5f48.push(length[0]);
-            for5f48.push(length[1]);
-            for5f48.extend(result);
-
-            // Build 7F48 TLV for RSA
-            let for7f48 = vec![
-                0x7F, 0x48, 0x0A, 0x91, 0x03, 0x92, 0x82, 0x01, 0x00, 0x93, 0x82, 0x01, 0x00,
-            ];
-
-            // Combine into main data
-            let mut maindata: Vec<u8> = slot.crt_tag().to_vec();
-            maindata.extend(&for7f48);
-            maindata.extend(&for5f48);
-
-            // Add length to 4D tag
-            let len = maindata.len() as u16;
-            if len > 0xFF {
-                for4d.push(0x82);
-            } else {
-                for4d.push(0x81);
-            }
-            let length = len.to_be_bytes();
-            for4d.push(length[0]);
-            for4d.push(length[1]);
-            for4d.extend(maindata);
-        }
-    }
-
-    Ok(for4d)
 }

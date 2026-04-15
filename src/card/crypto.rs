@@ -67,14 +67,17 @@ pub fn sign_bytes_detached_on_card(data: &[u8], public_cert: &[u8], pin: &[u8]) 
         .map_err(|e| Error::Crypto(e.to_string()))
 }
 
-/// Convert a PIN byte slice to SecretString.
+/// Convert a PIN byte slice to SecretString, zeroizing the intermediate allocation.
 fn pin_to_secret(pin: &[u8]) -> Result<SecretString> {
     let pin_str = std::str::from_utf8(pin).map_err(|_| {
         Error::Card(CardError::InvalidData(
             "PIN must be valid UTF-8".to_string(),
         ))
     })?;
-    Ok(SecretString::new(pin_str.to_string()))
+    let mut pin_owned = pin_str.to_string();
+    let secret = pin_owned.clone().into();
+    zeroize::Zeroize::zeroize(&mut pin_owned);
+    Ok(secret)
 }
 
 /// Signing key info extracted from a public key
@@ -1365,13 +1368,13 @@ pub fn ssh_authenticate_on_card(data: &[u8], pin: &[u8], ident: Option<&str>) ->
         .transaction()
         .map_err(|e| Error::Card(CardError::CommunicationError(e.to_string())))?;
 
-    // Verify user PIN
-    let pin_str = SecretString::from(
-        std::str::from_utf8(pin)
-            .map_err(|_| Error::Card(CardError::InvalidData("PIN is not valid UTF-8".into())))?
-            .to_string(),
-    );
-    tx.verify_user_pin(pin_str)
+    // Verify user PIN — zeroize the intermediate String
+    let pin_utf8 = std::str::from_utf8(pin)
+        .map_err(|_| Error::Card(CardError::InvalidData("PIN is not valid UTF-8".into())))?;
+    let mut pin_owned = pin_utf8.to_string();
+    let pin_secret: SecretString = pin_owned.clone().into();
+    zeroize::Zeroize::zeroize(&mut pin_owned);
+    tx.verify_user_pin(pin_secret)
         .map_err(|e| Error::Card(CardError::from(e)))?;
 
     // Perform internal authenticate via the inner ocard::Transaction
@@ -1415,13 +1418,13 @@ pub fn ssh_authenticate_for_hash_on_card(
         .transaction()
         .map_err(|e| Error::Card(CardError::CommunicationError(e.to_string())))?;
 
-    // Verify user PIN
-    let pin_str = SecretString::from(
-        std::str::from_utf8(pin)
-            .map_err(|_| Error::Card(CardError::InvalidData("PIN is not valid UTF-8".into())))?
-            .to_string(),
-    );
-    tx.verify_user_pin(pin_str)
+    // Verify user PIN — zeroize the intermediate String
+    let pin_utf8 = std::str::from_utf8(pin)
+        .map_err(|_| Error::Card(CardError::InvalidData("PIN is not valid UTF-8".into())))?;
+    let mut pin_owned = pin_utf8.to_string();
+    let pin_secret: SecretString = pin_owned.clone().into();
+    zeroize::Zeroize::zeroize(&mut pin_owned);
+    tx.verify_user_pin(pin_secret)
         .map_err(|e| Error::Card(CardError::from(e)))?;
 
     // Perform authenticate with hash via the inner ocard::Transaction

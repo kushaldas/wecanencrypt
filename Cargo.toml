@@ -1,6 +1,6 @@
 [package]
 name = "wecanencrypt"
-version = "0.7.1"
+version = "0.8.0"
 edition = "2021"
 license = "MIT"
 description = "Simple Rust OpenPGP library for encryption, signing, and key management."
@@ -20,7 +20,7 @@ include = [
 default = ["keystore", "network"]
 keystore = ["rusqlite"]
 network = ["reqwest", "sha1"]
-card = ["openpgp-card", "card-backend-pcsc", "secrecy", "talktosc", "digest", "aes", "aes-kw", "hkdf"]
+card = ["openpgp-card", "card-backend-pcsc", "secrecy", "digest", "aes", "aes-kw", "hkdf"]
 dane = ["hickory-proto"]
 draft-pqc = ["pgp/draft-pqc"]
 
@@ -68,10 +68,9 @@ reqwest = { version = "0.12", features = ["blocking"], optional = true }
 hickory-proto = { version = "0.25", default-features = false, optional = true }
 
 # Smart card support (optional)
-openpgp-card = { version = "0.5", optional = true }
+openpgp-card = { version = "0.6", optional = true }
 card-backend-pcsc = { version = "0.5", optional = true }
-secrecy = { version = "0.8", optional = true }
-talktosc = { version = "0.3", optional = true }
+secrecy = { version = "0.10", optional = true }
 
 [dev-dependencies]
 tempfile = "3.0"
