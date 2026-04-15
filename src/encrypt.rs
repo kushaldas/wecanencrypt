@@ -118,6 +118,23 @@ pub fn encrypt_bytes_to_multiple_with_algo(
     armor: bool,
     sym_algo: SymmetricKeyAlgorithm,
 ) -> Result<Vec<u8>> {
+    // Reject deprecated/insecure algorithms per RFC 9580 §9.3
+    match sym_algo {
+        SymmetricKeyAlgorithm::AES128
+        | SymmetricKeyAlgorithm::AES192
+        | SymmetricKeyAlgorithm::AES256
+        | SymmetricKeyAlgorithm::Twofish
+        | SymmetricKeyAlgorithm::Camellia128
+        | SymmetricKeyAlgorithm::Camellia192
+        | SymmetricKeyAlgorithm::Camellia256 => {}
+        _ => {
+            return Err(Error::InvalidInput(format!(
+                "Symmetric algorithm {:?} is not allowed for encryption per RFC 9580",
+                sym_algo
+            )));
+        }
+    }
+
     if recipient_certs.is_empty() {
         return Err(Error::InvalidInput("No recipients specified".to_string()));
     }

@@ -314,6 +314,83 @@ mod encryption {
     }
 
     #[test]
+    fn test_encrypt_rejects_insecure_algorithms() {
+        use wecanencrypt::{encrypt_bytes_to_multiple_with_algo, SymmetricKeyAlgorithm};
+
+        let (secret_key, _) = generate_test_key();
+        let public_key = get_pub_key(&secret_key).unwrap();
+
+        let plaintext = b"test message";
+
+        // Plaintext (no encryption) must be rejected
+        let result = encrypt_bytes_to_multiple_with_algo(
+            &[public_key.as_bytes()],
+            plaintext,
+            true,
+            SymmetricKeyAlgorithm::Plaintext,
+        );
+        assert!(result.is_err());
+
+        // TripleDES must be rejected
+        let result = encrypt_bytes_to_multiple_with_algo(
+            &[public_key.as_bytes()],
+            plaintext,
+            true,
+            SymmetricKeyAlgorithm::TripleDES,
+        );
+        assert!(result.is_err());
+
+        // CAST5 must be rejected
+        let result = encrypt_bytes_to_multiple_with_algo(
+            &[public_key.as_bytes()],
+            plaintext,
+            true,
+            SymmetricKeyAlgorithm::CAST5,
+        );
+        assert!(result.is_err());
+
+        // IDEA must be rejected
+        let result = encrypt_bytes_to_multiple_with_algo(
+            &[public_key.as_bytes()],
+            plaintext,
+            true,
+            SymmetricKeyAlgorithm::IDEA,
+        );
+        assert!(result.is_err());
+
+        // Blowfish must be rejected
+        let result = encrypt_bytes_to_multiple_with_algo(
+            &[public_key.as_bytes()],
+            plaintext,
+            true,
+            SymmetricKeyAlgorithm::Blowfish,
+        );
+        assert!(result.is_err());
+
+        // AES-128 must be accepted
+        let ciphertext = encrypt_bytes_to_multiple_with_algo(
+            &[public_key.as_bytes()],
+            plaintext,
+            true,
+            SymmetricKeyAlgorithm::AES128,
+        )
+        .unwrap();
+        let decrypted = decrypt_bytes(&secret_key, &ciphertext, TEST_PASSWORD).unwrap();
+        assert_eq!(decrypted, plaintext);
+
+        // AES-256 must be accepted
+        let ciphertext = encrypt_bytes_to_multiple_with_algo(
+            &[public_key.as_bytes()],
+            plaintext,
+            true,
+            SymmetricKeyAlgorithm::AES256,
+        )
+        .unwrap();
+        let decrypted = decrypt_bytes(&secret_key, &ciphertext, TEST_PASSWORD).unwrap();
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
     fn test_encrypt_large_message() {
         let (secret_key, _) = generate_test_key();
         let public_key = get_pub_key(&secret_key).unwrap();
