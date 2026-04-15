@@ -97,6 +97,18 @@ pub(crate) fn can_primary_sign(key: &SignedPublicKey) -> bool {
     can_details_sign(&key.details)
 }
 
+/// Check if primary key has the certify flag.
+///
+/// Used by card operations: a Certify-capable primary key can produce
+/// signatures when explicitly uploaded to the card's signing slot.
+#[cfg(feature = "card")]
+pub(crate) fn can_primary_certify(key: &SignedPublicKey) -> bool {
+    key.details
+        .users
+        .iter()
+        .any(|u| u.signatures.iter().any(|sig| sig.key_flags().certify()))
+}
+
 /// Check if key details indicate revocation.
 ///
 /// This is the single source of truth for primary-key revocation checks.

@@ -13,8 +13,8 @@ use super::get_card_backend;
 use super::types::CardError;
 use crate::error::{Error, Result};
 use crate::internal::{
-    can_primary_sign, is_subkey_valid, parse_public_key, validate_primary_key_signing_usage,
-    SigningKeyUsage,
+    can_primary_certify, can_primary_sign, is_subkey_valid, parse_public_key,
+    validate_primary_key_signing_usage, SigningKeyUsage,
 };
 use pgp::composed::{
     DetachedSignature, Esk, Message, PlainSessionKey, RawSessionKey, SignedPublicKey,
@@ -108,7 +108,11 @@ fn get_signing_key_info(
     // Try to match against the primary key
     let primary = &public_key.primary_key;
     let primary_fp = hex::encode(primary.fingerprint().as_bytes());
-    if primary_fp == card_fp && can_sign(primary.public_params()) && can_primary_sign(public_key) {
+    // For card operations, allow the primary key if it has the Certify flag
+    // (not just Sign), because the user explicitly uploaded it to the signing slot.
+    // A Certify-capable key can algorithmically produce signatures.
+    let primary_can_sign = can_primary_sign(public_key) || can_primary_certify(public_key);
+    if primary_fp == card_fp && can_sign(primary.public_params()) && primary_can_sign {
         let params = primary.public_params();
         let hash_alg = select_hash_for_params(params);
         return Ok(SigningKeyInfo {
