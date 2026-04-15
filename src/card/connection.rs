@@ -259,6 +259,10 @@ pub fn get_card_details(ident: Option<&str>) -> Result<CardInfo> {
         }
     }
 
+    if let Ok(count) = tx.digital_signature_count() {
+        info.signature_counter = count;
+    }
+
     Ok(info)
 }
 
@@ -888,6 +892,10 @@ pub fn find_cards_for_key(cert_data: &[u8]) -> Result<Vec<CardKeyMatch>> {
             if !url.is_empty() {
                 info.public_key_url = Some(url);
             }
+        }
+
+        if let Ok(count) = tx.digital_signature_count() {
+            info.signature_counter = count;
         }
 
         // Only include cards with at least one match
