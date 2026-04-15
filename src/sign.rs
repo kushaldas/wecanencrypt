@@ -6,19 +6,20 @@
 use std::io::Cursor;
 use std::path::Path;
 
-use pgp::composed::{CleartextSignedMessage, DetachedSignature, MessageBuilder, SignedSecretKey};
+use pgp::composed::{
+    CleartextSignedMessage, DetachedSignature, MessageBuilder, SignedSecretKey, SignedSecretSubKey,
+};
 use pgp::crypto::hash::HashAlgorithm;
+use pgp::packet::SignatureType;
 use pgp::types::{KeyDetails, Password, PublicParams};
 use rand::thread_rng;
 
 use crate::error::{Error, Result};
-use crate::internal::parse_secret_key;
+use crate::internal::{is_key_expired, parse_secret_key};
 
-/// Select appropriate hash algorithm based on key type.
+/// Select appropriate hash algorithm based on public key params.
 /// ECDSA keys require hash algorithms that match or exceed their security level.
-fn select_hash_for_key(secret_key: &SignedSecretKey) -> HashAlgorithm {
-    let params = secret_key.primary_key.public_params();
-
+fn select_hash_for_params(params: &PublicParams) -> HashAlgorithm {
     match params {
         PublicParams::ECDSA(ecdsa) => {
             // Match hash size to curve size
@@ -31,9 +32,46 @@ fn select_hash_for_key(secret_key: &SignedSecretKey) -> HashAlgorithm {
             }
         }
         PublicParams::EdDSALegacy(_) | PublicParams::Ed25519(_) => HashAlgorithm::Sha256,
+        PublicParams::Ed448(_) => HashAlgorithm::Sha512,
         PublicParams::RSA(_) => HashAlgorithm::Sha256,
         _ => HashAlgorithm::Sha256,
     }
+}
+
+/// Find the best signing subkey: valid, non-revoked, non-expired, with sign flag.
+fn find_signing_subkey(secret_key: &SignedSecretKey) -> Option<&SignedSecretSubKey> {
+    for subkey in &secret_key.secret_subkeys {
+        let has_sign_flag = subkey.signatures.iter().any(|sig| sig.key_flags().sign());
+        if !has_sign_flag {
+            continue;
+        }
+
+        let is_revoked = subkey
+            .signatures
+            .iter()
+            .any(|sig| sig.typ() == Some(SignatureType::SubkeyRevocation));
+        if is_revoked {
+            continue;
+        }
+
+        // Check expiration using the most recent binding signature
+        let most_recent_sig = subkey
+            .signatures
+            .iter()
+            .filter(|sig| sig.key_expiration_time().is_some())
+            .max_by_key(|sig| sig.created().map(|t| t.as_secs()).unwrap_or(0));
+        if let Some(sig) = most_recent_sig {
+            if let Some(validity) = sig.key_expiration_time() {
+                let creation_time: std::time::SystemTime = subkey.key.created_at().into();
+                if is_key_expired(creation_time, Some(validity.as_secs() as u64)) {
+                    continue;
+                }
+            }
+        }
+
+        return Some(subkey);
+    }
+    None
 }
 
 /// Sign bytes with a binary signature (wrapping the message).
@@ -65,7 +103,25 @@ fn select_hash_for_key(secret_key: &SignedSecretKey) -> HashAlgorithm {
 /// assert!(valid);
 /// ```
 pub fn sign_bytes(secret_cert: &[u8], data: &[u8], password: &str) -> Result<Vec<u8>> {
-    sign_bytes_internal(secret_cert, data, password, false)
+    sign_bytes_internal(secret_cert, data, password, false, false)
+}
+
+/// Sign bytes with a binary signature, forcing use of the primary key.
+///
+/// Like [`sign_bytes`], but always uses the primary key for signing even when
+/// a signing subkey is available. Useful when you need the signature to come
+/// from the primary key specifically (e.g., for certification-level trust).
+///
+/// # Arguments
+/// * `secret_cert` - The signer's secret key (armored or binary)
+/// * `data` - The data to sign
+/// * `password` - Password to unlock the secret key
+pub fn sign_bytes_with_primary_key(
+    secret_cert: &[u8],
+    data: &[u8],
+    password: &str,
+) -> Result<Vec<u8>> {
+    sign_bytes_internal(secret_cert, data, password, false, true)
 }
 
 /// Sign bytes with a cleartext signature.
@@ -99,7 +155,23 @@ pub fn sign_bytes(secret_cert: &[u8], data: &[u8], password: &str) -> Result<Vec
 /// // -----END PGP SIGNATURE-----
 /// ```
 pub fn sign_bytes_cleartext(secret_cert: &[u8], data: &[u8], password: &str) -> Result<Vec<u8>> {
-    sign_bytes_internal(secret_cert, data, password, true)
+    sign_bytes_internal(secret_cert, data, password, true, false)
+}
+
+/// Sign bytes with a cleartext signature, forcing use of the primary key.
+///
+/// Like [`sign_bytes_cleartext`], but always uses the primary key for signing.
+///
+/// # Arguments
+/// * `secret_cert` - The signer's secret key (armored or binary)
+/// * `data` - The data to sign (should be text)
+/// * `password` - Password to unlock the secret key
+pub fn sign_bytes_cleartext_with_primary_key(
+    secret_cert: &[u8],
+    data: &[u8],
+    password: &str,
+) -> Result<Vec<u8>> {
+    sign_bytes_internal(secret_cert, data, password, true, true)
 }
 
 /// Create a detached signature for bytes.
@@ -131,21 +203,72 @@ pub fn sign_bytes_cleartext(secret_cert: &[u8], data: &[u8], password: &str) -> 
 /// assert!(valid);
 /// ```
 pub fn sign_bytes_detached(secret_cert: &[u8], data: &[u8], password: &str) -> Result<String> {
+    sign_bytes_detached_impl(secret_cert, data, password, false)
+}
+
+/// Create a detached signature for bytes, forcing use of the primary key.
+///
+/// Like [`sign_bytes_detached`], but always uses the primary key for signing
+/// even when a signing subkey is available.
+///
+/// # Arguments
+/// * `secret_cert` - The signer's secret key (armored or binary)
+/// * `data` - The data to sign
+/// * `password` - Password to unlock the secret key
+pub fn sign_bytes_detached_with_primary_key(
+    secret_cert: &[u8],
+    data: &[u8],
+    password: &str,
+) -> Result<String> {
+    sign_bytes_detached_impl(secret_cert, data, password, true)
+}
+
+/// Internal implementation for detached signatures.
+fn sign_bytes_detached_impl(
+    secret_cert: &[u8],
+    data: &[u8],
+    password: &str,
+    use_primary: bool,
+) -> Result<String> {
     let secret_key = parse_secret_key(secret_cert)?;
     let password: Password = password.into();
 
     let mut rng = thread_rng();
-    let hash_alg = select_hash_for_key(&secret_key);
 
-    // Use the primary key for signing
-    let signature = DetachedSignature::sign_binary_data(
-        &mut rng,
-        &secret_key.primary_key,
-        &password,
-        hash_alg,
-        Cursor::new(data),
-    )
-    .map_err(|e| Error::Crypto(e.to_string()))?;
+    // Prefer a signing subkey if available; fall back to primary key
+    let signature = if !use_primary {
+        if let Some(subkey) = find_signing_subkey(&secret_key) {
+            let hash_alg = select_hash_for_params(subkey.key.public_params());
+            DetachedSignature::sign_binary_data(
+                &mut rng,
+                &subkey.key,
+                &password,
+                hash_alg,
+                Cursor::new(data),
+            )
+            .map_err(|e| Error::Crypto(e.to_string()))?
+        } else {
+            let hash_alg = select_hash_for_params(secret_key.primary_key.public_params());
+            DetachedSignature::sign_binary_data(
+                &mut rng,
+                &secret_key.primary_key,
+                &password,
+                hash_alg,
+                Cursor::new(data),
+            )
+            .map_err(|e| Error::Crypto(e.to_string()))?
+        }
+    } else {
+        let hash_alg = select_hash_for_params(secret_key.primary_key.public_params());
+        DetachedSignature::sign_binary_data(
+            &mut rng,
+            &secret_key.primary_key,
+            &password,
+            hash_alg,
+            Cursor::new(data),
+        )
+        .map_err(|e| Error::Crypto(e.to_string()))?
+    };
 
     signature
         .to_armored_string(None.into())
@@ -225,28 +348,41 @@ fn sign_bytes_internal(
     data: &[u8],
     password: &str,
     cleartext: bool,
+    use_primary: bool,
 ) -> Result<Vec<u8>> {
     let secret_key = parse_secret_key(secret_cert)?;
     let password_obj: Password = password.into();
-    let hash_alg = select_hash_for_key(&secret_key);
 
     let mut rng = thread_rng();
 
+    // Determine which key to use: signing subkey (preferred) or primary key
+    let use_subkey = !use_primary && find_signing_subkey(&secret_key).is_some();
+
     if cleartext {
-        // For cleartext signatures, convert bytes to string
         let text = String::from_utf8_lossy(data);
-        let csf =
+        let csf = if use_subkey {
+            let subkey = find_signing_subkey(&secret_key).unwrap();
+            CleartextSignedMessage::sign(&mut rng, &text, &subkey.key, &password_obj)
+                .map_err(|e| Error::Crypto(e.to_string()))?
+        } else {
             CleartextSignedMessage::sign(&mut rng, &text, &secret_key.primary_key, &password_obj)
-                .map_err(|e| Error::Crypto(e.to_string()))?;
+                .map_err(|e| Error::Crypto(e.to_string()))?
+        };
 
         csf.to_armored_string(None.into())
             .map(|s| s.into_bytes())
             .map_err(|e| Error::Crypto(e.to_string()))
     } else {
-        // For regular signed messages using MessageBuilder
         let mut builder = MessageBuilder::from_bytes("", data.to_vec());
 
-        builder.sign(&secret_key.primary_key, password_obj, hash_alg);
+        if use_subkey {
+            let subkey = find_signing_subkey(&secret_key).unwrap();
+            let hash_alg = select_hash_for_params(subkey.key.public_params());
+            builder.sign(&subkey.key, password_obj, hash_alg);
+        } else {
+            let hash_alg = select_hash_for_params(secret_key.primary_key.public_params());
+            builder.sign(&secret_key.primary_key, password_obj, hash_alg);
+        };
 
         builder
             .to_armored_string(&mut rng, None.into())

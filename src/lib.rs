@@ -60,6 +60,7 @@
 //! |-------|-------------|-------------------|-------|
 //! | `Cv25519` (default) | EdDSA Legacy | ECDH Curve25519 | Fast |
 //! | `Cv25519Modern` | Ed25519 (RFC 9580) | X25519 | Fast |
+//! | `Cv448Modern` | Ed448 (RFC 9580) | X448 | Fast |
 //! | `NistP256` | ECDSA P-256 | ECDH P-256 | Fast |
 //! | `NistP384` | ECDSA P-384 | ECDH P-384 | Fast |
 //! | `NistP521` | ECDSA P-521 | ECDH P-521 | Fast |
@@ -122,17 +123,22 @@ pub use parse::{
 
 // Re-export encryption functions
 pub use encrypt::{
-    bytes_encrypted_for, encrypt_bytes, encrypt_bytes_to_multiple, encrypt_file,
-    encrypt_file_to_multiple, encrypt_reader_to_file, file_encrypted_for,
+    bytes_encrypted_for, encrypt_bytes, encrypt_bytes_to_multiple,
+    encrypt_bytes_to_multiple_with_algo, encrypt_file, encrypt_file_to_multiple,
+    encrypt_reader_to_file, file_encrypted_for,
 };
+
+// Re-export symmetric algorithm type for use with encrypt_bytes_to_multiple_with_algo
+pub use pgp::crypto::sym::SymmetricKeyAlgorithm;
 
 // Re-export decryption functions
 pub use decrypt::{decrypt_bytes, decrypt_bytes_legacy, decrypt_file, decrypt_reader_to_file};
 
 // Re-export signing functions
 pub use sign::{
-    sign_bytes, sign_bytes_cleartext, sign_bytes_detached, sign_file, sign_file_cleartext,
-    sign_file_detached,
+    sign_bytes, sign_bytes_cleartext, sign_bytes_cleartext_with_primary_key, sign_bytes_detached,
+    sign_bytes_detached_with_primary_key, sign_bytes_with_primary_key, sign_file,
+    sign_file_cleartext, sign_file_detached,
 };
 
 // Re-export verification functions

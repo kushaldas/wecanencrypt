@@ -91,6 +91,33 @@ pub fn encrypt_bytes_to_multiple(
     plaintext: &[u8],
     armor: bool,
 ) -> Result<Vec<u8>> {
+    encrypt_bytes_to_multiple_with_algo(
+        recipient_certs,
+        plaintext,
+        armor,
+        SymmetricKeyAlgorithm::AES256,
+    )
+}
+
+/// Encrypt bytes to multiple recipients with a specific symmetric algorithm.
+///
+/// Like [`encrypt_bytes_to_multiple`], but allows choosing the symmetric cipher.
+/// RFC 9580 requires implementations to support both AES-128 and AES-256.
+///
+/// # Arguments
+/// * `recipient_certs` - Slice of recipient public keys (armored or binary)
+/// * `plaintext` - The data to encrypt
+/// * `armor` - If true, output ASCII-armored; otherwise binary
+/// * `sym_algo` - The symmetric algorithm to use (e.g., AES128, AES256)
+///
+/// # Returns
+/// The encrypted message that can be decrypted by any of the recipients.
+pub fn encrypt_bytes_to_multiple_with_algo(
+    recipient_certs: &[&[u8]],
+    plaintext: &[u8],
+    armor: bool,
+    sym_algo: SymmetricKeyAlgorithm,
+) -> Result<Vec<u8>> {
     if recipient_certs.is_empty() {
         return Err(Error::InvalidInput("No recipients specified".to_string()));
     }
@@ -110,8 +137,8 @@ pub fn encrypt_bytes_to_multiple(
     }
 
     // Build the encrypted message
-    let mut builder = MessageBuilder::from_bytes("", plaintext.to_vec())
-        .seipd_v1(&mut rng, SymmetricKeyAlgorithm::AES256);
+    let mut builder =
+        MessageBuilder::from_bytes("", plaintext.to_vec()).seipd_v1(&mut rng, sym_algo);
 
     // Add all encryption keys as recipients
     for key in &encryption_keys {
