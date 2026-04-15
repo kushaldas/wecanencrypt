@@ -84,3 +84,7 @@ p256 = { version = "0.13", features = ["ecdsa"] }
 [package.metadata.docs.rs]
 features = ["keystore", "network", "card", "dane"]
 rustdoc-args = ["--cfg", "docsrs"]
+
+[[example]]
+name = "upexp"
+required-features = ["card"]

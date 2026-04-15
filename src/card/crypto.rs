@@ -12,7 +12,10 @@ use secrecy::SecretString;
 use super::get_card_backend;
 use super::types::CardError;
 use crate::error::{Error, Result};
-use crate::internal::parse_public_key;
+use crate::internal::{
+    can_primary_sign, is_subkey_valid, parse_public_key, validate_primary_key_signing_usage,
+    SigningKeyUsage,
+};
 use pgp::composed::{
     DetachedSignature, Esk, Message, PlainSessionKey, RawSessionKey, SignedPublicKey,
 };
@@ -55,7 +58,7 @@ pub fn sign_bytes_detached_on_card(data: &[u8], public_cert: &[u8], pin: &[u8]) 
     let public_key = parse_public_key(public_cert)?;
 
     // Get signing key info from the public key
-    let key_info = get_signing_key_info(&public_key)?;
+    let key_info = get_signing_key_info(&public_key, SigningKeyUsage::DataSignature)?;
 
     // Create the signature using the card
     let signature = create_card_signature(data, &key_info, pin)?;
@@ -93,14 +96,22 @@ struct SigningKeyInfo {
 ///
 /// This queries the card to get the actual fingerprint of the key in the signing slot,
 /// then finds the matching key in the public certificate.
-fn get_signing_key_info(public_key: &SignedPublicKey) -> Result<SigningKeyInfo> {
+fn get_signing_key_info(
+    public_key: &SignedPublicKey,
+    usage: SigningKeyUsage,
+) -> Result<SigningKeyInfo> {
+    validate_primary_key_signing_usage(public_key, usage)?;
+
     // First, query the card to get the fingerprint of the key in the signing slot
     let card_fp = get_card_signing_fingerprint()?;
 
     // Try to match against the primary key
     let primary = &public_key.primary_key;
     let primary_fp = hex::encode(primary.fingerprint().as_bytes());
-    if primary_fp == card_fp && can_sign(primary.public_params()) {
+    if primary_fp == card_fp
+        && can_sign(primary.public_params())
+        && can_primary_sign(public_key)
+    {
         let params = primary.public_params();
         let hash_alg = select_hash_for_params(params);
         return Ok(SigningKeyInfo {
@@ -116,7 +127,13 @@ fn get_signing_key_info(public_key: &SignedPublicKey) -> Result<SigningKeyInfo> 
     for subkey in &public_key.public_subkeys {
         let key = &subkey.key;
         let subkey_fp = hex::encode(key.fingerprint().as_bytes());
-        if subkey_fp == card_fp && can_sign(key.public_params()) {
+        let has_sign_flag = subkey.signatures.iter().any(|sig| sig.key_flags().sign());
+        let subkey_usable = match usage {
+            SigningKeyUsage::DataSignature => is_subkey_valid(subkey, false),
+            SigningKeyUsage::KeyMaintenance => is_subkey_valid(subkey, true),
+        };
+
+        if subkey_fp == card_fp && can_sign(key.public_params()) && has_sign_flag && subkey_usable {
             let params = key.public_params();
             let hash_alg = select_hash_for_params(params);
             return Ok(SigningKeyInfo {
@@ -885,6 +902,8 @@ fn get_primary_key_for_card_signing<'a>(
     public_key: &'a SignedPublicKey,
     pin: &'a [u8],
 ) -> Result<CardSigningKey<'a>> {
+    validate_primary_key_signing_usage(public_key, SigningKeyUsage::KeyMaintenance)?;
+
     // Get the fingerprint of the key in the card's signature slot
     let card_fp = get_card_signing_fingerprint()?;
 

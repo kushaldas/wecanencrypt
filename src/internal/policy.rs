@@ -11,6 +11,19 @@ use pgp::composed::{SignedPublicKey, SignedPublicSubKey};
 use pgp::packet::SignatureType;
 use pgp::types::KeyDetails;
 
+#[cfg(feature = "card")]
+use crate::error::{Error, Result};
+
+/// Purpose-specific policy for signing-capable keys.
+#[cfg(feature = "card")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SigningKeyUsage {
+    /// Ordinary document, message, or detached signatures.
+    DataSignature,
+    /// Self-maintenance operations like extending the key's own expiry.
+    KeyMaintenance,
+}
+
 /// Check if a key has expired based on its creation time and validity period.
 pub(crate) fn is_key_expired(creation_time: SystemTime, validity_seconds: Option<u64>) -> bool {
     if let Some(validity) = validity_seconds {
@@ -91,6 +104,32 @@ pub(crate) fn is_primary_key_revoked(key: &SignedPublicKey) -> bool {
 /// not "existing signatures are invalid".
 pub(crate) fn is_primary_key_valid_for_verification(key: &SignedPublicKey) -> bool {
     !is_primary_key_revoked(key)
+}
+
+/// Check if the primary key is expired.
+#[cfg(feature = "card")]
+pub(crate) fn is_primary_key_expired(key: &SignedPublicKey) -> bool {
+    match get_key_expiration(key) {
+        Some(expiration) => expiration < SystemTime::now(),
+        None => false,
+    }
+}
+
+/// Validate whether the primary key may be used for a specific signing purpose.
+#[cfg(feature = "card")]
+pub(crate) fn validate_primary_key_signing_usage(
+    key: &SignedPublicKey,
+    usage: SigningKeyUsage,
+) -> Result<()> {
+    if is_primary_key_revoked(key) {
+        return Err(Error::KeyRevoked);
+    }
+
+    if matches!(usage, SigningKeyUsage::DataSignature) && is_primary_key_expired(key) {
+        return Err(Error::KeyExpired);
+    }
+
+    Ok(())
 }
 
 /// Get the expiration time for a key from the most recent self-signature.

@@ -21,6 +21,58 @@ use crate::internal::{
 };
 use crate::types::{CertificationType, CipherSuite, GeneratedKey, SubkeyFlags};
 
+fn ensure_secret_primary_not_revoked(secret_key: &SignedSecretKey) -> Result<()> {
+    let is_revoked = secret_key
+        .details
+        .revocation_signatures
+        .iter()
+        .any(|sig| sig.typ() == Some(SignatureType::KeyRevocation));
+
+    if is_revoked {
+        return Err(Error::KeyRevoked);
+    }
+
+    Ok(())
+}
+
+fn secret_primary_expiration(secret_key: &SignedSecretKey) -> Option<SystemTime> {
+    let creation_time: SystemTime = secret_key.primary_key.created_at().into();
+    let mut newest_created: Option<u64> = None;
+    let mut newest_expiration = None;
+
+    for user in &secret_key.details.users {
+        for sig in &user.signatures {
+            if let Some(validity) = sig.key_expiration_time() {
+                let created = sig.created().map(|ts| ts.as_secs() as u64).unwrap_or(0);
+                let is_newer = match newest_created {
+                    Some(prev) => created > prev,
+                    None => true,
+                };
+                if is_newer {
+                    newest_created = Some(created);
+                    newest_expiration = Some(
+                        creation_time + std::time::Duration::from_secs(validity.as_secs() as u64),
+                    );
+                }
+            }
+        }
+    }
+
+    newest_expiration
+}
+
+fn ensure_secret_primary_usable_for_external_certification(
+    secret_key: &SignedSecretKey,
+) -> Result<()> {
+    ensure_secret_primary_not_revoked(secret_key)?;
+
+    if matches!(secret_primary_expiration(secret_key), Some(exp) if exp < SystemTime::now()) {
+        return Err(Error::KeyExpired);
+    }
+
+    Ok(())
+}
+
 /// Generate a new OpenPGP key pair.
 ///
 /// # Arguments
@@ -404,6 +456,7 @@ pub fn update_subkeys_expiry(
 ) -> Result<Vec<u8>> {
     let mut rng = thread_rng();
     let secret_key = parse_secret_key(cert_data)?;
+    ensure_secret_primary_not_revoked(&secret_key)?;
     let password = Password::from(password);
 
     // Normalize fingerprints for comparison (uppercase, no spaces)
@@ -645,6 +698,7 @@ pub fn update_primary_expiry(
 ) -> Result<Vec<u8>> {
     let mut rng = thread_rng();
     let secret_key = parse_secret_key(cert_data)?;
+    ensure_secret_primary_not_revoked(&secret_key)?;
     let password = Password::from(password);
 
     // Calculate the duration from key creation to expiry
@@ -845,6 +899,7 @@ pub fn update_primary_expiry(
 pub fn add_uid(cert_data: &[u8], uid: &str, password: &str) -> Result<Vec<u8>> {
     let mut rng = thread_rng();
     let secret_key = parse_secret_key(cert_data)?;
+    ensure_secret_primary_not_revoked(&secret_key)?;
     let password = Password::from(password);
 
     // Create a new UserId packet
@@ -909,6 +964,7 @@ pub fn add_uid(cert_data: &[u8], uid: &str, password: &str) -> Result<Vec<u8>> {
 pub fn revoke_uid(cert_data: &[u8], uid: &str, password: &str) -> Result<Vec<u8>> {
     let mut rng = thread_rng();
     let secret_key = parse_secret_key(cert_data)?;
+    ensure_secret_primary_not_revoked(&secret_key)?;
     let password = Password::from(password);
 
     // Find the user ID to revoke
@@ -1174,6 +1230,7 @@ pub fn certify_key(
 
     // Parse the certifier's secret key
     let certifier = parse_secret_key(certifier_data)?;
+    ensure_secret_primary_usable_for_external_certification(&certifier)?;
     let password = Password::from(password);
 
     // Parse the target's public key

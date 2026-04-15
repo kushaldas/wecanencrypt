@@ -6,8 +6,9 @@ use std::path::PathBuf;
 
 use chrono::{Duration, NaiveDate, Utc};
 use wecanencrypt::{
-    create_key, parse_cert_bytes, update_primary_expiry, update_subkeys_expiry, CipherSuite,
-    SubkeyFlags,
+    add_uid, certify_key, create_key, create_key_simple, get_pub_key, parse_cert_bytes,
+    revoke_key, revoke_uid, sign_bytes_detached, update_primary_expiry,
+    update_subkeys_expiry, CertificationType, CipherSuite, Error, SubkeyFlags,
 };
 
 /// Base path for test files.
@@ -22,7 +23,7 @@ fn store_dir() -> PathBuf {
 }
 
 fn read_file(path: &PathBuf) -> Vec<u8> {
-    std::fs::read(path).expect(&format!("Failed to read file: {:?}", path))
+    std::fs::read(path).unwrap_or_else(|_| panic!("Failed to read file: {:?}", path))
 }
 
 // =============================================================================
@@ -60,6 +61,67 @@ fn test_update_primary_expiry_with_fixture() {
         updated_info.expiration_time.unwrap().date_naive(),
         NaiveDate::from_ymd_opt(2050, 10, 25).unwrap()
     );
+}
+
+#[test]
+fn test_expired_key_cannot_sign_data_but_can_extend_expiry() {
+    let keypath = store_dir().join("363F0180891AB46098F4463864AB0060FAB80A18.sec");
+    let keydata = read_file(&keypath);
+
+    let sign_result = sign_bytes_detached(&keydata, b"fresh data", "redhat");
+    assert!(matches!(sign_result, Err(Error::KeyExpired)));
+
+    let new_expiry = chrono::NaiveDate::from_ymd_opt(2050, 10, 25)
+        .unwrap()
+        .and_hms_opt(10, 0, 0)
+        .unwrap()
+        .and_utc();
+    let updated = update_primary_expiry(&keydata, new_expiry, "redhat").unwrap();
+
+    let updated_info = parse_cert_bytes(&updated, true).unwrap();
+    assert_eq!(
+        updated_info.expiration_time.unwrap().date_naive(),
+        NaiveDate::from_ymd_opt(2050, 10, 25).unwrap()
+    );
+
+    let post_update_sign = sign_bytes_detached(&updated, b"fresh data", "redhat");
+    assert!(post_update_sign.is_ok());
+}
+
+#[test]
+fn test_expired_key_can_do_self_maintenance_but_not_third_party_certification() {
+    let keypath = store_dir().join("363F0180891AB46098F4463864AB0060FAB80A18.sec");
+    let keydata = read_file(&keypath);
+
+    let with_uid = add_uid(&keydata, "Expiry Maint <expiry@example.com>", "redhat").unwrap();
+    let with_uid_info = parse_cert_bytes(&with_uid, true).unwrap();
+    assert!(
+        with_uid_info
+            .user_ids
+            .iter()
+            .any(|uid| uid.value == "Expiry Maint <expiry@example.com>"),
+    );
+
+    let revoked_uid = revoke_uid(&with_uid, "Expiry Maint <expiry@example.com>", "redhat")
+        .unwrap();
+    let revoked_uid_info = parse_cert_bytes(&revoked_uid, true).unwrap();
+    assert!(
+        revoked_uid_info
+            .user_ids
+            .iter()
+            .any(|uid| uid.value == "Expiry Maint <expiry@example.com>" && uid.revoked),
+    );
+
+    let target = create_key_simple("redhat", &["Target <target@example.com>"]).unwrap();
+    let target_pub = get_pub_key(&target.secret_key).unwrap();
+    let certification = certify_key(
+        &keydata,
+        target_pub.as_bytes(),
+        CertificationType::Casual,
+        None,
+        "redhat",
+    );
+    assert!(matches!(certification, Err(Error::KeyExpired)));
 }
 
 /// Port of JCE test_keystore.py::test_ks_update_expiry_time_for_subkeys
@@ -108,6 +170,47 @@ fn test_update_primary_expiry_fixture_key() {
         updated_info.expiration_time.unwrap().date_naive(),
         NaiveDate::from_ymd_opt(2050, 10, 25).unwrap()
     );
+}
+
+#[test]
+fn test_revoked_key_cannot_sign_or_extend_expiry() {
+    let key = create_key_simple("redhat", &["Revoked <revoked@example.com>"]).unwrap();
+    let revoked = revoke_key(&key.secret_key, "redhat").unwrap();
+
+    let sign_result = sign_bytes_detached(&revoked, b"fresh data", "redhat");
+    assert!(matches!(sign_result, Err(Error::KeyRevoked)));
+
+    let new_expiry = chrono::NaiveDate::from_ymd_opt(2050, 10, 25)
+        .unwrap()
+        .and_hms_opt(10, 0, 0)
+        .unwrap()
+        .and_utc();
+
+    let primary_update = update_primary_expiry(&revoked, new_expiry, "redhat");
+    assert!(matches!(primary_update, Err(Error::KeyRevoked)));
+
+    let info = parse_cert_bytes(&revoked, true).unwrap();
+    let subkey_fps: Vec<&str> = info.subkeys.iter().map(|s| s.fingerprint.as_str()).collect();
+    let subkey_update = update_subkeys_expiry(&revoked, &subkey_fps, new_expiry, "redhat");
+    assert!(matches!(subkey_update, Err(Error::KeyRevoked)));
+
+    let add_uid_result = add_uid(&revoked, "Revoked Extra <revoked2@example.com>", "redhat");
+    assert!(matches!(add_uid_result, Err(Error::KeyRevoked)));
+
+    let first_uid = info.user_ids.first().unwrap().value.clone();
+    let revoke_uid_result = revoke_uid(&revoked, &first_uid, "redhat");
+    assert!(matches!(revoke_uid_result, Err(Error::KeyRevoked)));
+
+    let target = create_key_simple("redhat", &["Target <target@example.com>"]).unwrap();
+    let target_pub = get_pub_key(&target.secret_key).unwrap();
+    let certification = certify_key(
+        &revoked,
+        target_pub.as_bytes(),
+        CertificationType::Casual,
+        None,
+        "redhat",
+    );
+    assert!(matches!(certification, Err(Error::KeyRevoked)));
 }
 
 /// Port of JCE test_keystore.py::test_update_subkey_expiry_time (duration-based)
