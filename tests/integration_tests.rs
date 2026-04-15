@@ -724,7 +724,7 @@ mod key_management {
 
         // Key should still parse (revoked UID is still present but marked as revoked)
         let info = parse_cert_bytes(&updated_key, true).unwrap();
-        assert!(info.user_ids.len() >= 1);
+        assert!(!info.user_ids.is_empty());
     }
 
     #[test]

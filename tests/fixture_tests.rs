@@ -45,7 +45,7 @@ fn store_dir() -> PathBuf {
 }
 
 fn read_file(path: &PathBuf) -> Vec<u8> {
-    std::fs::read(path).expect(&format!("Failed to read file: {:?}", path))
+    std::fs::read(path).unwrap_or_else(|_| panic!("Failed to read file: {:?}", path))
 }
 
 // =============================================================================
@@ -1242,20 +1242,20 @@ mod new_cipher_suites {
             false,
             true,
         )
-        .expect(&format!("Failed to generate {} key", name));
+        .unwrap_or_else(|_| panic!("Failed to generate {} key", name));
 
         // Parse the generated key
         let info = parse_cert_bytes(&key.secret_key, true)
-            .expect(&format!("Failed to parse {} secret key", name));
+            .unwrap_or_else(|_| panic!("Failed to parse {} secret key", name));
         assert!(info.is_secret);
         assert!(!info.subkeys.is_empty(), "{} key should have subkeys", name);
 
         // Test encryption/decryption
         let plaintext = b"Hello from cipher suite test!";
         let ciphertext = encrypt_bytes(key.public_key.as_bytes(), plaintext, true)
-            .expect(&format!("Failed to encrypt with {} key", name));
+            .unwrap_or_else(|_| panic!("Failed to encrypt with {} key", name));
         let decrypted = decrypt_bytes(&key.secret_key, &ciphertext, PASSWORD)
-            .expect(&format!("Failed to decrypt with {} key", name));
+            .unwrap_or_else(|_| panic!("Failed to decrypt with {} key", name));
         assert_eq!(
             decrypted, plaintext,
             "{} encryption/decryption failed",
@@ -1265,9 +1265,9 @@ mod new_cipher_suites {
         // Test signing/verification
         let message = b"Message to sign with new cipher suite";
         let signed = sign_bytes(&key.secret_key, message, PASSWORD)
-            .expect(&format!("Failed to sign with {} key", name));
+            .unwrap_or_else(|_| panic!("Failed to sign with {} key", name));
         let valid = verify_bytes(key.public_key.as_bytes(), &signed)
-            .expect(&format!("Failed to verify {} signature", name));
+            .unwrap_or_else(|_| panic!("Failed to verify {} signature", name));
         assert!(valid, "{} signature verification failed", name);
     }
 
