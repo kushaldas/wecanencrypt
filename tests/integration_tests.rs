@@ -403,6 +403,68 @@ mod encryption {
 
         assert_eq!(decrypted, plaintext);
     }
+
+    #[test]
+    fn test_file_encrypted_for() {
+        use tempfile::tempdir;
+        use wecanencrypt::{encrypt_file, file_encrypted_for};
+
+        let (secret_key, _) = generate_test_key();
+        let public_key = get_pub_key(&secret_key).unwrap();
+        let info = parse_cert_bytes(&secret_key, true).unwrap();
+
+        let dir = tempdir().unwrap();
+        let encrypted_path = dir.path().join("encrypted.pgp");
+
+        // Encrypt a file
+        encrypt_file(public_key.as_bytes(), "Cargo.toml", &encrypted_path, false).unwrap();
+
+        // Check which key IDs the file was encrypted for
+        let key_ids = file_encrypted_for(&encrypted_path).unwrap();
+        assert!(!key_ids.is_empty());
+
+        // Should contain one of our subkey IDs
+        let our_subkey_ids: Vec<String> = info.subkeys.iter().map(|s| s.key_id.clone()).collect();
+        assert!(
+            key_ids.iter().any(|kid| our_subkey_ids.contains(kid)),
+            "Encrypted file should be for one of our subkeys, got {:?}, expected one of {:?}",
+            key_ids,
+            our_subkey_ids
+        );
+    }
+
+    #[test]
+    fn test_encrypt_reader_to_file_multiple_recipients() {
+        use std::io::Cursor;
+        use tempfile::tempdir;
+        use wecanencrypt::encrypt_reader_to_file;
+
+        let key1 = create_key_simple(TEST_PASSWORD, &["Reader1 <r1@example.com>"]).unwrap();
+        let key2 = create_key_simple(TEST_PASSWORD, &["Reader2 <r2@example.com>"]).unwrap();
+        let pub1 = get_pub_key(&key1.secret_key).unwrap();
+        let pub2 = get_pub_key(&key2.secret_key).unwrap();
+
+        let dir = tempdir().unwrap();
+        let encrypted_path = dir.path().join("encrypted.pgp");
+
+        let plaintext = b"Multi-recipient reader encryption";
+        let reader = Cursor::new(plaintext);
+
+        encrypt_reader_to_file(
+            &[pub1.as_bytes(), pub2.as_bytes()],
+            reader,
+            &encrypted_path,
+            false,
+        )
+        .unwrap();
+
+        // Both recipients should be able to decrypt
+        let ciphertext = std::fs::read(&encrypted_path).unwrap();
+        let decrypted1 = decrypt_bytes(&key1.secret_key, &ciphertext, TEST_PASSWORD).unwrap();
+        let decrypted2 = decrypt_bytes(&key2.secret_key, &ciphertext, TEST_PASSWORD).unwrap();
+        assert_eq!(decrypted1, plaintext);
+        assert_eq!(decrypted2, plaintext);
+    }
 }
 
 // =============================================================================
@@ -686,6 +748,16 @@ mod key_management {
         // New password should work
         let decrypted = decrypt_bytes(&updated_key, &ciphertext, new_password).unwrap();
         assert_eq!(decrypted, message);
+    }
+
+    #[test]
+    fn test_add_uid_fails_for_public_key() {
+        let (secret_key, _) = generate_test_key();
+        let public_key = get_pub_key(&secret_key).unwrap();
+
+        // Adding UID to a public-only key should fail
+        let result = add_uid(public_key.as_bytes(), "New <new@example.com>", TEST_PASSWORD);
+        assert!(result.is_err());
     }
 
     #[test]
