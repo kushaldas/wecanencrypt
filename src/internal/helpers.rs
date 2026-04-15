@@ -120,9 +120,14 @@ pub(crate) fn get_key_bit_size(key: &impl KeyDetails) -> usize {
 
     match key.algorithm() {
         PublicKeyAlgorithm::RSA | PublicKeyAlgorithm::RSAEncrypt | PublicKeyAlgorithm::RSASign => {
-            // For RSA, return a common key size since we can't easily access rsa crate's traits
-            // Most RSA keys are 2048 or 4096 bits
-            2048
+            // Extract actual RSA modulus bit length from the public parameters
+            match key.public_params() {
+                pgp::types::PublicParams::RSA(ref rsa) => {
+                    use rsa::traits::PublicKeyParts;
+                    rsa.key.n().bits()
+                }
+                _ => 0,
+            }
         }
         PublicKeyAlgorithm::EdDSALegacy | PublicKeyAlgorithm::Ed25519 => 256,
         PublicKeyAlgorithm::X25519 => 256,
