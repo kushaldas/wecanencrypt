@@ -643,6 +643,47 @@ mod signing {
     }
 
     #[test]
+    fn test_sign_fails_for_certify_only_key_without_signing_subkey() {
+        // Key where primary CANNOT sign and has no signing subkey (encryption only)
+        let key = create_key(
+            TEST_PASSWORD,
+            &[TEST_UID],
+            CipherSuite::Cv25519,
+            None,
+            None,
+            None,
+            SubkeyFlags::encryption_only(),
+            false, // primary cannot sign
+            true,
+        )
+        .unwrap();
+
+        let message = b"Should fail to sign";
+
+        // All signing functions should return NoSigningSubkey
+        let result = sign_bytes(&key.secret_key, message, TEST_PASSWORD);
+        assert!(
+            matches!(result, Err(wecanencrypt::Error::NoSigningSubkey)),
+            "sign_bytes should fail with NoSigningSubkey, got {:?}",
+            result
+        );
+
+        let result = sign_bytes_detached(&key.secret_key, message, TEST_PASSWORD);
+        assert!(
+            matches!(result, Err(wecanencrypt::Error::NoSigningSubkey)),
+            "sign_bytes_detached should fail with NoSigningSubkey, got {:?}",
+            result
+        );
+
+        let result = sign_bytes_cleartext(&key.secret_key, message, TEST_PASSWORD);
+        assert!(
+            matches!(result, Err(wecanencrypt::Error::NoSigningSubkey)),
+            "sign_bytes_cleartext should fail with NoSigningSubkey, got {:?}",
+            result
+        );
+    }
+
+    #[test]
     fn test_sign_primary_vs_subkey_produces_different_signatures() {
         use wecanencrypt::sign_bytes_detached_with_primary_key;
 

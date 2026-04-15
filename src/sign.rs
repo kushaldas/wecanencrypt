@@ -15,7 +15,9 @@ use pgp::types::{KeyDetails, Password, PublicParams};
 use rand::thread_rng;
 
 use crate::error::{Error, Result};
-use crate::internal::{is_key_expired, parse_secret_key, validate_signing_usage, SigningKeyUsage};
+use crate::internal::{
+    can_details_sign, is_key_expired, parse_secret_key, validate_signing_usage, SigningKeyUsage,
+};
 
 /// Select appropriate hash algorithm based on public key params.
 /// ECDSA keys require hash algorithms that match or exceed their security level.
@@ -39,7 +41,12 @@ fn select_hash_for_params(params: &PublicParams) -> HashAlgorithm {
 }
 
 /// Find the best signing subkey: valid, non-revoked, non-expired, with sign flag.
+///
+/// When multiple signing subkeys are valid, the most recently created one is
+/// preferred (e.g. after key rotation the newest subkey should be used).
 fn find_signing_subkey(secret_key: &SignedSecretKey) -> Option<&SignedSecretSubKey> {
+    let mut best: Option<&SignedSecretSubKey> = None;
+
     for subkey in &secret_key.secret_subkeys {
         let has_sign_flag = subkey.signatures.iter().any(|sig| sig.key_flags().sign());
         if !has_sign_flag {
@@ -69,9 +76,16 @@ fn find_signing_subkey(secret_key: &SignedSecretKey) -> Option<&SignedSecretSubK
             }
         }
 
-        return Some(subkey);
+        // Prefer the most recently created signing subkey
+        let dominated = match best {
+            Some(prev) => subkey.key.created_at() > prev.key.created_at(),
+            None => true,
+        };
+        if dominated {
+            best = Some(subkey);
+        }
     }
-    None
+    best
 }
 
 /// Sign bytes with a binary signature (wrapping the message).
@@ -252,7 +266,7 @@ fn sign_bytes_detached_impl(
                 Cursor::new(data),
             )
             .map_err(|e| Error::Crypto(e.to_string()))?
-        } else {
+        } else if can_details_sign(&secret_key.details) {
             let hash_alg = select_hash_for_params(secret_key.primary_key.public_params());
             DetachedSignature::sign_binary_data(
                 &mut rng,
@@ -262,6 +276,8 @@ fn sign_bytes_detached_impl(
                 Cursor::new(data),
             )
             .map_err(|e| Error::Crypto(e.to_string()))?
+        } else {
+            return Err(Error::NoSigningSubkey);
         }
     } else {
         let hash_alg = select_hash_for_params(secret_key.primary_key.public_params());
@@ -365,13 +381,23 @@ fn sign_bytes_internal(
 
     let mut rng = thread_rng();
 
-    // Determine which key to use: signing subkey (preferred) or primary key
-    let use_subkey = !use_primary && find_signing_subkey(&secret_key).is_some();
+    // Determine which key to use: signing subkey (preferred) or primary key.
+    // When not explicitly using the primary, check that the primary has the
+    // signing capability flag before falling back to it.
+    let signing_subkey = if !use_primary {
+        find_signing_subkey(&secret_key)
+    } else {
+        None
+    };
+    let use_subkey = signing_subkey.is_some();
+
+    if !use_subkey && !use_primary && !can_details_sign(&secret_key.details) {
+        return Err(Error::NoSigningSubkey);
+    }
 
     if cleartext {
         let text = String::from_utf8_lossy(data);
-        let csf = if use_subkey {
-            let subkey = find_signing_subkey(&secret_key).unwrap();
+        let csf = if let Some(subkey) = signing_subkey {
             CleartextSignedMessage::sign(&mut rng, &text, &subkey.key, &password_obj)
                 .map_err(|e| Error::Crypto(e.to_string()))?
         } else {
@@ -385,8 +411,7 @@ fn sign_bytes_internal(
     } else {
         let mut builder = MessageBuilder::from_bytes("", data.to_vec());
 
-        if use_subkey {
-            let subkey = find_signing_subkey(&secret_key).unwrap();
+        if let Some(subkey) = signing_subkey {
             let hash_alg = select_hash_for_params(subkey.key.public_params());
             builder.sign(&subkey.key, password_obj, hash_alg);
         } else {

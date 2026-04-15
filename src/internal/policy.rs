@@ -74,18 +74,27 @@ pub(crate) fn is_subkey_valid(subkey: &SignedPublicSubKey, allow_expired: bool) 
     true
 }
 
-/// Check if primary key can sign (has signing flag).
-pub(crate) fn can_primary_sign(key: &SignedPublicKey) -> bool {
-    // Check user binding signatures for key flags
-    for user in &key.details.users {
+/// Check if key details have the signing flag set.
+///
+/// This is the single source of truth for primary-key signing-capability checks.
+/// Both `SignedPublicKey` and `SignedSecretKey` share `details: SignedKeyDetails`,
+/// so callers can pass `&key.details` regardless of key type.
+pub(crate) fn can_details_sign(details: &SignedKeyDetails) -> bool {
+    for user in &details.users {
         for sig in &user.signatures {
-            let flags = sig.key_flags();
-            if flags.sign() {
+            if sig.key_flags().sign() {
                 return true;
             }
         }
     }
     false
+}
+
+/// Check if primary key can sign (has signing flag).
+///
+/// Convenience wrapper over [`can_details_sign`] for `SignedPublicKey`.
+pub(crate) fn can_primary_sign(key: &SignedPublicKey) -> bool {
+    can_details_sign(&key.details)
 }
 
 /// Check if key details indicate revocation.
