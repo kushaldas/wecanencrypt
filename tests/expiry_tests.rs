@@ -6,9 +6,9 @@ use std::path::PathBuf;
 
 use chrono::{Duration, NaiveDate, Utc};
 use wecanencrypt::{
-    add_uid, certify_key, create_key, create_key_simple, get_pub_key, parse_cert_bytes,
-    revoke_key, revoke_uid, sign_bytes_detached, update_primary_expiry,
-    update_subkeys_expiry, CertificationType, CipherSuite, Error, SubkeyFlags,
+    add_uid, certify_key, create_key, create_key_simple, get_pub_key, parse_cert_bytes, revoke_key,
+    revoke_uid, sign_bytes_detached, update_primary_expiry, update_subkeys_expiry,
+    CertificationType, CipherSuite, Error, SubkeyFlags,
 };
 
 /// Base path for test files.
@@ -95,22 +95,17 @@ fn test_expired_key_can_do_self_maintenance_but_not_third_party_certification() 
 
     let with_uid = add_uid(&keydata, "Expiry Maint <expiry@example.com>", "redhat").unwrap();
     let with_uid_info = parse_cert_bytes(&with_uid, true).unwrap();
-    assert!(
-        with_uid_info
-            .user_ids
-            .iter()
-            .any(|uid| uid.value == "Expiry Maint <expiry@example.com>"),
-    );
+    assert!(with_uid_info
+        .user_ids
+        .iter()
+        .any(|uid| uid.value == "Expiry Maint <expiry@example.com>"),);
 
-    let revoked_uid = revoke_uid(&with_uid, "Expiry Maint <expiry@example.com>", "redhat")
-        .unwrap();
+    let revoked_uid = revoke_uid(&with_uid, "Expiry Maint <expiry@example.com>", "redhat").unwrap();
     let revoked_uid_info = parse_cert_bytes(&revoked_uid, true).unwrap();
-    assert!(
-        revoked_uid_info
-            .user_ids
-            .iter()
-            .any(|uid| uid.value == "Expiry Maint <expiry@example.com>" && uid.revoked),
-    );
+    assert!(revoked_uid_info
+        .user_ids
+        .iter()
+        .any(|uid| uid.value == "Expiry Maint <expiry@example.com>" && uid.revoked),);
 
     let target = create_key_simple("redhat", &["Target <target@example.com>"]).unwrap();
     let target_pub = get_pub_key(&target.secret_key).unwrap();
@@ -190,7 +185,11 @@ fn test_revoked_key_cannot_sign_or_extend_expiry() {
     assert!(matches!(primary_update, Err(Error::KeyRevoked)));
 
     let info = parse_cert_bytes(&revoked, true).unwrap();
-    let subkey_fps: Vec<&str> = info.subkeys.iter().map(|s| s.fingerprint.as_str()).collect();
+    let subkey_fps: Vec<&str> = info
+        .subkeys
+        .iter()
+        .map(|s| s.fingerprint.as_str())
+        .collect();
     let subkey_update = update_subkeys_expiry(&revoked, &subkey_fps, new_expiry, "redhat");
     assert!(matches!(subkey_update, Err(Error::KeyRevoked)));
 

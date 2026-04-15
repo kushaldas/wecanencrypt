@@ -108,10 +108,7 @@ fn get_signing_key_info(
     // Try to match against the primary key
     let primary = &public_key.primary_key;
     let primary_fp = hex::encode(primary.fingerprint().as_bytes());
-    if primary_fp == card_fp
-        && can_sign(primary.public_params())
-        && can_primary_sign(public_key)
-    {
+    if primary_fp == card_fp && can_sign(primary.public_params()) && can_primary_sign(public_key) {
         let params = primary.public_params();
         let hash_alg = select_hash_for_params(params);
         return Ok(SigningKeyInfo {

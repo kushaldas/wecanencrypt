@@ -144,9 +144,15 @@ fn test_keystore_list_certs() {
     let (key2, fp2) = create_test_key("User2 <user2@example.com>");
     let (key3, fp3) = create_test_key("User3 <user3@example.com>");
 
-    store.import_cert(get_pub_key(&key1).unwrap().as_bytes()).unwrap();
-    store.import_cert(get_pub_key(&key2).unwrap().as_bytes()).unwrap();
-    store.import_cert(get_pub_key(&key3).unwrap().as_bytes()).unwrap();
+    store
+        .import_cert(get_pub_key(&key1).unwrap().as_bytes())
+        .unwrap();
+    store
+        .import_cert(get_pub_key(&key2).unwrap().as_bytes())
+        .unwrap();
+    store
+        .import_cert(get_pub_key(&key3).unwrap().as_bytes())
+        .unwrap();
 
     let certs = store.list_certs().unwrap();
     assert_eq!(certs.len(), 3);
@@ -168,9 +174,15 @@ fn test_keystore_search_by_uid() {
     let (key2, _) = create_test_key("Bob <bob@example.com>");
     let (key3, _) = create_test_key("Alice Work <alice@work.com>");
 
-    store.import_cert(get_pub_key(&key1).unwrap().as_bytes()).unwrap();
-    store.import_cert(get_pub_key(&key2).unwrap().as_bytes()).unwrap();
-    store.import_cert(get_pub_key(&key3).unwrap().as_bytes()).unwrap();
+    store
+        .import_cert(get_pub_key(&key1).unwrap().as_bytes())
+        .unwrap();
+    store
+        .import_cert(get_pub_key(&key2).unwrap().as_bytes())
+        .unwrap();
+    store
+        .import_cert(get_pub_key(&key3).unwrap().as_bytes())
+        .unwrap();
 
     // Search for Alice
     let results = store.search_by_uid("alice").unwrap();
@@ -289,10 +301,14 @@ fn test_keystore_count() {
     let (key1, _) = create_test_key("User1 <user1@example.com>");
     let (key2, _) = create_test_key("User2 <user2@example.com>");
 
-    store.import_cert(get_pub_key(&key1).unwrap().as_bytes()).unwrap();
+    store
+        .import_cert(get_pub_key(&key1).unwrap().as_bytes())
+        .unwrap();
     assert_eq!(store.count().unwrap(), 1);
 
-    store.import_cert(get_pub_key(&key2).unwrap().as_bytes()).unwrap();
+    store
+        .import_cert(get_pub_key(&key2).unwrap().as_bytes())
+        .unwrap();
     assert_eq!(store.count().unwrap(), 2);
 }
 
@@ -373,9 +389,15 @@ fn test_keystore_search_by_email() {
     let (key2, _) = create_test_key("Bob <bob@work.com>");
     let (key3, _) = create_test_key("Alice Work <alice@work.com>");
 
-    store.import_cert(get_pub_key(&key1).unwrap().as_bytes()).unwrap();
-    store.import_cert(get_pub_key(&key2).unwrap().as_bytes()).unwrap();
-    store.import_cert(get_pub_key(&key3).unwrap().as_bytes()).unwrap();
+    store
+        .import_cert(get_pub_key(&key1).unwrap().as_bytes())
+        .unwrap();
+    store
+        .import_cert(get_pub_key(&key2).unwrap().as_bytes())
+        .unwrap();
+    store
+        .import_cert(get_pub_key(&key3).unwrap().as_bytes())
+        .unwrap();
 
     // Search by exact email
     let results = store.search_by_email("alice@example.com").unwrap();
@@ -434,8 +456,12 @@ fn test_keystore_list_fingerprints() {
     let (key1, fp1) = create_test_key("User1 <user1@example.com>");
     let (key2, fp2) = create_test_key("User2 <user2@example.com>");
 
-    store.import_cert(get_pub_key(&key1).unwrap().as_bytes()).unwrap();
-    store.import_cert(get_pub_key(&key2).unwrap().as_bytes()).unwrap();
+    store
+        .import_cert(get_pub_key(&key1).unwrap().as_bytes())
+        .unwrap();
+    store
+        .import_cert(get_pub_key(&key2).unwrap().as_bytes())
+        .unwrap();
 
     let fingerprints = store.list_fingerprints().unwrap();
 
@@ -1157,8 +1183,7 @@ fn test_keystore_encrypt_bytes_to_file() {
 
     // Encrypt bytes and write to file
     let plaintext = b"Bytes to file encryption test";
-    let ciphertext =
-        wecanencrypt::encrypt_bytes_from_store(&store, &fp, plaintext, true).unwrap();
+    let ciphertext = wecanencrypt::encrypt_bytes_from_store(&store, &fp, plaintext, true).unwrap();
     std::fs::write(&encrypted_path, &ciphertext).unwrap();
 
     // Read back and decrypt

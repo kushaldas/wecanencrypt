@@ -633,8 +633,7 @@ mod signing {
 
         // Detached too
         let sig = sign_bytes_detached(&key.secret_key, message, TEST_PASSWORD).unwrap();
-        let valid =
-            verify_bytes_detached(public_key.as_bytes(), message, sig.as_bytes()).unwrap();
+        let valid = verify_bytes_detached(public_key.as_bytes(), message, sig.as_bytes()).unwrap();
         assert!(valid);
 
         // Cleartext too
@@ -665,8 +664,7 @@ mod signing {
         let message = b"Compare signatures";
 
         // Default: uses signing subkey
-        let sig_subkey =
-            sign_bytes_detached(&key.secret_key, message, TEST_PASSWORD).unwrap();
+        let sig_subkey = sign_bytes_detached(&key.secret_key, message, TEST_PASSWORD).unwrap();
         // Forced: uses primary key
         let sig_primary =
             sign_bytes_detached_with_primary_key(&key.secret_key, message, TEST_PASSWORD).unwrap();
@@ -756,7 +754,11 @@ mod key_management {
         let public_key = get_pub_key(&secret_key).unwrap();
 
         // Adding UID to a public-only key should fail
-        let result = add_uid(public_key.as_bytes(), "New <new@example.com>", TEST_PASSWORD);
+        let result = add_uid(
+            public_key.as_bytes(),
+            "New <new@example.com>",
+            TEST_PASSWORD,
+        );
         assert!(result.is_err());
     }
 

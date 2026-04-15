@@ -15,68 +15,7 @@ use pgp::types::{KeyDetails, Password, PublicParams};
 use rand::thread_rng;
 
 use crate::error::{Error, Result};
-use crate::internal::{is_key_expired, parse_secret_key};
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SigningUsage {
-    DataSignature,
-}
-
-fn is_primary_key_revoked(secret_key: &SignedSecretKey) -> bool {
-    secret_key
-        .details
-        .revocation_signatures
-        .iter()
-        .any(|sig| sig.typ() == Some(SignatureType::KeyRevocation))
-}
-
-fn primary_key_expiration(secret_key: &SignedSecretKey) -> Option<std::time::SystemTime> {
-    let creation_time: std::time::SystemTime = secret_key.primary_key.created_at().into();
-    let mut newest_created: Option<u64> = None;
-    let mut newest_expiration = None;
-
-    for user in &secret_key.details.users {
-        for sig in &user.signatures {
-            if let Some(validity) = sig.key_expiration_time() {
-                let created = sig.created().map(|ts| ts.as_secs() as u64).unwrap_or(0);
-                let is_newer = match newest_created {
-                    Some(prev) => created > prev,
-                    None => true,
-                };
-                if is_newer {
-                    newest_created = Some(created);
-                    newest_expiration = Some(
-                        creation_time + std::time::Duration::from_secs(validity.as_secs() as u64),
-                    );
-                }
-            }
-        }
-    }
-
-    newest_expiration
-}
-
-fn is_primary_key_expired(secret_key: &SignedSecretKey) -> bool {
-    match primary_key_expiration(secret_key) {
-        Some(expiration) => expiration < std::time::SystemTime::now(),
-        None => false,
-    }
-}
-
-fn validate_primary_key_signing_usage(
-    secret_key: &SignedSecretKey,
-    usage: SigningUsage,
-) -> Result<()> {
-    if is_primary_key_revoked(secret_key) {
-        return Err(Error::KeyRevoked);
-    }
-
-    if matches!(usage, SigningUsage::DataSignature) && is_primary_key_expired(secret_key) {
-        return Err(Error::KeyExpired);
-    }
-
-    Ok(())
-}
+use crate::internal::{is_key_expired, parse_secret_key, validate_signing_usage, SigningKeyUsage};
 
 /// Select appropriate hash algorithm based on public key params.
 /// ECDSA keys require hash algorithms that match or exceed their security level.
@@ -292,7 +231,11 @@ fn sign_bytes_detached_impl(
     use_primary: bool,
 ) -> Result<String> {
     let secret_key = parse_secret_key(secret_cert)?;
-    validate_primary_key_signing_usage(&secret_key, SigningUsage::DataSignature)?;
+    validate_signing_usage(
+        secret_key.primary_key.created_at().into(),
+        &secret_key.details,
+        SigningKeyUsage::DataSignature,
+    )?;
     let password: Password = password.into();
 
     let mut rng = thread_rng();
@@ -413,7 +356,11 @@ fn sign_bytes_internal(
     use_primary: bool,
 ) -> Result<Vec<u8>> {
     let secret_key = parse_secret_key(secret_cert)?;
-    validate_primary_key_signing_usage(&secret_key, SigningUsage::DataSignature)?;
+    validate_signing_usage(
+        secret_key.primary_key.created_at().into(),
+        &secret_key.details,
+        SigningKeyUsage::DataSignature,
+    )?;
     let password_obj: Password = password.into();
 
     let mut rng = thread_rng();

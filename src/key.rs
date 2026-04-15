@@ -16,61 +16,26 @@ use zeroize::Zeroizing;
 
 use crate::error::{Error, Result};
 use crate::internal::{
-    fingerprint_to_hex, parse_public_key, parse_secret_key, public_key_to_armored,
-    secret_key_to_bytes,
+    fingerprint_to_hex, is_details_revoked, parse_public_key, parse_secret_key,
+    public_key_to_armored, secret_key_to_bytes, validate_signing_usage, SigningKeyUsage,
 };
 use crate::types::{CertificationType, CipherSuite, GeneratedKey, SubkeyFlags};
 
 fn ensure_secret_primary_not_revoked(secret_key: &SignedSecretKey) -> Result<()> {
-    let is_revoked = secret_key
-        .details
-        .revocation_signatures
-        .iter()
-        .any(|sig| sig.typ() == Some(SignatureType::KeyRevocation));
-
-    if is_revoked {
+    if is_details_revoked(&secret_key.details) {
         return Err(Error::KeyRevoked);
     }
-
     Ok(())
-}
-
-fn secret_primary_expiration(secret_key: &SignedSecretKey) -> Option<SystemTime> {
-    let creation_time: SystemTime = secret_key.primary_key.created_at().into();
-    let mut newest_created: Option<u64> = None;
-    let mut newest_expiration = None;
-
-    for user in &secret_key.details.users {
-        for sig in &user.signatures {
-            if let Some(validity) = sig.key_expiration_time() {
-                let created = sig.created().map(|ts| ts.as_secs() as u64).unwrap_or(0);
-                let is_newer = match newest_created {
-                    Some(prev) => created > prev,
-                    None => true,
-                };
-                if is_newer {
-                    newest_created = Some(created);
-                    newest_expiration = Some(
-                        creation_time + std::time::Duration::from_secs(validity.as_secs() as u64),
-                    );
-                }
-            }
-        }
-    }
-
-    newest_expiration
 }
 
 fn ensure_secret_primary_usable_for_external_certification(
     secret_key: &SignedSecretKey,
 ) -> Result<()> {
-    ensure_secret_primary_not_revoked(secret_key)?;
-
-    if matches!(secret_primary_expiration(secret_key), Some(exp) if exp < SystemTime::now()) {
-        return Err(Error::KeyExpired);
-    }
-
-    Ok(())
+    validate_signing_usage(
+        secret_key.primary_key.created_at().into(),
+        &secret_key.details,
+        SigningKeyUsage::DataSignature,
+    )
 }
 
 /// Generate a new OpenPGP key pair.
