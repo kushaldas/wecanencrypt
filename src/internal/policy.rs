@@ -39,10 +39,17 @@ pub(crate) fn is_subkey_valid(subkey: &SignedPublicSubKey, allow_expired: bool) 
         return false;
     }
 
-    // Check expiration if not allowing expired
+    // Check expiration if not allowing expired.
+    // Use the most recent binding signature by creation time (per RFC 4880 §5.2.3.3),
+    // not the last one in packet order — renewed keys have multiple binding signatures
+    // and older ones may have expired even though the latest renewal is still valid.
     if !allow_expired {
-        // Get expiration from the LAST (most recent) binding signature
-        if let Some(sig) = subkey.signatures.last() {
+        let most_recent_sig = subkey
+            .signatures
+            .iter()
+            .filter(|sig| sig.key_expiration_time().is_some())
+            .max_by_key(|sig| sig.created().map(|t| t.as_secs()).unwrap_or(0));
+        if let Some(sig) = most_recent_sig {
             if let Some(validity) = sig.key_expiration_time() {
                 let creation_time: SystemTime = subkey.key.created_at().into();
                 if is_key_expired(creation_time, Some(validity.as_secs() as u64)) {
