@@ -302,6 +302,8 @@ pub struct UserIDInfo {
     pub value: String,
     /// Whether this UID has been revoked
     pub revoked: bool,
+    /// Whether this is the primary UID (per RFC 9580 Primary User ID subpacket)
+    pub is_primary: bool,
     /// When the UID was revoked (from the revocation signature's creation time)
     pub revocation_time: Option<DateTime<Utc>>,
     /// Certifications on this UID by other keys

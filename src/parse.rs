@@ -154,9 +154,13 @@ fn extract_cert_info(
                 })
                 .collect();
 
+            // Check if this UID is marked as primary via the PrimaryUserId subpacket
+            let is_primary = u.is_primary();
+
             UserIDInfo {
                 value,
                 revoked,
+                is_primary,
                 revocation_time,
                 certifications,
             }
