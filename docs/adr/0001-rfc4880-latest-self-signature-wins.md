@@ -37,20 +37,30 @@ achieving the same "latest wins" semantics that wecanencrypt lacked.
 
 ## Decision
 
-We enforce "latest self-signature wins" for all key flag checks:
+We enforce "latest self-signature wins" for all policy checks
+across the library:
 
 1. **Primary key flags** (`can_details_sign`, `can_primary_certify`):
    Find the most recent self-signature per User ID (filtering to
    certification types 0x10-0x13), check flags only on that signature.
 
-2. **Subkey flags** (`can_subkey_sign`): Find the most recent
+2. **Subkey signing flags** (`can_subkey_sign`): Find the most recent
    `SubkeyBinding` (0x18) signature, check flags only on that
    signature.
 
-3. **Verification filtering**: Add `can_subkey_sign()` to all five
+3. **Subkey encryption flags** (`can_subkey_encrypt`): Same pattern
+   for `encrypt_comms`/`encrypt_storage` flags, replacing the old
+   `any()` check in `find_valid_encryption_subkeys`.
+
+4. **Primary key expiration** (`primary_expiration_from_details`):
+   Filter to self-signature types (0x10-0x13) before selecting the
+   newest `KeyExpirationTime`, so third-party certifications cannot
+   override the key owner's expiry.
+
+5. **Verification filtering**: Add `can_subkey_sign()` to all five
    verification code paths so only signing-capable subkeys are tried.
 
-4. **Certificate merge**: Implement proper packet-level merge
+6. **Certificate merge**: Implement proper packet-level merge
    (matching rpgpie's algorithm) so that renewed self-signatures
    accumulate correctly and the "latest wins" consumers see the right
    data.
@@ -59,10 +69,15 @@ We enforce "latest self-signature wins" for all key flag checks:
 
 ### Positive
 
-- RFC 4880 section 5.2.3.3 compliance for key flags, matching the
-  existing compliance for key expiration.
-- A key owner can revoke signing capability by issuing a new
-  self-signature without the sign flag; the library will respect it.
+- RFC 4880 section 5.2.3.3 compliance across all policy checks:
+  key flags, encryption flags, and key expiration all use consistent
+  "latest self-signature wins" semantics.
+- A key owner can revoke signing or encryption capability by issuing
+  a new self-signature without the corresponding flag; the library
+  will respect it.
+- Third-party certifications cannot override the key owner's expiry
+  even if they carry a `KeyExpirationTime` subpacket with a newer
+  creation timestamp.
 - Certificate merge followed by flag evaluation produces correct
   results.
 - Verification no longer wastes computation trying non-signing subkeys.
@@ -73,10 +88,6 @@ We enforce "latest self-signature wins" for all key flag checks:
   valid but unusual) will cause `can_details_sign` to return `false`
   via `key_flags().sign()` returning false on the default. This is
   the correct conservative behavior.
-- Pre-existing inconsistency: `primary_expiration_from_details` and
-  `find_valid_encryption_subkeys` still use the old pattern (iterating
-  all signatures rather than filtering to self-sig types). These
-  should be updated in follow-up work for full consistency.
 
 ## Alternatives Considered
 

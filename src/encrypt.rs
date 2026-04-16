@@ -15,7 +15,7 @@ use pgp::types::KeyDetails;
 use rand::thread_rng;
 
 use crate::error::{Error, Result};
-use crate::internal::{is_subkey_valid, parse_public_key};
+use crate::internal::{can_subkey_encrypt, is_subkey_valid, parse_public_key};
 
 /// Encrypt bytes to a single recipient.
 ///
@@ -458,13 +458,8 @@ fn find_valid_encryption_subkeys(
             continue;
         }
 
-        // Check key flags in binding signature
-        let has_encryption_flag = subkey.signatures.iter().any(|sig| {
-            let flags = sig.key_flags();
-            flags.encrypt_comms() || flags.encrypt_storage()
-        });
-
-        if !has_encryption_flag {
+        // Check key flags in most recent binding signature (RFC 4880 §5.2.3.3)
+        if !can_subkey_encrypt(subkey) {
             continue;
         }
 

@@ -56,7 +56,7 @@ pub(crate) fn can_subkey_sign(subkey: &SignedPublicSubKey) -> bool {
 }
 
 /// Find the most recent binding signature for a subkey.
-fn most_recent_binding_sig(
+pub(crate) fn most_recent_binding_sig(
     subkey: &SignedPublicSubKey,
 ) -> Option<&pgp::packet::Signature> {
     subkey
@@ -64,6 +64,20 @@ fn most_recent_binding_sig(
         .iter()
         .filter(|sig| sig.typ() == Some(SignatureType::SubkeyBinding))
         .max_by_key(|sig| sig.created().map(|t| t.as_secs()).unwrap_or(0))
+}
+
+/// Check if a subkey has the encryption capability flag in its most recent
+/// binding signature.
+///
+/// Per RFC 4880 §5.2.3.3, the most recent binding signature is
+/// authoritative for subkey key flags.
+pub(crate) fn can_subkey_encrypt(subkey: &SignedPublicSubKey) -> bool {
+    most_recent_binding_sig(subkey)
+        .map(|sig| {
+            let flags = sig.key_flags();
+            flags.encrypt_comms() || flags.encrypt_storage()
+        })
+        .unwrap_or(false)
 }
 
 /// Check if a key is valid for use (not expired, not revoked).
@@ -211,7 +225,18 @@ pub(crate) fn primary_expiration_from_details(
     let mut newest_expiration = None;
 
     for user in &details.users {
-        for sig in &user.signatures {
+        // Only consider self-signatures (certifications), not third-party sigs.
+        // Per RFC 4880 §5.2.3.3, the most recent self-signature is authoritative.
+        let self_sigs = user.signatures.iter().filter(|sig| {
+            matches!(
+                sig.typ(),
+                Some(SignatureType::CertGeneric)
+                    | Some(SignatureType::CertPersona)
+                    | Some(SignatureType::CertCasual)
+                    | Some(SignatureType::CertPositive)
+            )
+        });
+        for sig in self_sigs {
             if let Some(validity) = sig.key_expiration_time() {
                 let sig_created: Option<SystemTime> = sig.created().map(|ts| ts.into());
                 // Pick the signature with the latest creation timestamp
