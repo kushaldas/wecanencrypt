@@ -44,12 +44,26 @@ pub(crate) fn is_subkey_revoked(subkey: &SignedPublicSubKey) -> bool {
         .any(|sig| sig.typ() == Some(SignatureType::SubkeyRevocation))
 }
 
-/// Check if a subkey has the signing capability flag in its binding signature.
+/// Check if a subkey has the signing capability flag in its most recent
+/// binding signature.
+///
+/// Per RFC 4880 §5.2.3.3, the most recent binding signature is
+/// authoritative for subkey key flags.
 pub(crate) fn can_subkey_sign(subkey: &SignedPublicSubKey) -> bool {
+    most_recent_binding_sig(subkey)
+        .map(|sig| sig.key_flags().sign())
+        .unwrap_or(false)
+}
+
+/// Find the most recent binding signature for a subkey.
+fn most_recent_binding_sig(
+    subkey: &SignedPublicSubKey,
+) -> Option<&pgp::packet::Signature> {
     subkey
         .signatures
         .iter()
-        .any(|sig| sig.key_flags().sign())
+        .filter(|sig| sig.typ() == Some(SignatureType::SubkeyBinding))
+        .max_by_key(|sig| sig.created().map(|t| t.as_secs()).unwrap_or(0))
 }
 
 /// Check if a key is valid for use (not expired, not revoked).
@@ -82,14 +96,43 @@ pub(crate) fn is_subkey_valid(subkey: &SignedPublicSubKey, allow_expired: bool) 
     true
 }
 
-/// Check if key details have the signing flag set.
+/// Find the most recent self-signature for a user ID.
+///
+/// Per RFC 4880 §5.2.3.3, newer self-signatures supersede older ones.
+/// Only the self-signature with the latest creation timestamp is
+/// authoritative for key flags, preferences, and other properties.
+///
+/// Returns `None` if the user has no signatures.
+fn most_recent_self_sig(
+    user: &pgp::types::SignedUser,
+) -> Option<&pgp::packet::Signature> {
+    user.signatures
+        .iter()
+        .filter(|sig| {
+            matches!(
+                sig.typ(),
+                Some(SignatureType::CertGeneric)
+                    | Some(SignatureType::CertPersona)
+                    | Some(SignatureType::CertCasual)
+                    | Some(SignatureType::CertPositive)
+            )
+        })
+        .max_by_key(|sig| sig.created().map(|t| t.as_secs()).unwrap_or(0))
+}
+
+/// Check if key details have the signing flag set on the most recent
+/// self-signature.
+///
+/// Per RFC 4880 §5.2.3.3, only the most recent self-signature per UID
+/// is authoritative. This checks whether any UID's most recent
+/// self-signature grants the signing capability.
 ///
 /// This is the single source of truth for primary-key signing-capability checks.
 /// Both `SignedPublicKey` and `SignedSecretKey` share `details: SignedKeyDetails`,
 /// so callers can pass `&key.details` regardless of key type.
 pub(crate) fn can_details_sign(details: &SignedKeyDetails) -> bool {
     for user in &details.users {
-        for sig in &user.signatures {
+        if let Some(sig) = most_recent_self_sig(user) {
             if sig.key_flags().sign() {
                 return true;
             }
@@ -105,7 +148,11 @@ pub(crate) fn can_primary_sign(key: &SignedPublicKey) -> bool {
     can_details_sign(&key.details)
 }
 
-/// Check if primary key has the certify flag.
+/// Check if primary key has the certify flag on the most recent
+/// self-signature.
+///
+/// Per RFC 4880 §5.2.3.3, only the most recent self-signature is
+/// authoritative for key flags.
 ///
 /// Used by card operations: a Certify-capable primary key can produce
 /// signatures when explicitly uploaded to the card's signing slot.
@@ -114,7 +161,11 @@ pub(crate) fn can_primary_certify(key: &SignedPublicKey) -> bool {
     key.details
         .users
         .iter()
-        .any(|u| u.signatures.iter().any(|sig| sig.key_flags().certify()))
+        .any(|u| {
+            most_recent_self_sig(u)
+                .map(|sig| sig.key_flags().certify())
+                .unwrap_or(false)
+        })
 }
 
 /// Check if key details indicate revocation.

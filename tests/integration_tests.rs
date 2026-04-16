@@ -17,6 +17,7 @@ use wecanencrypt::{
     encrypt_bytes_to_multiple,
     get_key_cipher_details,
     get_pub_key,
+    merge_keys,
     // Parsing
     parse_cert_bytes,
     revoke_uid,
@@ -926,5 +927,274 @@ mod reader_encryption {
         // Verify content matches
         let decrypted = std::fs::read(&decrypted_path).unwrap();
         assert_eq!(decrypted, plaintext);
+    }
+}
+
+// =============================================================================
+// Key Flag Policy Tests (RFC 4880 §5.2.3.3 "latest self-signature wins")
+// =============================================================================
+
+mod key_flag_policy {
+    use super::*;
+    use wecanencrypt::pgp::composed::{SignedKeyDetails, SignedSecretKey};
+    use wecanencrypt::pgp::packet::{
+        KeyFlags, PacketTrait, SignatureConfig, SignatureType, Subpacket, SubpacketData,
+    };
+    use wecanencrypt::pgp::ser::Serialize;
+    use wecanencrypt::pgp::types::{KeyDetails, KeyVersion, Password, SignedUser, Timestamp};
+
+    /// Helper: parse a secret key from bytes.
+    fn parse_secret(data: &[u8]) -> SignedSecretKey {
+        use std::io::Cursor;
+        use wecanencrypt::pgp::composed::Deserializable;
+        match SignedSecretKey::from_armor_single(Cursor::new(data)) {
+            Ok((key, _)) => key,
+            Err(_) => SignedSecretKey::from_bytes(data).unwrap(),
+        }
+    }
+
+    /// Helper: create a new self-signature on a UID with specific key flags,
+    /// re-sign, and rebuild the cert. Returns the updated secret key bytes.
+    fn resign_uid_with_flags(
+        secret_data: &[u8],
+        password: &str,
+        sign_flag: bool,
+        certify_flag: bool,
+    ) -> Vec<u8> {
+        let secret_key = parse_secret(secret_data);
+        let password_obj: Password = password.into();
+        let mut rng = rand::thread_rng();
+
+        let mut new_users = Vec::new();
+        for signed_user in &secret_key.details.users {
+            // Build key flags
+            let mut flags = KeyFlags::default();
+            flags.set_certify(certify_flag);
+            flags.set_sign(sign_flag);
+
+            // Build subpackets — use a creation time slightly in the future to
+            // ensure this self-sig is "newer" than the original one.
+            let hashed_subpackets = vec![
+                Subpacket::regular(SubpacketData::SignatureCreationTime(Timestamp::now())).unwrap(),
+                Subpacket::regular(SubpacketData::IssuerFingerprint(
+                    secret_key.primary_key.fingerprint(),
+                ))
+                .unwrap(),
+                Subpacket::regular(SubpacketData::KeyFlags(flags)).unwrap(),
+            ];
+
+            let mut config = SignatureConfig::from_key(
+                &mut rng,
+                &secret_key.primary_key,
+                SignatureType::CertPositive,
+            )
+            .unwrap();
+            config.hashed_subpackets = hashed_subpackets;
+
+            if secret_key.primary_key.version() <= KeyVersion::V4 {
+                config.unhashed_subpackets =
+                    vec![Subpacket::regular(SubpacketData::IssuerKeyId(
+                        secret_key.primary_key.legacy_key_id(),
+                    ))
+                    .unwrap()];
+            }
+
+            let sig = config
+                .sign_certification(
+                    &secret_key.primary_key,
+                    &secret_key.primary_key.public_key(),
+                    &password_obj,
+                    signed_user.id.tag(),
+                    &signed_user.id,
+                )
+                .unwrap();
+
+            // Keep ALL existing signatures (including old self-sigs) + add new one.
+            // This simulates accumulation after a merge — multiple self-sigs coexist.
+            let mut combined_sigs = signed_user.signatures.clone();
+            combined_sigs.push(sig);
+            new_users.push(SignedUser::new(signed_user.id.clone(), combined_sigs));
+        }
+
+        let updated = SignedSecretKey::new(
+            secret_key.primary_key.clone(),
+            SignedKeyDetails::new(
+                secret_key.details.revocation_signatures.clone(),
+                secret_key.details.direct_signatures.clone(),
+                new_users,
+                secret_key.details.user_attributes.clone(),
+            ),
+            secret_key.public_subkeys.clone(),
+            secret_key.secret_subkeys.clone(),
+        );
+
+        updated.to_bytes().unwrap()
+    }
+
+    #[test]
+    fn test_latest_self_sig_wins_for_sign_flag() {
+        // Generate a key WITH primary signing capability.
+        let key = create_key(
+            TEST_PASSWORD,
+            &[TEST_UID],
+            CipherSuite::Cv25519,
+            None,
+            None,
+            None,
+            SubkeyFlags::all(),
+            true, // can_primary_sign = true
+            true,
+        )
+        .unwrap();
+
+        let info = parse_cert_bytes(&key.secret_key, true).unwrap();
+        assert!(
+            info.can_primary_sign,
+            "Original key should have primary sign capability"
+        );
+
+        // Create a newer self-sig that REMOVES the sign flag (certify-only).
+        let updated = resign_uid_with_flags(&key.secret_key, TEST_PASSWORD, false, true);
+
+        let info2 = parse_cert_bytes(&updated, true).unwrap();
+        assert!(
+            !info2.can_primary_sign,
+            "After adding newer self-sig without sign flag, can_primary_sign should be false"
+        );
+    }
+
+    #[test]
+    fn test_latest_self_sig_wins_adding_sign_flag() {
+        // Generate a key WITHOUT primary signing capability.
+        let key = create_key(
+            TEST_PASSWORD,
+            &[TEST_UID],
+            CipherSuite::Cv25519,
+            None,
+            None,
+            None,
+            SubkeyFlags::all(),
+            false, // can_primary_sign = false
+            true,
+        )
+        .unwrap();
+
+        let info = parse_cert_bytes(&key.secret_key, true).unwrap();
+        assert!(
+            !info.can_primary_sign,
+            "Original key should NOT have primary sign capability"
+        );
+
+        // Create a newer self-sig that ADDS the sign flag.
+        let updated = resign_uid_with_flags(&key.secret_key, TEST_PASSWORD, true, true);
+
+        let info2 = parse_cert_bytes(&updated, true).unwrap();
+        assert!(
+            info2.can_primary_sign,
+            "After adding newer self-sig with sign flag, can_primary_sign should be true"
+        );
+    }
+
+    #[test]
+    fn test_merge_preserves_latest_self_sig_flags() {
+        // Generate a key with sign capability.
+        let key = create_key(
+            TEST_PASSWORD,
+            &[TEST_UID],
+            CipherSuite::Cv25519,
+            None,
+            None,
+            None,
+            SubkeyFlags::all(),
+            true, // can_primary_sign = true
+            true,
+        )
+        .unwrap();
+
+        // Create an "updated" version that removes sign flag.
+        let updated = resign_uid_with_flags(&key.secret_key, TEST_PASSWORD, false, true);
+
+        // Extract public keys for merge.
+        let pub_orig = get_pub_key(&key.secret_key).unwrap();
+        let pub_updated = get_pub_key(&updated).unwrap();
+
+        // Merge: original + updated. The updated cert has a newer self-sig
+        // without the sign flag.
+        let merged = merge_keys(pub_orig.as_bytes(), pub_updated.as_bytes(), false).unwrap();
+
+        let info = parse_cert_bytes(&merged, false).unwrap();
+        assert!(
+            !info.can_primary_sign,
+            "After merging cert with newer self-sig removing sign flag, can_primary_sign should be false"
+        );
+    }
+
+    #[test]
+    fn test_merge_older_self_sig_does_not_override_newer() {
+        // Generate a key WITHOUT sign capability.
+        let key_no_sign = create_key(
+            TEST_PASSWORD,
+            &[TEST_UID],
+            CipherSuite::Cv25519,
+            None,
+            None,
+            None,
+            SubkeyFlags::all(),
+            false, // can_primary_sign = false
+            true,
+        )
+        .unwrap();
+
+        // Create a newer version that ADDS sign capability.
+        let key_with_sign =
+            resign_uid_with_flags(&key_no_sign.secret_key, TEST_PASSWORD, true, true);
+
+        let pub_with_sign = get_pub_key(&key_with_sign).unwrap();
+        let pub_no_sign = get_pub_key(&key_no_sign.secret_key).unwrap();
+
+        // Merge: start from cert WITH sign flag, merge in the OLDER cert without it.
+        // The older self-sig should NOT override the newer one.
+        let merged = merge_keys(pub_with_sign.as_bytes(), pub_no_sign.as_bytes(), false).unwrap();
+
+        let info = parse_cert_bytes(&merged, false).unwrap();
+        assert!(
+            info.can_primary_sign,
+            "Merging in older self-sig without sign flag should not override newer self-sig that has it"
+        );
+    }
+
+    #[test]
+    fn test_certify_only_key_remains_certify_only_after_accumulation() {
+        // Generate a certify-only key (no primary sign).
+        let key = create_key(
+            TEST_PASSWORD,
+            &[TEST_UID],
+            CipherSuite::Cv25519,
+            None,
+            None,
+            None,
+            SubkeyFlags::all(),
+            false, // certify only
+            true,
+        )
+        .unwrap();
+
+        let info = parse_cert_bytes(&key.secret_key, true).unwrap();
+        assert!(
+            !info.can_primary_sign,
+            "Certify-only key should not have sign capability"
+        );
+
+        // Update the expiry — this creates a new self-sig that copies flags
+        // from the existing sig (should preserve certify-only).
+        let exp = chrono::Utc::now() + chrono::Duration::days(365);
+        let updated =
+            wecanencrypt::update_primary_expiry(&key.secret_key, exp, TEST_PASSWORD).unwrap();
+
+        let info2 = parse_cert_bytes(&updated, true).unwrap();
+        assert!(
+            !info2.can_primary_sign,
+            "After expiry update, certify-only key should still not have sign capability"
+        );
     }
 }
