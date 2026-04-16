@@ -26,6 +26,9 @@ pub enum CipherSuite {
     NistP384,
     /// NIST P-521 curve (ECDSA for signing, ECDH for encryption)
     NistP521,
+    /// Modern Curve448 (Ed448 for signing, X448 for encryption)
+    /// RFC 9580 SHOULD implement - stronger security than Curve25519.
+    Cv448Modern,
 }
 
 impl std::str::FromStr for CipherSuite {
@@ -41,6 +44,7 @@ impl std::str::FromStr for CipherSuite {
             "nistp256" | "p256" | "secp256r1" => Ok(CipherSuite::NistP256),
             "nistp384" | "p384" | "secp384r1" => Ok(CipherSuite::NistP384),
             "nistp521" | "p521" | "secp521r1" => Ok(CipherSuite::NistP521),
+            "cv448modern" | "curve448modern" | "x448" | "ed448" => Ok(CipherSuite::Cv448Modern),
             _ => Err(format!("unknown cipher suite: {}", s)),
         }
     }
@@ -57,6 +61,7 @@ impl CipherSuite {
             CipherSuite::NistP256 => "NIST P-256",
             CipherSuite::NistP384 => "NIST P-384",
             CipherSuite::NistP521 => "NIST P-521",
+            CipherSuite::Cv448Modern => "Curve448 (Modern)",
         }
     }
 }
@@ -348,6 +353,7 @@ impl CipherSuite {
             CipherSuite::NistP521 => {
                 pgp::composed::KeyType::ECDSA(pgp::crypto::ecc_curve::ECCCurve::P521)
             }
+            CipherSuite::Cv448Modern => pgp::composed::KeyType::Ed448,
         }
     }
 
@@ -369,6 +375,7 @@ impl CipherSuite {
             CipherSuite::NistP521 => {
                 pgp::composed::KeyType::ECDH(pgp::crypto::ecc_curve::ECCCurve::P521)
             }
+            CipherSuite::Cv448Modern => pgp::composed::KeyType::X448,
         }
     }
 }

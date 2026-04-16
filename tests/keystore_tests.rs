@@ -28,7 +28,7 @@ fn store_dir() -> PathBuf {
 }
 
 fn read_file(path: &PathBuf) -> Vec<u8> {
-    std::fs::read(path).expect(&format!("Failed to read file: {:?}", path))
+    std::fs::read(path).unwrap_or_else(|_| panic!("Failed to read file: {:?}", path))
 }
 
 fn create_test_key(uid: &str) -> (Vec<u8>, String) {
@@ -145,13 +145,13 @@ fn test_keystore_list_certs() {
     let (key3, fp3) = create_test_key("User3 <user3@example.com>");
 
     store
-        .import_cert(&get_pub_key(&key1).unwrap().as_bytes())
+        .import_cert(get_pub_key(&key1).unwrap().as_bytes())
         .unwrap();
     store
-        .import_cert(&get_pub_key(&key2).unwrap().as_bytes())
+        .import_cert(get_pub_key(&key2).unwrap().as_bytes())
         .unwrap();
     store
-        .import_cert(&get_pub_key(&key3).unwrap().as_bytes())
+        .import_cert(get_pub_key(&key3).unwrap().as_bytes())
         .unwrap();
 
     let certs = store.list_certs().unwrap();
@@ -175,13 +175,13 @@ fn test_keystore_search_by_uid() {
     let (key3, _) = create_test_key("Alice Work <alice@work.com>");
 
     store
-        .import_cert(&get_pub_key(&key1).unwrap().as_bytes())
+        .import_cert(get_pub_key(&key1).unwrap().as_bytes())
         .unwrap();
     store
-        .import_cert(&get_pub_key(&key2).unwrap().as_bytes())
+        .import_cert(get_pub_key(&key2).unwrap().as_bytes())
         .unwrap();
     store
-        .import_cert(&get_pub_key(&key3).unwrap().as_bytes())
+        .import_cert(get_pub_key(&key3).unwrap().as_bytes())
         .unwrap();
 
     // Search for Alice
@@ -302,12 +302,12 @@ fn test_keystore_count() {
     let (key2, _) = create_test_key("User2 <user2@example.com>");
 
     store
-        .import_cert(&get_pub_key(&key1).unwrap().as_bytes())
+        .import_cert(get_pub_key(&key1).unwrap().as_bytes())
         .unwrap();
     assert_eq!(store.count().unwrap(), 1);
 
     store
-        .import_cert(&get_pub_key(&key2).unwrap().as_bytes())
+        .import_cert(get_pub_key(&key2).unwrap().as_bytes())
         .unwrap();
     assert_eq!(store.count().unwrap(), 2);
 }
@@ -390,13 +390,13 @@ fn test_keystore_search_by_email() {
     let (key3, _) = create_test_key("Alice Work <alice@work.com>");
 
     store
-        .import_cert(&get_pub_key(&key1).unwrap().as_bytes())
+        .import_cert(get_pub_key(&key1).unwrap().as_bytes())
         .unwrap();
     store
-        .import_cert(&get_pub_key(&key2).unwrap().as_bytes())
+        .import_cert(get_pub_key(&key2).unwrap().as_bytes())
         .unwrap();
     store
-        .import_cert(&get_pub_key(&key3).unwrap().as_bytes())
+        .import_cert(get_pub_key(&key3).unwrap().as_bytes())
         .unwrap();
 
     // Search by exact email
@@ -457,10 +457,10 @@ fn test_keystore_list_fingerprints() {
     let (key2, fp2) = create_test_key("User2 <user2@example.com>");
 
     store
-        .import_cert(&get_pub_key(&key1).unwrap().as_bytes())
+        .import_cert(get_pub_key(&key1).unwrap().as_bytes())
         .unwrap();
     store
-        .import_cert(&get_pub_key(&key2).unwrap().as_bytes())
+        .import_cert(get_pub_key(&key2).unwrap().as_bytes())
         .unwrap();
 
     let fingerprints = store.list_fingerprints().unwrap();
@@ -604,7 +604,7 @@ fn test_keystore_add_and_revoke_uid() {
 
     // UID count stays same (revoked UIDs still present)
     let info = store.get_cert_info(&fingerprint).unwrap();
-    assert!(info.user_ids.len() >= 1);
+    assert!(!info.user_ids.is_empty());
 }
 
 #[test]
@@ -1159,4 +1159,114 @@ fn test_keystore_card_keys_empty_result() {
     // No card keys saved — should return empty
     let card_keys = store.get_card_keys(&fp).unwrap();
     assert!(card_keys.is_empty());
+}
+
+#[test]
+fn test_keystore_bad_path() {
+    // Opening a keystore in a nonexistent directory should fail
+    let result = KeyStore::open("/nonexistent/path/to/database.db");
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_keystore_encrypt_bytes_to_file() {
+    use wecanencrypt::decrypt_bytes_from_store;
+
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("test.db");
+    let encrypted_path = dir.path().join("encrypted.pgp");
+
+    let store = KeyStore::open(&db_path).unwrap();
+
+    let (secret_key, fp) = create_test_key("FileEnc <fileenc@example.com>");
+    store.import_cert(&secret_key).unwrap();
+
+    // Encrypt bytes and write to file
+    let plaintext = b"Bytes to file encryption test";
+    let ciphertext = wecanencrypt::encrypt_bytes_from_store(&store, &fp, plaintext, true).unwrap();
+    std::fs::write(&encrypted_path, &ciphertext).unwrap();
+
+    // Read back and decrypt
+    let encrypted_data = std::fs::read(&encrypted_path).unwrap();
+    let decrypted = decrypt_bytes_from_store(&store, &fp, &encrypted_data, TEST_PASSWORD).unwrap();
+    assert_eq!(decrypted, plaintext);
+}
+
+#[test]
+fn test_keystore_encrypt_bytes_to_file_multiple_recipients() {
+    use wecanencrypt::decrypt_bytes_from_store;
+
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("test.db");
+    let encrypted_path = dir.path().join("encrypted.pgp");
+
+    let store = KeyStore::open(&db_path).unwrap();
+
+    let (secret_key1, fp1) = create_test_key("Multi1 <multi1@example.com>");
+    let (secret_key2, fp2) = create_test_key("Multi2 <multi2@example.com>");
+    store.import_cert(&secret_key1).unwrap();
+    store.import_cert(&secret_key2).unwrap();
+
+    // Encrypt bytes for both recipients and write to file
+    let plaintext = b"Multi-recipient bytes to file";
+    let ciphertext = wecanencrypt::encrypt_bytes_to_multiple_from_store(
+        &store,
+        &[fp1.as_str(), fp2.as_str()],
+        plaintext,
+        true,
+    )
+    .unwrap();
+    std::fs::write(&encrypted_path, &ciphertext).unwrap();
+
+    // Both recipients can decrypt from file
+    let encrypted_data = std::fs::read(&encrypted_path).unwrap();
+    let decrypted1 =
+        decrypt_bytes_from_store(&store, &fp1, &encrypted_data, TEST_PASSWORD).unwrap();
+    let decrypted2 =
+        decrypt_bytes_from_store(&store, &fp2, &encrypted_data, TEST_PASSWORD).unwrap();
+    assert_eq!(decrypted1, plaintext);
+    assert_eq!(decrypted2, plaintext);
+}
+
+#[test]
+fn test_keystore_certify_uid() {
+    use wecanencrypt::{certify_key, CertificationType};
+
+    let store = KeyStore::open_in_memory().unwrap();
+
+    // Create signer and target keys
+    let (signer_key, signer_fp) = create_test_key("Signer <signer@example.com>");
+    let (target_key, target_fp) = create_test_key("Target <target@example.com>");
+    store.import_cert(&signer_key).unwrap();
+    store.import_cert(&target_key).unwrap();
+
+    // Export target's public key from store, certify it, re-import
+    let target_pub = store.export_cert(&target_fp).unwrap();
+    let signer_sec = store.export_cert(&signer_fp).unwrap();
+
+    let certified = certify_key(
+        &signer_sec,
+        &target_pub,
+        CertificationType::Persona,
+        Some(&["Target <target@example.com>"]),
+        TEST_PASSWORD,
+    )
+    .unwrap();
+
+    // Re-import certified key and verify certification appears
+    store.update_cert(&target_fp, &certified).unwrap();
+
+    let updated_cert = store.export_cert(&target_fp).unwrap();
+    let info = parse_cert_bytes(&updated_cert, true).unwrap();
+
+    let target_uid = info
+        .user_ids
+        .iter()
+        .find(|u| u.value == "Target <target@example.com>")
+        .expect("Target UID should exist");
+
+    assert!(
+        !target_uid.certifications.is_empty(),
+        "Target UID should have certifications after being certified"
+    );
 }

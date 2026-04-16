@@ -17,6 +17,7 @@ use wecanencrypt::{
     encrypt_bytes_to_multiple,
     get_key_cipher_details,
     get_pub_key,
+    merge_keys,
     // Parsing
     parse_cert_bytes,
     revoke_uid,
@@ -314,6 +315,83 @@ mod encryption {
     }
 
     #[test]
+    fn test_encrypt_rejects_insecure_algorithms() {
+        use wecanencrypt::{encrypt_bytes_to_multiple_with_algo, SymmetricKeyAlgorithm};
+
+        let (secret_key, _) = generate_test_key();
+        let public_key = get_pub_key(&secret_key).unwrap();
+
+        let plaintext = b"test message";
+
+        // Plaintext (no encryption) must be rejected
+        let result = encrypt_bytes_to_multiple_with_algo(
+            &[public_key.as_bytes()],
+            plaintext,
+            true,
+            SymmetricKeyAlgorithm::Plaintext,
+        );
+        assert!(result.is_err());
+
+        // TripleDES must be rejected
+        let result = encrypt_bytes_to_multiple_with_algo(
+            &[public_key.as_bytes()],
+            plaintext,
+            true,
+            SymmetricKeyAlgorithm::TripleDES,
+        );
+        assert!(result.is_err());
+
+        // CAST5 must be rejected
+        let result = encrypt_bytes_to_multiple_with_algo(
+            &[public_key.as_bytes()],
+            plaintext,
+            true,
+            SymmetricKeyAlgorithm::CAST5,
+        );
+        assert!(result.is_err());
+
+        // IDEA must be rejected
+        let result = encrypt_bytes_to_multiple_with_algo(
+            &[public_key.as_bytes()],
+            plaintext,
+            true,
+            SymmetricKeyAlgorithm::IDEA,
+        );
+        assert!(result.is_err());
+
+        // Blowfish must be rejected
+        let result = encrypt_bytes_to_multiple_with_algo(
+            &[public_key.as_bytes()],
+            plaintext,
+            true,
+            SymmetricKeyAlgorithm::Blowfish,
+        );
+        assert!(result.is_err());
+
+        // AES-128 must be accepted
+        let ciphertext = encrypt_bytes_to_multiple_with_algo(
+            &[public_key.as_bytes()],
+            plaintext,
+            true,
+            SymmetricKeyAlgorithm::AES128,
+        )
+        .unwrap();
+        let decrypted = decrypt_bytes(&secret_key, &ciphertext, TEST_PASSWORD).unwrap();
+        assert_eq!(decrypted, plaintext);
+
+        // AES-256 must be accepted
+        let ciphertext = encrypt_bytes_to_multiple_with_algo(
+            &[public_key.as_bytes()],
+            plaintext,
+            true,
+            SymmetricKeyAlgorithm::AES256,
+        )
+        .unwrap();
+        let decrypted = decrypt_bytes(&secret_key, &ciphertext, TEST_PASSWORD).unwrap();
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
     fn test_encrypt_large_message() {
         let (secret_key, _) = generate_test_key();
         let public_key = get_pub_key(&secret_key).unwrap();
@@ -325,6 +403,68 @@ mod encryption {
         let decrypted = decrypt_bytes(&secret_key, &ciphertext, TEST_PASSWORD).unwrap();
 
         assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn test_file_encrypted_for() {
+        use tempfile::tempdir;
+        use wecanencrypt::{encrypt_file, file_encrypted_for};
+
+        let (secret_key, _) = generate_test_key();
+        let public_key = get_pub_key(&secret_key).unwrap();
+        let info = parse_cert_bytes(&secret_key, true).unwrap();
+
+        let dir = tempdir().unwrap();
+        let encrypted_path = dir.path().join("encrypted.pgp");
+
+        // Encrypt a file
+        encrypt_file(public_key.as_bytes(), "Cargo.toml", &encrypted_path, false).unwrap();
+
+        // Check which key IDs the file was encrypted for
+        let key_ids = file_encrypted_for(&encrypted_path).unwrap();
+        assert!(!key_ids.is_empty());
+
+        // Should contain one of our subkey IDs
+        let our_subkey_ids: Vec<String> = info.subkeys.iter().map(|s| s.key_id.clone()).collect();
+        assert!(
+            key_ids.iter().any(|kid| our_subkey_ids.contains(kid)),
+            "Encrypted file should be for one of our subkeys, got {:?}, expected one of {:?}",
+            key_ids,
+            our_subkey_ids
+        );
+    }
+
+    #[test]
+    fn test_encrypt_reader_to_file_multiple_recipients() {
+        use std::io::Cursor;
+        use tempfile::tempdir;
+        use wecanencrypt::encrypt_reader_to_file;
+
+        let key1 = create_key_simple(TEST_PASSWORD, &["Reader1 <r1@example.com>"]).unwrap();
+        let key2 = create_key_simple(TEST_PASSWORD, &["Reader2 <r2@example.com>"]).unwrap();
+        let pub1 = get_pub_key(&key1.secret_key).unwrap();
+        let pub2 = get_pub_key(&key2.secret_key).unwrap();
+
+        let dir = tempdir().unwrap();
+        let encrypted_path = dir.path().join("encrypted.pgp");
+
+        let plaintext = b"Multi-recipient reader encryption";
+        let reader = Cursor::new(plaintext);
+
+        encrypt_reader_to_file(
+            &[pub1.as_bytes(), pub2.as_bytes()],
+            reader,
+            &encrypted_path,
+            false,
+        )
+        .unwrap();
+
+        // Both recipients should be able to decrypt
+        let ciphertext = std::fs::read(&encrypted_path).unwrap();
+        let decrypted1 = decrypt_bytes(&key1.secret_key, &ciphertext, TEST_PASSWORD).unwrap();
+        let decrypted2 = decrypt_bytes(&key2.secret_key, &ciphertext, TEST_PASSWORD).unwrap();
+        assert_eq!(decrypted1, plaintext);
+        assert_eq!(decrypted2, plaintext);
     }
 }
 
@@ -438,6 +578,150 @@ mod signing {
         let result = sign_bytes(&secret_key, message, "wrong-password");
         assert!(result.is_err());
     }
+
+    #[test]
+    fn test_sign_with_primary_key_variants() {
+        use wecanencrypt::{
+            sign_bytes_cleartext_with_primary_key, sign_bytes_detached_with_primary_key,
+            sign_bytes_with_primary_key,
+        };
+
+        let (secret_key, _) = generate_test_key();
+        let public_key = get_pub_key(&secret_key).unwrap();
+        let message = b"Test primary key signing";
+
+        // Binary signature with primary key
+        let signed = sign_bytes_with_primary_key(&secret_key, message, TEST_PASSWORD).unwrap();
+        let valid = verify_bytes(public_key.as_bytes(), &signed).unwrap();
+        assert!(valid);
+
+        // Cleartext signature with primary key
+        let signed =
+            sign_bytes_cleartext_with_primary_key(&secret_key, message, TEST_PASSWORD).unwrap();
+        let valid = verify_bytes(public_key.as_bytes(), &signed).unwrap();
+        assert!(valid);
+
+        // Detached signature with primary key
+        let signature =
+            sign_bytes_detached_with_primary_key(&secret_key, message, TEST_PASSWORD).unwrap();
+        let valid =
+            verify_bytes_detached(public_key.as_bytes(), message, signature.as_bytes()).unwrap();
+        assert!(valid);
+    }
+
+    #[test]
+    fn test_sign_prefers_signing_subkey() {
+        // Generate a key with all subkeys (including a signing subkey)
+        let key = create_key(
+            TEST_PASSWORD,
+            &[TEST_UID],
+            CipherSuite::Cv25519,
+            None,
+            None,
+            None,
+            SubkeyFlags::all(),
+            false, // primary cannot sign
+            true,
+        )
+        .unwrap();
+        let public_key = get_pub_key(&key.secret_key).unwrap();
+
+        // The default sign_bytes should use the signing subkey and still verify
+        let message = b"Signed by subkey";
+        let signed = sign_bytes(&key.secret_key, message, TEST_PASSWORD).unwrap();
+        let valid = verify_bytes(public_key.as_bytes(), &signed).unwrap();
+        assert!(valid);
+
+        // Detached too
+        let sig = sign_bytes_detached(&key.secret_key, message, TEST_PASSWORD).unwrap();
+        let valid = verify_bytes_detached(public_key.as_bytes(), message, sig.as_bytes()).unwrap();
+        assert!(valid);
+
+        // Cleartext too
+        let signed = sign_bytes_cleartext(&key.secret_key, message, TEST_PASSWORD).unwrap();
+        let valid = verify_bytes(public_key.as_bytes(), &signed).unwrap();
+        assert!(valid);
+    }
+
+    #[test]
+    fn test_sign_fails_for_certify_only_key_without_signing_subkey() {
+        // Key where primary CANNOT sign and has no signing subkey (encryption only)
+        let key = create_key(
+            TEST_PASSWORD,
+            &[TEST_UID],
+            CipherSuite::Cv25519,
+            None,
+            None,
+            None,
+            SubkeyFlags::encryption_only(),
+            false, // primary cannot sign
+            true,
+        )
+        .unwrap();
+
+        let message = b"Should fail to sign";
+
+        // All signing functions should return NoSigningSubkey
+        let result = sign_bytes(&key.secret_key, message, TEST_PASSWORD);
+        assert!(
+            matches!(result, Err(wecanencrypt::Error::NoSigningSubkey)),
+            "sign_bytes should fail with NoSigningSubkey, got {:?}",
+            result
+        );
+
+        let result = sign_bytes_detached(&key.secret_key, message, TEST_PASSWORD);
+        assert!(
+            matches!(result, Err(wecanencrypt::Error::NoSigningSubkey)),
+            "sign_bytes_detached should fail with NoSigningSubkey, got {:?}",
+            result
+        );
+
+        let result = sign_bytes_cleartext(&key.secret_key, message, TEST_PASSWORD);
+        assert!(
+            matches!(result, Err(wecanencrypt::Error::NoSigningSubkey)),
+            "sign_bytes_cleartext should fail with NoSigningSubkey, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_sign_primary_vs_subkey_produces_different_signatures() {
+        use wecanencrypt::sign_bytes_detached_with_primary_key;
+
+        // Key where primary CAN sign and also has a signing subkey
+        let key = create_key(
+            TEST_PASSWORD,
+            &[TEST_UID],
+            CipherSuite::Cv25519,
+            None,
+            None,
+            None,
+            SubkeyFlags::all(),
+            true, // primary can sign
+            true,
+        )
+        .unwrap();
+        let public_key = get_pub_key(&key.secret_key).unwrap();
+
+        let message = b"Compare signatures";
+
+        // Default: uses signing subkey
+        let sig_subkey = sign_bytes_detached(&key.secret_key, message, TEST_PASSWORD).unwrap();
+        // Forced: uses primary key
+        let sig_primary =
+            sign_bytes_detached_with_primary_key(&key.secret_key, message, TEST_PASSWORD).unwrap();
+
+        // Both must verify
+        let valid =
+            verify_bytes_detached(public_key.as_bytes(), message, sig_subkey.as_bytes()).unwrap();
+        assert!(valid, "subkey signature should verify");
+        let valid =
+            verify_bytes_detached(public_key.as_bytes(), message, sig_primary.as_bytes()).unwrap();
+        assert!(valid, "primary key signature should verify");
+
+        // The signatures should differ (different issuer keys)
+        assert_ne!(sig_subkey, sig_primary);
+    }
 }
 
 // =============================================================================
@@ -480,7 +764,7 @@ mod key_management {
 
         // Key should still parse (revoked UID is still present but marked as revoked)
         let info = parse_cert_bytes(&updated_key, true).unwrap();
-        assert!(info.user_ids.len() >= 1);
+        assert!(!info.user_ids.is_empty());
     }
 
     #[test]
@@ -504,6 +788,20 @@ mod key_management {
         // New password should work
         let decrypted = decrypt_bytes(&updated_key, &ciphertext, new_password).unwrap();
         assert_eq!(decrypted, message);
+    }
+
+    #[test]
+    fn test_add_uid_fails_for_public_key() {
+        let (secret_key, _) = generate_test_key();
+        let public_key = get_pub_key(&secret_key).unwrap();
+
+        // Adding UID to a public-only key should fail
+        let result = add_uid(
+            public_key.as_bytes(),
+            "New <new@example.com>",
+            TEST_PASSWORD,
+        );
+        assert!(result.is_err());
     }
 
     #[test]
@@ -629,5 +927,274 @@ mod reader_encryption {
         // Verify content matches
         let decrypted = std::fs::read(&decrypted_path).unwrap();
         assert_eq!(decrypted, plaintext);
+    }
+}
+
+// =============================================================================
+// Key Flag Policy Tests (RFC 4880 §5.2.3.3 "latest self-signature wins")
+// =============================================================================
+
+mod key_flag_policy {
+    use super::*;
+    use wecanencrypt::pgp::composed::{SignedKeyDetails, SignedSecretKey};
+    use wecanencrypt::pgp::packet::{
+        KeyFlags, PacketTrait, SignatureConfig, SignatureType, Subpacket, SubpacketData,
+    };
+    use wecanencrypt::pgp::ser::Serialize;
+    use wecanencrypt::pgp::types::{KeyDetails, KeyVersion, Password, SignedUser, Timestamp};
+
+    /// Helper: parse a secret key from bytes.
+    fn parse_secret(data: &[u8]) -> SignedSecretKey {
+        use std::io::Cursor;
+        use wecanencrypt::pgp::composed::Deserializable;
+        match SignedSecretKey::from_armor_single(Cursor::new(data)) {
+            Ok((key, _)) => key,
+            Err(_) => SignedSecretKey::from_bytes(data).unwrap(),
+        }
+    }
+
+    /// Helper: create a new self-signature on a UID with specific key flags,
+    /// re-sign, and rebuild the cert. Returns the updated secret key bytes.
+    fn resign_uid_with_flags(
+        secret_data: &[u8],
+        password: &str,
+        sign_flag: bool,
+        certify_flag: bool,
+    ) -> Vec<u8> {
+        let secret_key = parse_secret(secret_data);
+        let password_obj: Password = password.into();
+        let mut rng = rand::thread_rng();
+
+        let mut new_users = Vec::new();
+        for signed_user in &secret_key.details.users {
+            // Build key flags
+            let mut flags = KeyFlags::default();
+            flags.set_certify(certify_flag);
+            flags.set_sign(sign_flag);
+
+            // Build subpackets — use a creation time slightly in the future to
+            // ensure this self-sig is "newer" than the original one.
+            let hashed_subpackets = vec![
+                Subpacket::regular(SubpacketData::SignatureCreationTime(Timestamp::now())).unwrap(),
+                Subpacket::regular(SubpacketData::IssuerFingerprint(
+                    secret_key.primary_key.fingerprint(),
+                ))
+                .unwrap(),
+                Subpacket::regular(SubpacketData::KeyFlags(flags)).unwrap(),
+            ];
+
+            let mut config = SignatureConfig::from_key(
+                &mut rng,
+                &secret_key.primary_key,
+                SignatureType::CertPositive,
+            )
+            .unwrap();
+            config.hashed_subpackets = hashed_subpackets;
+
+            if secret_key.primary_key.version() <= KeyVersion::V4 {
+                config.unhashed_subpackets =
+                    vec![Subpacket::regular(SubpacketData::IssuerKeyId(
+                        secret_key.primary_key.legacy_key_id(),
+                    ))
+                    .unwrap()];
+            }
+
+            let sig = config
+                .sign_certification(
+                    &secret_key.primary_key,
+                    &secret_key.primary_key.public_key(),
+                    &password_obj,
+                    signed_user.id.tag(),
+                    &signed_user.id,
+                )
+                .unwrap();
+
+            // Keep ALL existing signatures (including old self-sigs) + add new one.
+            // This simulates accumulation after a merge — multiple self-sigs coexist.
+            let mut combined_sigs = signed_user.signatures.clone();
+            combined_sigs.push(sig);
+            new_users.push(SignedUser::new(signed_user.id.clone(), combined_sigs));
+        }
+
+        let updated = SignedSecretKey::new(
+            secret_key.primary_key.clone(),
+            SignedKeyDetails::new(
+                secret_key.details.revocation_signatures.clone(),
+                secret_key.details.direct_signatures.clone(),
+                new_users,
+                secret_key.details.user_attributes.clone(),
+            ),
+            secret_key.public_subkeys.clone(),
+            secret_key.secret_subkeys.clone(),
+        );
+
+        updated.to_bytes().unwrap()
+    }
+
+    #[test]
+    fn test_latest_self_sig_wins_for_sign_flag() {
+        // Generate a key WITH primary signing capability.
+        let key = create_key(
+            TEST_PASSWORD,
+            &[TEST_UID],
+            CipherSuite::Cv25519,
+            None,
+            None,
+            None,
+            SubkeyFlags::all(),
+            true, // can_primary_sign = true
+            true,
+        )
+        .unwrap();
+
+        let info = parse_cert_bytes(&key.secret_key, true).unwrap();
+        assert!(
+            info.can_primary_sign,
+            "Original key should have primary sign capability"
+        );
+
+        // Create a newer self-sig that REMOVES the sign flag (certify-only).
+        let updated = resign_uid_with_flags(&key.secret_key, TEST_PASSWORD, false, true);
+
+        let info2 = parse_cert_bytes(&updated, true).unwrap();
+        assert!(
+            !info2.can_primary_sign,
+            "After adding newer self-sig without sign flag, can_primary_sign should be false"
+        );
+    }
+
+    #[test]
+    fn test_latest_self_sig_wins_adding_sign_flag() {
+        // Generate a key WITHOUT primary signing capability.
+        let key = create_key(
+            TEST_PASSWORD,
+            &[TEST_UID],
+            CipherSuite::Cv25519,
+            None,
+            None,
+            None,
+            SubkeyFlags::all(),
+            false, // can_primary_sign = false
+            true,
+        )
+        .unwrap();
+
+        let info = parse_cert_bytes(&key.secret_key, true).unwrap();
+        assert!(
+            !info.can_primary_sign,
+            "Original key should NOT have primary sign capability"
+        );
+
+        // Create a newer self-sig that ADDS the sign flag.
+        let updated = resign_uid_with_flags(&key.secret_key, TEST_PASSWORD, true, true);
+
+        let info2 = parse_cert_bytes(&updated, true).unwrap();
+        assert!(
+            info2.can_primary_sign,
+            "After adding newer self-sig with sign flag, can_primary_sign should be true"
+        );
+    }
+
+    #[test]
+    fn test_merge_preserves_latest_self_sig_flags() {
+        // Generate a key with sign capability.
+        let key = create_key(
+            TEST_PASSWORD,
+            &[TEST_UID],
+            CipherSuite::Cv25519,
+            None,
+            None,
+            None,
+            SubkeyFlags::all(),
+            true, // can_primary_sign = true
+            true,
+        )
+        .unwrap();
+
+        // Create an "updated" version that removes sign flag.
+        let updated = resign_uid_with_flags(&key.secret_key, TEST_PASSWORD, false, true);
+
+        // Extract public keys for merge.
+        let pub_orig = get_pub_key(&key.secret_key).unwrap();
+        let pub_updated = get_pub_key(&updated).unwrap();
+
+        // Merge: original + updated. The updated cert has a newer self-sig
+        // without the sign flag.
+        let merged = merge_keys(pub_orig.as_bytes(), pub_updated.as_bytes(), false).unwrap();
+
+        let info = parse_cert_bytes(&merged, false).unwrap();
+        assert!(
+            !info.can_primary_sign,
+            "After merging cert with newer self-sig removing sign flag, can_primary_sign should be false"
+        );
+    }
+
+    #[test]
+    fn test_merge_older_self_sig_does_not_override_newer() {
+        // Generate a key WITHOUT sign capability.
+        let key_no_sign = create_key(
+            TEST_PASSWORD,
+            &[TEST_UID],
+            CipherSuite::Cv25519,
+            None,
+            None,
+            None,
+            SubkeyFlags::all(),
+            false, // can_primary_sign = false
+            true,
+        )
+        .unwrap();
+
+        // Create a newer version that ADDS sign capability.
+        let key_with_sign =
+            resign_uid_with_flags(&key_no_sign.secret_key, TEST_PASSWORD, true, true);
+
+        let pub_with_sign = get_pub_key(&key_with_sign).unwrap();
+        let pub_no_sign = get_pub_key(&key_no_sign.secret_key).unwrap();
+
+        // Merge: start from cert WITH sign flag, merge in the OLDER cert without it.
+        // The older self-sig should NOT override the newer one.
+        let merged = merge_keys(pub_with_sign.as_bytes(), pub_no_sign.as_bytes(), false).unwrap();
+
+        let info = parse_cert_bytes(&merged, false).unwrap();
+        assert!(
+            info.can_primary_sign,
+            "Merging in older self-sig without sign flag should not override newer self-sig that has it"
+        );
+    }
+
+    #[test]
+    fn test_certify_only_key_remains_certify_only_after_accumulation() {
+        // Generate a certify-only key (no primary sign).
+        let key = create_key(
+            TEST_PASSWORD,
+            &[TEST_UID],
+            CipherSuite::Cv25519,
+            None,
+            None,
+            None,
+            SubkeyFlags::all(),
+            false, // certify only
+            true,
+        )
+        .unwrap();
+
+        let info = parse_cert_bytes(&key.secret_key, true).unwrap();
+        assert!(
+            !info.can_primary_sign,
+            "Certify-only key should not have sign capability"
+        );
+
+        // Update the expiry — this creates a new self-sig that copies flags
+        // from the existing sig (should preserve certify-only).
+        let exp = chrono::Utc::now() + chrono::Duration::days(365);
+        let updated =
+            wecanencrypt::update_primary_expiry(&key.secret_key, exp, TEST_PASSWORD).unwrap();
+
+        let info2 = parse_cert_bytes(&updated, true).unwrap();
+        assert!(
+            !info2.can_primary_sign,
+            "After expiry update, certify-only key should still not have sign capability"
+        );
     }
 }

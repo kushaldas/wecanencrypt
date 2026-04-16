@@ -1,6 +1,6 @@
 [package]
 name = "wecanencrypt"
-version = "0.8.1"
+version = "0.9.0"
 edition = "2021"
 license = "MIT"
 description = "Simple Rust OpenPGP library for encryption, signing, and key management."
@@ -84,3 +84,7 @@ p256 = { version = "0.13", features = ["ecdsa"] }
 [package.metadata.docs.rs]
 features = ["keystore", "network", "card", "dane"]
 rustdoc-args = ["--cfg", "docsrs"]
+
+[[example]]
+name = "upexp"
+required-features = ["card"]

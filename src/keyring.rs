@@ -7,7 +7,9 @@ use std::io::Cursor;
 use std::path::Path;
 
 use pgp::composed::{Deserializable, SignedPublicKey};
+use pgp::packet::Signature;
 use pgp::ser::Serialize;
+use pgp::types::KeyDetails;
 
 use crate::error::{Error, Result};
 use crate::internal::{fingerprint_to_hex, parse_cert, public_key_to_armored};
@@ -115,24 +117,29 @@ pub fn export_keyring_armored(certs: &[&[u8]]) -> Result<String> {
     Ok(all_armored)
 }
 
-/// Merge two certificates (e.g., adding new signatures).
+/// Merge two certificates with the same primary key fingerprint.
 ///
-/// Note: This is a simplified implementation. Full merging would
-/// require complex signature handling.
+/// Merges new information (signatures, user IDs, subkeys, user attributes)
+/// from `update_data` into `cert_data`. This follows the same approach as
+/// rsop/rpgpie: deduplication of components and signatures, with new
+/// components added and new signatures merged into existing components.
 ///
 /// # Arguments
-/// * `cert_data` - The original certificate
-/// * `new_cert_data` - The certificate with new data to merge
+/// * `cert_data` - The original certificate (armored or binary)
+/// * `update_data` - The certificate with new data to merge (armored or binary)
 /// * `force` - If true, merge even if the keys have different fingerprints
 ///
 /// # Returns
-/// The merged certificate.
-pub fn merge_keys(cert_data: &[u8], new_cert_data: &[u8], force: bool) -> Result<Vec<u8>> {
-    let (cert1, _) = parse_cert(cert_data)?;
-    let (cert2, _) = parse_cert(new_cert_data)?;
+/// The merged certificate as binary bytes.
+///
+/// # Errors
+/// * [`Error::InvalidInput`] if fingerprints don't match and `force` is false
+pub fn merge_keys(cert_data: &[u8], update_data: &[u8], force: bool) -> Result<Vec<u8>> {
+    let (mut orig, _) = parse_cert(cert_data)?;
+    let (update, _) = parse_cert(update_data)?;
 
-    let fp1 = fingerprint_to_hex(&cert1.primary_key);
-    let fp2 = fingerprint_to_hex(&cert2.primary_key);
+    let fp1 = fingerprint_to_hex(&orig.primary_key);
+    let fp2 = fingerprint_to_hex(&update.primary_key);
 
     if fp1 != fp2 && !force {
         return Err(Error::InvalidInput(format!(
@@ -141,17 +148,115 @@ pub fn merge_keys(cert_data: &[u8], new_cert_data: &[u8], force: bool) -> Result
         )));
     }
 
-    // For now, just check if they're the same and return an error
-    let bytes1 = cert1.to_bytes().map_err(|e| Error::Crypto(e.to_string()))?;
-    let bytes2 = cert2.to_bytes().map_err(|e| Error::Crypto(e.to_string()))?;
+    merge_cert(&mut orig, update);
 
-    if bytes1 == bytes2 {
-        return Err(Error::SameKeyError);
+    orig.to_bytes().map_err(|e| Error::Crypto(e.to_string()))
+}
+
+/// Merge the contents of `update` into `orig` in place.
+///
+/// Merges:
+/// - Direct key signatures
+/// - Revocation signatures
+/// - Subkeys (and their binding/revocation signatures)
+/// - User IDs (and their certification/revocation signatures)
+/// - User attributes (and their signatures)
+fn merge_cert(orig: &mut SignedPublicKey, update: SignedPublicKey) {
+    // Direct key signatures
+    merge_signatures(&mut orig.details.direct_signatures, update.details.direct_signatures);
+
+    // Revocation signatures
+    merge_signatures(
+        &mut orig.details.revocation_signatures,
+        update.details.revocation_signatures,
+    );
+
+    // Subkeys: match by fingerprint, merge sigs for existing, add new ones
+    for sk_update in update.public_subkeys {
+        if let Some(existing) = orig
+            .public_subkeys
+            .iter_mut()
+            .find(|sk| sk.fingerprint() == sk_update.fingerprint())
+        {
+            merge_signatures(&mut existing.signatures, sk_update.signatures);
+        } else {
+            orig.public_subkeys.push(sk_update);
+        }
     }
 
-    // TODO: Implement proper merging. For now, return the newer certificate
-    // A proper implementation would merge signatures, UIDs, etc.
-    Ok(bytes2)
+    // User IDs: match by raw ID bytes, merge sigs for existing, add new ones
+    for uid_update in update.details.users {
+        if let Some(existing) = orig
+            .details
+            .users
+            .iter_mut()
+            .find(|u| u.id.id() == uid_update.id.id())
+        {
+            merge_signatures(&mut existing.signatures, uid_update.signatures);
+        } else {
+            orig.details.users.push(uid_update);
+        }
+    }
+
+    // User attributes: match by attribute content, merge sigs for existing, add new ones
+    for attr_update in update.details.user_attributes {
+        if let Some(existing) = orig
+            .details
+            .user_attributes
+            .iter_mut()
+            .find(|a| a.attr == attr_update.attr)
+        {
+            merge_signatures(&mut existing.signatures, attr_update.signatures);
+        } else {
+            orig.details.user_attributes.push(attr_update);
+        }
+    }
+}
+
+/// Checks if two signatures contain the same cryptographic signature bytes.
+///
+/// Two signature packets are considered equal if they produce the same
+/// signature bytes, even if they differ in packet framing or unhashed
+/// subpackets.
+fn signature_bytes_eq(a: &Signature, b: &Signature) -> bool {
+    if let (Some(sb1), Some(sb2)) = (a.signature(), b.signature()) {
+        sb1 == sb2
+    } else {
+        a == b
+    }
+}
+
+/// Merge signatures from `updates` into `target`, deduplicating by signature bytes.
+///
+/// For signatures already present in `target` (matched by cryptographic signature
+/// bytes), any additional unhashed subpackets from the update are merged in.
+/// Entirely new signatures are appended.
+fn merge_signatures(target: &mut Vec<Signature>, updates: Vec<Signature>) {
+    for upd in updates {
+        if let Some(existing) = target.iter_mut().find(|s| signature_bytes_eq(s, &upd)) {
+            // Signature already present - merge any new unhashed subpackets
+            merge_unhashed(existing, &upd);
+        } else {
+            target.push(upd);
+        }
+    }
+}
+
+/// Merge additional unhashed subpackets from `source` into `target`.
+fn merge_unhashed(target: &mut Signature, source: &Signature) {
+    let mut inserts = Vec::new();
+
+    if let (Some(c1), Some(c2)) = (target.config(), source.config()) {
+        for (pos, sub) in c2.unhashed_subpackets.iter().enumerate() {
+            if !c1.unhashed_subpackets.contains(sub) {
+                inserts.push((pos, sub.clone()));
+            }
+        }
+    }
+
+    for (pos, sp) in inserts {
+        let _ = target.unhashed_subpacket_insert(pos, sp);
+    }
 }
 
 #[cfg(test)]
