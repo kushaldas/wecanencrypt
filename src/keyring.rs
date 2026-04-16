@@ -6,13 +6,18 @@
 use std::io::Cursor;
 use std::path::Path;
 
-use pgp::composed::{Deserializable, SignedPublicKey};
+use pgp::composed::{
+    Deserializable, SignedKeyDetails, SignedPublicKey, SignedPublicSubKey, SignedSecretKey,
+};
 use pgp::packet::Signature;
 use pgp::ser::Serialize;
 use pgp::types::KeyDetails;
+use zeroize::Zeroizing;
 
 use crate::error::{Error, Result};
-use crate::internal::{fingerprint_to_hex, parse_cert, public_key_to_armored};
+use crate::internal::{
+    fingerprint_to_hex, parse_cert, parse_secret_key, public_key_to_armored, secret_key_to_bytes,
+};
 use crate::parse::parse_cert_bytes;
 use crate::types::CertificateInfo;
 
@@ -117,98 +122,205 @@ pub fn export_keyring_armored(certs: &[&[u8]]) -> Result<String> {
     Ok(all_armored)
 }
 
-/// Merge two certificates with the same primary key fingerprint.
+/// Merge two certificates with the same primary key fingerprint,
+/// preserving secret key material from either side.
 ///
 /// Merges new information (signatures, user IDs, subkeys, user attributes)
-/// from `update_data` into `cert_data`. This follows the same approach as
-/// rsop/rpgpie: deduplication of components and signatures, with new
-/// components added and new signatures merged into existing components.
+/// from `update_data` into `cert_data`. Follows the same overall approach
+/// as Sequoia's `Cert::merge_public_and_secret` and rpgpie's `Tsk::merge`:
+/// deduplication of components and signatures, new components added, new
+/// signatures merged into existing components. Any variant carrying
+/// secret material is preferred so that re-importing a public update on
+/// top of a stored secret key does not drop the secret packets.
 ///
 /// # Arguments
 /// * `cert_data` - The original certificate (armored or binary)
 /// * `update_data` - The certificate with new data to merge (armored or binary)
-/// * `force` - If true, merge even if the keys have different fingerprints
 ///
 /// # Returns
-/// The merged certificate as binary bytes.
+/// Merged certificate bytes wrapped in `Zeroizing` so any secret
+/// material is scrubbed on drop. When both inputs are public only, the
+/// result is still wrapped in `Zeroizing` but contains public-only bytes.
 ///
 /// # Errors
-/// * [`Error::InvalidInput`] if fingerprints don't match and `force` is false
-pub fn merge_keys(cert_data: &[u8], update_data: &[u8], force: bool) -> Result<Vec<u8>> {
-    let (mut orig, _) = parse_cert(cert_data)?;
-    let (update, _) = parse_cert(update_data)?;
+/// * [`Error::InvalidInput`] if the two certificates have different
+///   primary fingerprints.
+pub fn merge_keys(cert_data: &[u8], update_data: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
+    let (orig_pub, orig_is_secret) = parse_cert(cert_data)?;
+    let (update_pub, update_is_secret) = parse_cert(update_data)?;
 
-    let fp1 = fingerprint_to_hex(&orig.primary_key);
-    let fp2 = fingerprint_to_hex(&update.primary_key);
-
-    if fp1 != fp2 && !force {
+    let fp1 = fingerprint_to_hex(&orig_pub.primary_key);
+    let fp2 = fingerprint_to_hex(&update_pub.primary_key);
+    if fp1 != fp2 {
         return Err(Error::InvalidInput(format!(
             "Certificate fingerprints do not match: {} vs {}",
             fp1, fp2
         )));
     }
 
-    merge_cert(&mut orig, update);
-
-    orig.to_bytes().map_err(|e| Error::Crypto(e.to_string()))
+    match (orig_is_secret, update_is_secret) {
+        (false, false) => {
+            let mut orig = orig_pub;
+            merge_cert(&mut orig, update_pub);
+            orig.to_bytes()
+                .map(Zeroizing::new)
+                .map_err(|e| Error::Crypto(e.to_string()))
+        }
+        (true, false) => {
+            let mut orig = parse_secret_key(cert_data)?;
+            merge_secret_cert(&mut orig, SecretMergeSource::Public(Box::new(update_pub)));
+            secret_key_to_bytes(&orig)
+        }
+        (false, true) => {
+            // Upgrade: start from the incoming secret key as the base,
+            // then merge the existing public cert's signatures/UIDs in.
+            let mut merged = parse_secret_key(update_data)?;
+            merge_secret_cert(&mut merged, SecretMergeSource::Public(Box::new(orig_pub)));
+            secret_key_to_bytes(&merged)
+        }
+        (true, true) => {
+            let mut orig = parse_secret_key(cert_data)?;
+            let update = parse_secret_key(update_data)?;
+            merge_secret_cert(&mut orig, SecretMergeSource::Secret(Box::new(update)));
+            secret_key_to_bytes(&orig)
+        }
+    }
 }
 
-/// Merge the contents of `update` into `orig` in place.
-///
-/// Merges:
-/// - Direct key signatures
-/// - Revocation signatures
-/// - Subkeys (and their binding/revocation signatures)
-/// - User IDs (and their certification/revocation signatures)
-/// - User attributes (and their signatures)
+/// Source of a merge into a `SignedSecretKey`. Either another secret
+/// cert (we can take its `secret_subkeys` too) or a public cert (we
+/// merge signatures/components but our own secret material is untouched).
+enum SecretMergeSource {
+    Secret(Box<SignedSecretKey>),
+    Public(Box<SignedPublicKey>),
+}
+
+/// Merge a public update into an existing public cert, in place.
 fn merge_cert(orig: &mut SignedPublicKey, update: SignedPublicKey) {
-    // Direct key signatures
-    merge_signatures(&mut orig.details.direct_signatures, update.details.direct_signatures);
+    merge_details(&mut orig.details, update.details);
+    merge_public_subkeys(&mut orig.public_subkeys, update.public_subkeys);
+}
 
-    // Revocation signatures
-    merge_signatures(
-        &mut orig.details.revocation_signatures,
-        update.details.revocation_signatures,
-    );
+/// Merge an update into an existing secret cert, in place, preserving
+/// the destination's secret key material.
+fn merge_secret_cert(orig: &mut SignedSecretKey, source: SecretMergeSource) {
+    let (src_details, src_pub_subkeys, src_sec_subkeys) = match source {
+        SecretMergeSource::Secret(sec) => {
+            let sec = *sec;
+            (sec.details, sec.public_subkeys, Some(sec.secret_subkeys))
+        }
+        SecretMergeSource::Public(pubk) => {
+            let pubk = *pubk;
+            (pubk.details, pubk.public_subkeys, None)
+        }
+    };
 
-    // Subkeys: match by fingerprint, merge sigs for existing, add new ones
-    for sk_update in update.public_subkeys {
-        if let Some(existing) = orig
+    merge_details(&mut orig.details, src_details);
+
+    // Signatures from src's public subkey view may describe a subkey for
+    // which we already hold the secret packet in `secret_subkeys`. Route
+    // those signatures into our secret subkey; otherwise route into
+    // `public_subkeys` (merge if present, append if new).
+    for sk_update in src_pub_subkeys {
+        let upd_fp = sk_update.fingerprint();
+        if let Some(existing_sec) = orig
+            .secret_subkeys
+            .iter_mut()
+            .find(|sk| sk.key.fingerprint() == upd_fp)
+        {
+            merge_signatures(&mut existing_sec.signatures, sk_update.signatures);
+        } else if let Some(existing_pub) = orig
             .public_subkeys
             .iter_mut()
-            .find(|sk| sk.fingerprint() == sk_update.fingerprint())
+            .find(|sk| sk.fingerprint() == upd_fp)
         {
-            merge_signatures(&mut existing.signatures, sk_update.signatures);
+            merge_signatures(&mut existing_pub.signatures, sk_update.signatures);
         } else {
             orig.public_subkeys.push(sk_update);
         }
     }
 
-    // User IDs: match by raw ID bytes, merge sigs for existing, add new ones
-    for uid_update in update.details.users {
-        if let Some(existing) = orig
-            .details
+    // If the source also carried secret subkey material, match by
+    // fingerprint: merge signatures on known subkeys, append new secret
+    // subkeys. We keep the existing secret packet on match (any variant
+    // with secret material is kept; we don't swap it out).
+    if let Some(src_sec) = src_sec_subkeys {
+        let primary_pub = orig.primary_key.public_key().clone();
+        for sk_update in src_sec {
+            let upd_fp = sk_update.key.fingerprint();
+            if let Some(existing) = orig
+                .secret_subkeys
+                .iter_mut()
+                .find(|sk| sk.key.fingerprint() == upd_fp)
+            {
+                merge_signatures(&mut existing.signatures, sk_update.signatures);
+            } else {
+                // A new secret subkey we didn't have. Verify the
+                // binding signature against our primary before
+                // accepting it — otherwise a crafted update could
+                // inject a subkey whose "binding" was never actually
+                // signed by the primary. On verification failure the
+                // subkey is dropped; the rest of the merge proceeds.
+                if let Err(e) = sk_update.verify_bindings(&primary_pub) {
+                    eprintln!(
+                        "Warning: dropping secret subkey {} with invalid binding: {}",
+                        hex::encode_upper(upd_fp.as_bytes()),
+                        e
+                    );
+                    continue;
+                }
+                // If the public_subkeys list has the matching public
+                // form, remove it — we're promoting to the secret side.
+                orig.public_subkeys
+                    .retain(|sk| sk.fingerprint() != upd_fp);
+                orig.secret_subkeys.push(sk_update);
+            }
+        }
+    }
+}
+
+/// Merge the signature-bearing fields of `src` into `dst`:
+/// direct-key sigs, revocation sigs, UID + sigs, user-attr + sigs.
+fn merge_details(dst: &mut SignedKeyDetails, src: SignedKeyDetails) {
+    merge_signatures(&mut dst.direct_signatures, src.direct_signatures);
+    merge_signatures(&mut dst.revocation_signatures, src.revocation_signatures);
+
+    for uid_update in src.users {
+        if let Some(existing) = dst
             .users
             .iter_mut()
             .find(|u| u.id.id() == uid_update.id.id())
         {
             merge_signatures(&mut existing.signatures, uid_update.signatures);
         } else {
-            orig.details.users.push(uid_update);
+            dst.users.push(uid_update);
         }
     }
 
-    // User attributes: match by attribute content, merge sigs for existing, add new ones
-    for attr_update in update.details.user_attributes {
-        if let Some(existing) = orig
-            .details
+    for attr_update in src.user_attributes {
+        if let Some(existing) = dst
             .user_attributes
             .iter_mut()
             .find(|a| a.attr == attr_update.attr)
         {
             merge_signatures(&mut existing.signatures, attr_update.signatures);
         } else {
-            orig.details.user_attributes.push(attr_update);
+            dst.user_attributes.push(attr_update);
+        }
+    }
+}
+
+/// Merge `src` public subkeys into `dst`: match by fingerprint, merge
+/// signatures on matches, append new subkeys.
+fn merge_public_subkeys(dst: &mut Vec<SignedPublicSubKey>, src: Vec<SignedPublicSubKey>) {
+    for sk_update in src {
+        if let Some(existing) = dst
+            .iter_mut()
+            .find(|sk| sk.fingerprint() == sk_update.fingerprint())
+        {
+            merge_signatures(&mut existing.signatures, sk_update.signatures);
+        } else {
+            dst.push(sk_update);
         }
     }
 }
