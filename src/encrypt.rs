@@ -8,6 +8,7 @@ use std::path::Path;
 
 use pgp::armor::Dearmor;
 use pgp::composed::{MessageBuilder, SignedPublicKey};
+use pgp::crypto::aead::{AeadAlgorithm, ChunkSize};
 use pgp::crypto::sym::SymmetricKeyAlgorithm;
 use pgp::packet::{Packet, PacketParser, PublicKeyEncryptedSessionKey};
 use pgp::types::KeyDetails;
@@ -17,6 +18,9 @@ use crate::error::{Error, Result};
 use crate::internal::{is_subkey_valid, parse_public_key};
 
 /// Encrypt bytes to a single recipient.
+///
+/// Uses SEIPD v1 (RFC 4880, integrity-protected with MDC). For AEAD encryption
+/// with V6 keys, use [`encrypt_bytes_v2`].
 ///
 /// Encrypts the plaintext to the recipient's public key. The message can only
 /// be decrypted by someone with the corresponding secret key.
@@ -49,7 +53,23 @@ pub fn encrypt_bytes(recipient_cert: &[u8], plaintext: &[u8], armor: bool) -> Re
     encrypt_bytes_to_multiple(&[recipient_cert], plaintext, armor)
 }
 
+/// Encrypt bytes to a single recipient using SEIPD v2 (RFC 9580, AEAD).
+///
+/// Like [`encrypt_bytes`], but uses SEIPD v2 (AES-256-OCB) for AEAD-based
+/// authenticated encryption. Requires recipients with V6 key support.
+///
+/// # Arguments
+/// * `recipient_cert` - The recipient's public key (armored or binary)
+/// * `plaintext` - The data to encrypt
+/// * `armor` - If true, output ASCII-armored; otherwise binary
+pub fn encrypt_bytes_v2(recipient_cert: &[u8], plaintext: &[u8], armor: bool) -> Result<Vec<u8>> {
+    encrypt_bytes_to_multiple_v2(&[recipient_cert], plaintext, armor)
+}
+
 /// Encrypt bytes to multiple recipients.
+///
+/// Uses SEIPD v1 (RFC 4880, integrity-protected with MDC). For AEAD encryption
+/// with V6 keys, use [`encrypt_bytes_to_multiple_v2`].
 ///
 /// Encrypts the plaintext so that any of the recipients can decrypt it.
 /// Each recipient only needs their own secret key to decrypt.
@@ -99,8 +119,34 @@ pub fn encrypt_bytes_to_multiple(
     )
 }
 
+/// Encrypt bytes to multiple recipients using SEIPD v2 (RFC 9580, AEAD).
+///
+/// Like [`encrypt_bytes_to_multiple`], but uses SEIPD v2 (AES-256-OCB) for
+/// AEAD-based authenticated encryption. Requires recipients with V6 key support.
+///
+/// # Arguments
+/// * `recipient_certs` - Slice of recipient public keys (armored or binary)
+/// * `plaintext` - The data to encrypt
+/// * `armor` - If true, output ASCII-armored; otherwise binary
+///
+/// # Returns
+/// The encrypted message using SEIPD v2 format.
+pub fn encrypt_bytes_to_multiple_v2(
+    recipient_certs: &[&[u8]],
+    plaintext: &[u8],
+    armor: bool,
+) -> Result<Vec<u8>> {
+    encrypt_bytes_to_multiple_seipd_v2(
+        recipient_certs,
+        plaintext,
+        armor,
+        SymmetricKeyAlgorithm::AES256,
+    )
+}
+
 /// Encrypt bytes to multiple recipients with a specific symmetric algorithm.
 ///
+/// Uses SEIPD v1 (RFC 4880, integrity-protected with MDC).
 /// Like [`encrypt_bytes_to_multiple`], but allows choosing the symmetric cipher.
 /// RFC 9580 requires implementations to support both AES-128 and AES-256.
 ///
@@ -118,22 +164,7 @@ pub fn encrypt_bytes_to_multiple_with_algo(
     armor: bool,
     sym_algo: SymmetricKeyAlgorithm,
 ) -> Result<Vec<u8>> {
-    // Reject deprecated/insecure algorithms per RFC 9580 §9.3
-    match sym_algo {
-        SymmetricKeyAlgorithm::AES128
-        | SymmetricKeyAlgorithm::AES192
-        | SymmetricKeyAlgorithm::AES256
-        | SymmetricKeyAlgorithm::Twofish
-        | SymmetricKeyAlgorithm::Camellia128
-        | SymmetricKeyAlgorithm::Camellia192
-        | SymmetricKeyAlgorithm::Camellia256 => {}
-        _ => {
-            return Err(Error::InvalidInput(format!(
-                "Symmetric algorithm {:?} is not allowed for encryption per RFC 9580",
-                sym_algo
-            )));
-        }
-    }
+    validate_sym_algo(sym_algo)?;
 
     if recipient_certs.is_empty() {
         return Err(Error::InvalidInput("No recipients specified".to_string()));
@@ -141,19 +172,9 @@ pub fn encrypt_bytes_to_multiple_with_algo(
 
     let mut rng = thread_rng();
 
-    // Parse all recipient certificates and find encryption keys
-    let mut encryption_keys = Vec::new();
-    for cert_data in recipient_certs {
-        let public_key = parse_public_key(cert_data)?;
-        let subkeys = find_valid_encryption_subkeys(&public_key)?;
-        encryption_keys.extend(subkeys);
-    }
+    let encryption_keys = collect_encryption_keys(recipient_certs)?;
 
-    if encryption_keys.is_empty() {
-        return Err(Error::NoEncryptionSubkey);
-    }
-
-    // Build the encrypted message
+    // Build the encrypted message using SEIPD v1 (MDC)
     let mut builder =
         MessageBuilder::from_bytes("", plaintext.to_vec()).seipd_v1(&mut rng, sym_algo);
 
@@ -175,6 +196,99 @@ pub fn encrypt_bytes_to_multiple_with_algo(
             .to_vec(&mut rng)
             .map_err(|e| Error::Crypto(e.to_string()))
     }
+}
+
+/// Encrypt bytes to multiple recipients using SEIPD v2 (RFC 9580, AEAD) with a
+/// specific symmetric algorithm.
+///
+/// Uses AEAD with OCB mode for authenticated encryption. Requires recipients
+/// with V6 key support.
+///
+/// # Arguments
+/// * `recipient_certs` - Slice of recipient public keys (armored or binary)
+/// * `plaintext` - The data to encrypt
+/// * `armor` - If true, output ASCII-armored; otherwise binary
+/// * `sym_algo` - The symmetric algorithm to use (e.g., AES128, AES256)
+///
+/// # Returns
+/// The encrypted message using SEIPD v2 format.
+pub fn encrypt_bytes_to_multiple_seipd_v2(
+    recipient_certs: &[&[u8]],
+    plaintext: &[u8],
+    armor: bool,
+    sym_algo: SymmetricKeyAlgorithm,
+) -> Result<Vec<u8>> {
+    validate_sym_algo(sym_algo)?;
+
+    if recipient_certs.is_empty() {
+        return Err(Error::InvalidInput("No recipients specified".to_string()));
+    }
+
+    let mut rng = thread_rng();
+
+    let encryption_keys = collect_encryption_keys(recipient_certs)?;
+
+    // Build the encrypted message using SEIPD v2 (AEAD with OCB)
+    let mut builder = MessageBuilder::from_bytes("", plaintext.to_vec()).seipd_v2(
+        &mut rng,
+        sym_algo,
+        AeadAlgorithm::Ocb,
+        ChunkSize::default(),
+    );
+
+    // Add all encryption keys as recipients
+    for key in &encryption_keys {
+        builder
+            .encrypt_to_key(&mut rng, key)
+            .map_err(|e| Error::Crypto(e.to_string()))?;
+    }
+
+    // Produce the output
+    if armor {
+        let armored = builder
+            .to_armored_string(&mut rng, None.into())
+            .map_err(|e| Error::Crypto(e.to_string()))?;
+        Ok(armored.into_bytes())
+    } else {
+        builder
+            .to_vec(&mut rng)
+            .map_err(|e| Error::Crypto(e.to_string()))
+    }
+}
+
+/// Reject deprecated/insecure symmetric algorithms per RFC 9580 §9.3.
+fn validate_sym_algo(sym_algo: SymmetricKeyAlgorithm) -> Result<()> {
+    match sym_algo {
+        SymmetricKeyAlgorithm::AES128
+        | SymmetricKeyAlgorithm::AES192
+        | SymmetricKeyAlgorithm::AES256
+        | SymmetricKeyAlgorithm::Twofish
+        | SymmetricKeyAlgorithm::Camellia128
+        | SymmetricKeyAlgorithm::Camellia192
+        | SymmetricKeyAlgorithm::Camellia256 => Ok(()),
+        _ => Err(Error::InvalidInput(format!(
+            "Symmetric algorithm {:?} is not allowed for encryption per RFC 9580",
+            sym_algo
+        ))),
+    }
+}
+
+/// Parse recipient certs and collect valid encryption subkeys.
+fn collect_encryption_keys(
+    recipient_certs: &[&[u8]],
+) -> Result<Vec<pgp::composed::SignedPublicSubKey>> {
+    let mut encryption_keys = Vec::new();
+    for cert_data in recipient_certs {
+        let public_key = parse_public_key(cert_data)?;
+        let subkeys = find_valid_encryption_subkeys(&public_key)?;
+        encryption_keys.extend(subkeys);
+    }
+
+    if encryption_keys.is_empty() {
+        return Err(Error::NoEncryptionSubkey);
+    }
+
+    Ok(encryption_keys)
 }
 
 /// Encrypt a file to a single recipient.

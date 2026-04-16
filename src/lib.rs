@@ -124,8 +124,9 @@ pub use parse::{
 // Re-export encryption functions
 pub use encrypt::{
     bytes_encrypted_for, encrypt_bytes, encrypt_bytes_to_multiple,
-    encrypt_bytes_to_multiple_with_algo, encrypt_file, encrypt_file_to_multiple,
-    encrypt_reader_to_file, file_encrypted_for,
+    encrypt_bytes_to_multiple_seipd_v2, encrypt_bytes_to_multiple_v2,
+    encrypt_bytes_to_multiple_with_algo, encrypt_bytes_v2, encrypt_file,
+    encrypt_file_to_multiple, encrypt_reader_to_file, file_encrypted_for,
 };
 
 // Re-export symmetric algorithm type for use with encrypt_bytes_to_multiple_with_algo
