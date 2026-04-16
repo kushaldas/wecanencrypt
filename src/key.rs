@@ -376,7 +376,7 @@ pub fn get_pub_key(cert_data: &[u8]) -> Result<String> {
 ///
 /// * `cert_data` - The certificate data (with secret key, armored or binary)
 /// * `fingerprints` - Fingerprints of subkeys to update (hex strings)
-/// * `expiry_time` - New expiration time as DateTime<Utc>
+/// * `expiry_time` - New expiration time as `DateTime<Utc>`
 /// * `password` - Password to unlock the secret key
 ///
 /// # Returns
@@ -630,7 +630,7 @@ pub fn update_subkeys_expiry(
 /// # Arguments
 ///
 /// * `cert_data` - The certificate data (with secret key, armored or binary)
-/// * `expiry_time` - New expiration time as DateTime<Utc>
+/// * `expiry_time` - New expiration time as `DateTime<Utc>`
 /// * `password` - Password to unlock the secret key
 ///
 /// # Returns

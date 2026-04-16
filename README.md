@@ -1,20 +1,35 @@
 # wecanencrypt
 
 Simple Rust OpenPGP library for encryption, signing, and key management, built
-on top of [rpgp](https://github.com/rpgp/rpgp).
+on top of [rpgp](https://github.com/rpgp/rpgp) (pgp v0.19).
 
 ## Features
 
-- **Key Generation**: Create OpenPGP keys with various cipher suites (Cv25519, RSA2k, RSA4k, NIST P-256/P-384/P-521)
-- **Encryption/Decryption**: Encrypt and decrypt files and byte streams
-- **Signing/Verification**: Sign messages (inline, cleartext, detached) and verify signatures
-- **Key Parsing**: Parse certificates from files or bytes, extract key information
-- **Keyring Support**: Parse and export GPG keyrings
-- **SSH Key Export**: Convert OpenPGP authentication keys to SSH public key format
-- **Network Operations**: Fetch keys via WKD (Web Key Directory) and HKP keyservers
+- **Key Generation**: Create OpenPGP keys with multiple cipher suites (Cv25519, Cv25519Modern, Cv448Modern, NIST P-256/P-384/P-521, RSA-2048/4096)
+- **Encryption/Decryption**: Encrypt to one or multiple recipients (SEIPD v1 default, SEIPD v2 AEAD available), reject legacy SED by default
+- **Signing/Verification**: Inline, cleartext, and detached signatures with subkey preference; verification filters to signing-capable subkeys only
+- **Certificate Merging**: Proper packet-level merge with signature deduplication, following the rpgpie/rsop algorithm
+- **Key Management**: Update expiration (primary and per-subkey), add/revoke UIDs, revoke keys, change passwords, third-party certification (4 levels)
+- **Key Parsing**: Parse certificates, extract subkey info, query available subkeys by capability
+- **Keyring Support**: Parse and export GPG keyrings with multiple certificates
+- **SSH Key Export**: Convert OpenPGP authentication keys to SSH public key format (Ed25519, RSA, ECDSA)
+- **Network Operations**: Fetch keys via WKD (Web Key Directory) and VKS keyservers
 - **DNS DANE**: Fetch keys via OPENPGPKEY DNS records (RFC 7929)
 - **KeyStore**: SQLite-backed key storage with search, card-key associations, and management capabilities
 - **Smart Card Support**: Upload keys to YubiKey/OpenPGP cards, sign and decrypt on-card, discover which cards hold keys for a certificate, configure touch policies
+
+## Cipher Suites
+
+| Suite | Primary Key | Encryption Subkey | Speed |
+|-------|-------------|-------------------|-------|
+| `Cv25519` (default) | EdDSA Legacy | ECDH Curve25519 | Fast |
+| `Cv25519Modern` | Ed25519 (RFC 9580) | X25519 | Fast |
+| `Cv448Modern` | Ed448 (RFC 9580) | X448 | Fast |
+| `NistP256` | ECDSA P-256 | ECDH P-256 | Fast |
+| `NistP384` | ECDSA P-384 | ECDH P-384 | Fast |
+| `NistP521` | ECDSA P-521 | ECDH P-521 | Fast |
+| `Rsa2k` | RSA 2048-bit | RSA 2048-bit | Slow |
+| `Rsa4k` | RSA 4096-bit | RSA 4096-bit | Very Slow |
 
 ## Usage
 
@@ -33,6 +48,33 @@ let encrypted = encrypt_bytes(public_key.as_bytes(), plaintext, true)?;
 let decrypted = decrypt_bytes(&key.secret_key, &encrypted, "passphrase")?;
 assert_eq!(decrypted, plaintext);
 ```
+
+## SEIPD v2 (AEAD) Encryption
+
+The default `encrypt_bytes` uses SEIPD v1 (RFC 4880, integrity-protected with
+MDC). For AEAD-based encryption with V6 key support, use the v2 variants:
+
+```rust
+use wecanencrypt::encrypt_bytes_v2;
+
+let encrypted = encrypt_bytes_v2(public_key.as_bytes(), plaintext, true)?;
+```
+
+## Certificate Merging
+
+Merge updated certificates (e.g., after fetching from a keyserver) with proper
+signature deduplication:
+
+```rust
+use wecanencrypt::merge_keys;
+
+let merged = merge_keys(&original_cert, &updated_cert, false)?;
+```
+
+The merge handles direct key signatures, revocation signatures, subkeys,
+user IDs, user attributes, and their associated signatures. Deduplication
+is based on cryptographic signature bytes, with unhashed subpacket merging
+for signatures that differ only in advisory data.
 
 ## Smart Card Usage
 
@@ -80,6 +122,21 @@ let cert = fetch_key_by_email_from_dane("user@example.com", None)?;
 let cert = fetch_key_by_email_from_dane("user@example.com", Some("8.8.8.8:53"))?;
 ```
 
+## Security Policy
+
+The library enforces RFC 4880 section 5.2.3.3: when multiple self-signatures
+exist on a component (User ID or subkey), only the most recent one (by creation
+timestamp) is authoritative for key flags, expiration, and preferences. This
+matters after certificate merges where old and new self-signatures coexist.
+
+See [docs/adr/0001-rfc4880-latest-self-signature-wins.md](docs/adr/0001-rfc4880-latest-self-signature-wins.md) for details.
+
+Other policy decisions:
+- Symmetric algorithm allowlist per RFC 9580 section 9.3 (AES, Twofish, Camellia only)
+- Legacy SED packets (no integrity protection) rejected by default; opt-in via `decrypt_bytes_legacy`
+- Revoked keys rejected for signing and verification; expired keys can still verify old signatures
+- Secret key material wrapped in `Zeroizing<Vec<u8>>` for secure memory erasure
+
 ## Running Tests
 
 ### Run all tests in the tests/ directory
@@ -116,10 +173,10 @@ Note: Card tests automatically reset the card to factory defaults before each te
 ## Optional Features
 
 - `keystore` (default): SQLite-backed key storage with card-key associations
-- `network` (default): WKD and HKP key fetching
+- `network` (default): WKD and VKS key fetching
 - `card`: Smart card support (requires `libpcsclite-dev` on Linux)
 - `dane`: DNS DANE OPENPGPKEY key discovery (RFC 7929)
-- `draft-pqc`: Post-quantum cryptography support
+- `draft-pqc`: Post-quantum cryptography support (experimental)
 
 ## Release
 
@@ -139,7 +196,7 @@ Then:
 
 1. Update `version` in `Cargo.toml`.
 2. Push the version commit.
-3. Create and push a tag (e.g. `v0.7.0`).
+3. Create and push a tag (e.g. `v0.9.0`).
 
 The publish workflow verifies that the tag matches the crate version, runs `cargo publish --dry-run`, and then publishes via crates.io trusted publishing.
 The repository must be configured as a trusted publisher in crates.io before the first tagged release, with the GitHub Actions environment set to `release` to match `.github/workflows/publish.yml`.
