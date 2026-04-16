@@ -11,7 +11,9 @@ use pgp::composed::{
 };
 
 use crate::error::{Error, Result};
-use crate::internal::{is_primary_key_valid_for_verification, is_subkey_revoked, parse_public_key};
+use crate::internal::{
+    can_subkey_sign, is_primary_key_valid_for_verification, is_subkey_revoked, parse_public_key,
+};
 
 /// Verify a signed message (inline or cleartext signature).
 ///
@@ -104,7 +106,10 @@ pub fn verify_bytes_detached(signer_cert: &[u8], data: &[u8], signature: &[u8]) 
 
     // Try verifying against non-revoked subkeys only
     for subkey in &public_key.public_subkeys {
-        if !is_subkey_revoked(subkey) && sig.verify(&subkey.key, data).is_ok() {
+        if can_subkey_sign(subkey)
+            && !is_subkey_revoked(subkey)
+            && sig.verify(&subkey.key, data).is_ok()
+        {
             return Ok(true);
         }
     }
@@ -176,7 +181,8 @@ fn verify_cleartext(public_key: &SignedPublicKey, signed_message: &[u8]) -> Resu
 
     // Try verifying against non-revoked subkeys only
     for subkey in &public_key.public_subkeys {
-        if !is_subkey_revoked(subkey) && msg.verify(&subkey.key).is_ok() {
+        if can_subkey_sign(subkey) && !is_subkey_revoked(subkey) && msg.verify(&subkey.key).is_ok()
+        {
             return Ok(true);
         }
     }
@@ -210,7 +216,8 @@ fn extract_cleartext(
 
     // Try verifying against non-revoked subkeys only
     for subkey in &public_key.public_subkeys {
-        if !is_subkey_revoked(subkey) && msg.verify(&subkey.key).is_ok() {
+        if can_subkey_sign(subkey) && !is_subkey_revoked(subkey) && msg.verify(&subkey.key).is_ok()
+        {
             let content = normalize_line_endings(&msg.signed_text());
             return Ok(Some(content));
         }
@@ -253,7 +260,10 @@ fn verify_inline_signed(public_key: &SignedPublicKey, signed_message: &[u8]) -> 
 
     // Try verifying against non-revoked subkeys only
     for subkey in &public_key.public_subkeys {
-        if !is_subkey_revoked(subkey) && message.verify(&subkey.key).is_ok() {
+        if can_subkey_sign(subkey)
+            && !is_subkey_revoked(subkey)
+            && message.verify(&subkey.key).is_ok()
+        {
             return Ok(true);
         }
     }
@@ -290,7 +300,10 @@ fn extract_inline_signed(public_key: &SignedPublicKey, signed_message: &[u8]) ->
 
     // Try verifying against non-revoked subkeys only
     for subkey in &public_key.public_subkeys {
-        if !is_subkey_revoked(subkey) && message.verify(&subkey.key).is_ok() {
+        if can_subkey_sign(subkey)
+            && !is_subkey_revoked(subkey)
+            && message.verify(&subkey.key).is_ok()
+        {
             return Ok(content);
         }
     }

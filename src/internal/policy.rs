@@ -44,6 +44,14 @@ pub(crate) fn is_subkey_revoked(subkey: &SignedPublicSubKey) -> bool {
         .any(|sig| sig.typ() == Some(SignatureType::SubkeyRevocation))
 }
 
+/// Check if a subkey has the signing capability flag in its binding signature.
+pub(crate) fn can_subkey_sign(subkey: &SignedPublicSubKey) -> bool {
+    subkey
+        .signatures
+        .iter()
+        .any(|sig| sig.key_flags().sign())
+}
+
 /// Check if a key is valid for use (not expired, not revoked).
 pub(crate) fn is_subkey_valid(subkey: &SignedPublicSubKey, allow_expired: bool) -> bool {
     // Check revocation
