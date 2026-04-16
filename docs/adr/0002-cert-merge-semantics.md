@@ -101,13 +101,32 @@ whether that signature verifies. We cannot relax this: once a bogus
 secret subkey is in `secret_subkeys`, signing/encryption operations
 that pick it (e.g. via `find_signing_subkey`) will use it.
 
-### 4. Examples
+### 4. Signature preservation during subkey promotion
+
+"Promotion" is the act of moving a subkey from `orig.public_subkeys`
+(we hold only the public half) to `orig.secret_subkeys` (we now hold
+the secret half too). It happens when a `(secret, secret)` merge
+encounters a secret subkey in the update whose public form was already
+in `orig.public_subkeys`.
+
+The public-form entry typically carries accumulated signatures: the
+original binding sig, any third-party certifications on the subkey,
+any revocation signature. Dropping the public-form entry during
+promotion would silently lose all of that.
+
+Therefore, before promoting, we collect every signature attached to
+any matching public-form entry, merge them into the incoming secret
+subkey's signatures via `merge_signatures` (which dedups by signature
+bytes so identical sigs on both sides collapse), and only then remove
+the public-form entry and push the promoted secret subkey.
+
+### 5. Examples
 
 In all examples below, "FP" is the 40-hex primary-key fingerprint and
 "K1"/"K2"/… are subkey fingerprints. The code path indicated is the
 match arm in `merge_keys`.
 
-#### 4.1 Public + public — keyserver refresh (unchanged behaviour)
+#### 5.1 Public + public — keyserver refresh (unchanged behaviour)
 
 Stored: Bob's pubcert `FP=ABCD…`, with UID and binding sigs on K1, K2.
 Update: the same cert fetched from keys.openpgp.org, now carrying a
@@ -123,7 +142,7 @@ Dispatch: `(false, false)` → `merge_cert` → `merge_details` dedups
 self-sig by signature bytes, appends Carol's cert-sig. Serialized as
 `SignedPublicKey`. Result is public-only.
 
-#### 4.2 Public + secret — you imported your pubcert earlier, now you have the secret
+#### 5.2 Public + secret — you imported your pubcert earlier, now you have the secret
 
 Stored: Bob's pubcert, no secret material.
 Update: Bob's `.sec` file from his old laptop, same FP.
@@ -145,7 +164,7 @@ social data we had accumulated.
 Before this ADR: this scenario silently dropped the secret material
 because `merge_keys` serialized as `SignedPublicKey`.
 
-#### 4.3 Secret + secret — re-importing, or merging two backups
+#### 5.3 Secret + secret — re-importing, or merging two backups
 
 Stored: Bob's secret cert with subkeys K1 (signing) and K2 (enc).
 Update: Bob's secret cert again, this time with an additional new
@@ -168,7 +187,7 @@ Result: one cert carrying K1, K2, K3 as secret subkeys and the new UID
 self-sig merged alongside the old one (latest-wins resolution happens
 later at read time per ADR 0001).
 
-#### 4.4 Secret + public — key-signing workflow
+#### 5.4 Secret + public — key-signing workflow
 
 Stored: Bob's secret cert.
 Update: Bob's public cert returned from Carol after she signed his
@@ -192,7 +211,7 @@ cert with Carol's attestation attached.
 
 Before this ADR: this also silently dropped Bob's secret material.
 
-#### 4.5 Fingerprint mismatch — refused
+#### 5.5 Fingerprint mismatch — refused
 
 Stored: cert `FP=ABCD…`.
 Update: cert `FP=DEAD…`.
@@ -204,7 +223,7 @@ Error::InvalidInput("Certificate fingerprints do not match: ABCD… vs DEAD…")
 No override. If the caller genuinely wants to add DEAD… to the store,
 they should `import_cert(update_data)` directly.
 
-#### 4.6 Tampered secret subkey — rejected with warning
+#### 5.6 Tampered secret subkey — rejected with warning
 
 Stored: Alice's secret cert `FP=ABCD…`.
 Update: a crafted secret cert that advertises Alice's primary (FP
@@ -222,7 +241,42 @@ Warning: dropping secret subkey <K_bad FP> with invalid binding: …
 
 K_bad is not inserted. Alice's legitimate subkeys remain untouched.
 
-### 5. Return type
+#### 5.7 Demoted-then-promoted subkey — prior signatures preserved
+
+Stored: Bob's secret cert. K1 is in `public_subkeys` carrying both its
+original binding signature and a subkey revocation signature Bob
+issued last month (but the secret packet is absent — for example,
+this cert was produced earlier via
+`gpg --export-secret-subkeys` with K1 excluded).
+
+Update: Bob's full secret cert from a backup, with K1 on the secret
+side. K1's secret subkey carries a freshly-regenerated binding sig
+(different bytes from the original) and no revocation signature.
+
+Dispatch: `(true, true)` → `merge_secret_cert` with
+`SecretMergeSource::Secret`.
+
+- K1 is not in `orig.secret_subkeys` → else-branch.
+- `verify_bindings(&primary_pub)` passes — the incoming binding sig
+  is legitimate.
+- Preservation splice: collect K1's signatures from
+  `orig.public_subkeys` (original binding + revocation), merge them
+  into `sk_update.signatures` via `merge_signatures` (dedups by
+  signature bytes).
+- `retain()` removes K1 from `orig.public_subkeys`.
+- `push()` adds the fully-signed K1 to `orig.secret_subkeys`.
+
+Result: K1 on the secret side carrying the new binding sig AND the
+original binding sig AND the revocation sig. Whoever later evaluates
+K1's validity (via ADR 0001's latest-self-sig-wins policy) will see
+all three and act on the revocation — exactly as they would have
+before the secret promotion.
+
+Without the preservation splice, the original binding sig and the
+revocation would both be silently lost, leaving Bob's keystore
+claiming K1 was an active, just-issued subkey.
+
+### 6. Return type
 
 `merge_keys` returns `Result<Zeroizing<Vec<u8>>>`. Public-only output
 is wrapped too (for type uniformity; the zeroing is cheap and
@@ -310,6 +364,18 @@ Keeps the signature unchanged but means secret-bearing bytes would
 sit unzeroed in the caller's allocator until reuse. Incompatible with
 the project's stated posture (1644d9f). The minor-version bump is the
 acceptable cost.
+
+### Drop public-side signatures during subkey promotion
+
+The simpler implementation of promotion is just
+`public_subkeys.retain(…); secret_subkeys.push(sk_update);` — two
+lines, no signature accounting. Rejected because it silently discards
+subkey revocation signatures, third-party subkey certifications, and
+historical binding sigs that were attached to the public-form entry.
+The worst case is loss of a revocation: a previously-revoked subkey
+would look active again after a promotion. The extra ~10 lines that
+splice `prior_sigs` into the incoming secret subkey (deduping via
+signature bytes) close that hole.
 
 ## References
 

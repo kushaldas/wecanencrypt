@@ -246,7 +246,7 @@ fn merge_secret_cert(orig: &mut SignedSecretKey, source: SecretMergeSource) {
     // with secret material is kept; we don't swap it out).
     if let Some(src_sec) = src_sec_subkeys {
         let primary_pub = orig.primary_key.public_key().clone();
-        for sk_update in src_sec {
+        for mut sk_update in src_sec {
             let upd_fp = sk_update.key.fingerprint();
             if let Some(existing) = orig
                 .secret_subkeys
@@ -270,7 +270,20 @@ fn merge_secret_cert(orig: &mut SignedSecretKey, source: SecretMergeSource) {
                     continue;
                 }
                 // If the public_subkeys list has the matching public
-                // form, remove it — we're promoting to the secret side.
+                // form, it carries signatures we've already accumulated
+                // (revocations, third-party certifications, historical
+                // binding sigs). Merge them into the incoming secret
+                // subkey before promoting — otherwise they would be
+                // silently dropped when we retain() the public entry.
+                let prior_sigs: Vec<_> = orig
+                    .public_subkeys
+                    .iter()
+                    .filter(|sk| sk.fingerprint() == upd_fp)
+                    .flat_map(|sk| sk.signatures.iter().cloned())
+                    .collect();
+                if !prior_sigs.is_empty() {
+                    merge_signatures(&mut sk_update.signatures, prior_sigs);
+                }
                 orig.public_subkeys
                     .retain(|sk| sk.fingerprint() != upd_fp);
                 orig.secret_subkeys.push(sk_update);
