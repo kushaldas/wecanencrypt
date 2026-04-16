@@ -992,11 +992,10 @@ mod key_flag_policy {
             config.hashed_subpackets = hashed_subpackets;
 
             if secret_key.primary_key.version() <= KeyVersion::V4 {
-                config.unhashed_subpackets =
-                    vec![Subpacket::regular(SubpacketData::IssuerKeyId(
-                        secret_key.primary_key.legacy_key_id(),
-                    ))
-                    .unwrap()];
+                config.unhashed_subpackets = vec![Subpacket::regular(SubpacketData::IssuerKeyId(
+                    secret_key.primary_key.legacy_key_id(),
+                ))
+                .unwrap()];
             }
 
             let sig = config
@@ -1254,7 +1253,10 @@ mod merge_secret_dispatch {
         let merged = merge_keys(pub_bytes, &key.secret_key).unwrap();
 
         let info = parse_cert_bytes(&merged, true).unwrap();
-        assert!(info.is_secret, "pub + sec merge should produce a secret cert");
+        assert!(
+            info.is_secret,
+            "pub + sec merge should produce a secret cert"
+        );
         assert_eq!(info.fingerprint, key.fingerprint);
 
         // The serialized bytes must parse back as a secret key.
@@ -1274,7 +1276,10 @@ mod merge_secret_dispatch {
         let merged = merge_keys(&orig_secret, &updated_secret).unwrap();
 
         let info = parse_cert_bytes(&merged, true).unwrap();
-        assert!(info.is_secret, "sec + sec merge should produce a secret cert");
+        assert!(
+            info.is_secret,
+            "sec + sec merge should produce a secret cert"
+        );
         assert_eq!(info.fingerprint, key.fingerprint);
 
         // The new self-sig from the update should have been merged in —
@@ -1492,10 +1497,7 @@ mod merge_secret_dispatch {
     /// Build a variant of `full` where `victim_fp` has been demoted to
     /// public_subkeys (its secret packet stripped). Returns the
     /// binary-serialized variant.
-    fn demote_to_public(
-        full: &SignedSecretKey,
-        victim_fp: &pgp::types::Fingerprint,
-    ) -> Vec<u8> {
+    fn demote_to_public(full: &SignedSecretKey, victim_fp: &pgp::types::Fingerprint) -> Vec<u8> {
         let mut new_sec_subkeys = Vec::new();
         let mut new_pub_subkeys = full.public_subkeys.clone();
         for sk in &full.secret_subkeys {
@@ -1558,12 +1560,7 @@ mod merge_secret_dispatch {
             .secret_subkeys
             .iter()
             .find(|sk| sk.key.fingerprint() == victim_fp)
-            .unwrap_or_else(|| {
-                panic!(
-                    "K2 {} was not promoted to secret_subkeys",
-                    victim_fp_hex
-                )
-            });
+            .unwrap_or_else(|| panic!("K2 {} was not promoted to secret_subkeys", victim_fp_hex));
 
         // K2 must carry BOTH binding sigs (old preserved from the
         // public-form entry + new from the secret side). Without the

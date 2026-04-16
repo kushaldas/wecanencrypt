@@ -1,7 +1,7 @@
 //! Keyring file operations.
 //!
 //! This module provides functions for reading and writing OpenPGP
-//! keyring files that contain multiple certificates.
+//! keyring files that contain multiple keys.
 
 use std::io::Cursor;
 use std::path::Path;
@@ -21,19 +21,19 @@ use crate::internal::{
 use crate::parse::parse_cert_bytes;
 use crate::types::CertificateInfo;
 
-/// Parse a keyring file containing multiple certificates.
+/// Parse a keyring file containing multiple keys.
 ///
 /// # Arguments
 /// * `path` - Path to the keyring file
 ///
 /// # Returns
-/// A list of (CertificateInfo, raw_bytes) for each certificate in the keyring.
+/// A list of (CertificateInfo, raw_bytes) for each key in the keyring.
 ///
 /// # Example
 /// ```ignore
 /// // Ignored: illustrative example with placeholder file path
-/// let certs = parse_keyring_file("pubring.gpg")?;
-/// for (info, bytes) in certs {
+/// let keys = parse_keyring_file("pubring.gpg")?;
+/// for (info, bytes) in keys {
 ///     println!("Key: {} - {}", info.fingerprint, info.user_ids.first().unwrap_or(&"".to_string()));
 /// }
 /// ```
@@ -42,13 +42,13 @@ pub fn parse_keyring_file(path: impl AsRef<Path>) -> Result<Vec<(CertificateInfo
     parse_keyring_bytes(&keyring_data)
 }
 
-/// Parse keyring data containing multiple certificates.
+/// Parse keyring data containing multiple keys.
 ///
 /// # Arguments
 /// * `data` - Keyring data (armored or binary)
 ///
 /// # Returns
-/// A list of (CertificateInfo, raw_bytes) for each certificate.
+/// A list of (CertificateInfo, raw_bytes) for each key.
 pub fn parse_keyring_bytes(data: &[u8]) -> Result<Vec<(CertificateInfo, Vec<u8>)>> {
     let mut results = Vec::new();
 
@@ -65,8 +65,8 @@ pub fn parse_keyring_bytes(data: &[u8]) -> Result<Vec<(CertificateInfo, Vec<u8>)
                 results.push((info, bytes));
             }
             Err(e) => {
-                // Log error but continue parsing other certs
-                eprintln!("Warning: failed to parse certificate: {}", e);
+                // Log error but continue parsing other keys
+                eprintln!("Warning: failed to parse key: {}", e);
             }
         }
     }
@@ -74,24 +74,24 @@ pub fn parse_keyring_bytes(data: &[u8]) -> Result<Vec<(CertificateInfo, Vec<u8>)
     Ok(results)
 }
 
-/// Export multiple certificates to a keyring file.
+/// Export multiple keys to a keyring file.
 ///
 /// # Arguments
-/// * `certs` - Slice of certificate data
+/// * `keys` - Slice of key data
 /// * `output` - Path to write the keyring file
 ///
 /// # Example
 /// ```ignore
 /// // Ignored: illustrative example with placeholder file paths
-/// let cert1 = std::fs::read("key1.asc")?;
-/// let cert2 = std::fs::read("key2.asc")?;
-/// export_keyring_file(&[&cert1, &cert2], "combined.gpg")?;
+/// let key1 = std::fs::read("key1.asc")?;
+/// let key2 = std::fs::read("key2.asc")?;
+/// export_keyring_file(&[&key1, &key2], "combined.gpg")?;
 /// ```
-pub fn export_keyring_file(certs: &[&[u8]], output: impl AsRef<Path>) -> Result<()> {
+pub fn export_keyring_file(keys: &[&[u8]], output: impl AsRef<Path>) -> Result<()> {
     let mut keyring_data = Vec::new();
 
-    for cert_data in certs {
-        let (public_key, _is_secret) = parse_cert(cert_data)?;
+    for key_data in keys {
+        let (public_key, _is_secret) = parse_cert(key_data)?;
         let bytes = public_key
             .to_bytes()
             .map_err(|e| Error::Crypto(e.to_string()))?;
@@ -102,18 +102,18 @@ pub fn export_keyring_file(certs: &[&[u8]], output: impl AsRef<Path>) -> Result<
     Ok(())
 }
 
-/// Export multiple certificates to an armored keyring.
+/// Export multiple keys to an armored keyring.
 ///
 /// # Arguments
-/// * `certs` - Slice of certificate data
+/// * `keys` - Slice of key data
 ///
 /// # Returns
-/// ASCII-armored keyring containing all certificates.
-pub fn export_keyring_armored(certs: &[&[u8]]) -> Result<String> {
+/// ASCII-armored keyring containing all keys.
+pub fn export_keyring_armored(keys: &[&[u8]]) -> Result<String> {
     let mut all_armored = String::new();
 
-    for cert_data in certs {
-        let (public_key, _is_secret) = parse_cert(cert_data)?;
+    for key_data in keys {
+        let (public_key, _is_secret) = parse_cert(key_data)?;
         let armored = public_key_to_armored(&public_key)?;
         all_armored.push_str(&armored);
         all_armored.push('\n');
@@ -122,11 +122,11 @@ pub fn export_keyring_armored(certs: &[&[u8]]) -> Result<String> {
     Ok(all_armored)
 }
 
-/// Merge two certificates with the same primary key fingerprint,
+/// Merge two OpenPGP keys with the same primary key fingerprint,
 /// preserving secret key material from either side.
 ///
 /// Merges new information (signatures, user IDs, subkeys, user attributes)
-/// from `update_data` into `cert_data`. Follows the same overall approach
+/// from `update_data` into `key_data`. Follows the same overall approach
 /// as Sequoia's `Cert::merge_public_and_secret` and rpgpie's `Tsk::merge`:
 /// deduplication of components and signatures, new components added, new
 /// signatures merged into existing components. Any variant carrying
@@ -134,76 +134,82 @@ pub fn export_keyring_armored(certs: &[&[u8]]) -> Result<String> {
 /// top of a stored secret key does not drop the secret packets.
 ///
 /// # Arguments
-/// * `cert_data` - The original certificate (armored or binary)
-/// * `update_data` - The certificate with new data to merge (armored or binary)
+/// * `key_data` - The original key (armored or binary)
+/// * `update_data` - The key with new data to merge (armored or binary)
 ///
 /// # Returns
-/// Merged certificate bytes wrapped in `Zeroizing` so any secret
-/// material is scrubbed on drop. When both inputs are public only, the
-/// result is still wrapped in `Zeroizing` but contains public-only bytes.
+/// Merged key bytes wrapped in `Zeroizing` so any secret material is
+/// scrubbed on drop. When both inputs are public only, the result is
+/// still wrapped in `Zeroizing` but contains public-only bytes.
 ///
 /// # Errors
-/// * [`Error::InvalidInput`] if the two certificates have different
-///   primary fingerprints.
-pub fn merge_keys(cert_data: &[u8], update_data: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
-    let (orig_pub, orig_is_secret) = parse_cert(cert_data)?;
-    let (update_pub, update_is_secret) = parse_cert(update_data)?;
+/// * [`Error::InvalidInput`] if the two keys have different primary
+///   fingerprints.
+pub fn merge_keys(key_data: &[u8], update_data: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
+    let (orig_public, orig_is_secret) = parse_cert(key_data)?;
+    let (update_public, update_is_secret) = parse_cert(update_data)?;
 
-    let fp1 = fingerprint_to_hex(&orig_pub.primary_key);
-    let fp2 = fingerprint_to_hex(&update_pub.primary_key);
+    let fp1 = fingerprint_to_hex(&orig_public.primary_key);
+    let fp2 = fingerprint_to_hex(&update_public.primary_key);
     if fp1 != fp2 {
         return Err(Error::InvalidInput(format!(
-            "Certificate fingerprints do not match: {} vs {}",
+            "Key fingerprints do not match: {} vs {}",
             fp1, fp2
         )));
     }
 
     match (orig_is_secret, update_is_secret) {
         (false, false) => {
-            let mut orig = orig_pub;
-            merge_cert(&mut orig, update_pub);
+            let mut orig = orig_public;
+            merge_public_key(&mut orig, update_public);
             orig.to_bytes()
                 .map(Zeroizing::new)
                 .map_err(|e| Error::Crypto(e.to_string()))
         }
         (true, false) => {
-            let mut orig = parse_secret_key(cert_data)?;
-            merge_secret_cert(&mut orig, SecretMergeSource::Public(Box::new(update_pub)));
+            let mut orig = parse_secret_key(key_data)?;
+            merge_secret_key(
+                &mut orig,
+                SecretMergeSource::Public(Box::new(update_public)),
+            );
             secret_key_to_bytes(&orig)
         }
         (false, true) => {
             // Upgrade: start from the incoming secret key as the base,
-            // then merge the existing public cert's signatures/UIDs in.
+            // then merge the existing public key's signatures/UIDs in.
             let mut merged = parse_secret_key(update_data)?;
-            merge_secret_cert(&mut merged, SecretMergeSource::Public(Box::new(orig_pub)));
+            merge_secret_key(
+                &mut merged,
+                SecretMergeSource::Public(Box::new(orig_public)),
+            );
             secret_key_to_bytes(&merged)
         }
         (true, true) => {
-            let mut orig = parse_secret_key(cert_data)?;
+            let mut orig = parse_secret_key(key_data)?;
             let update = parse_secret_key(update_data)?;
-            merge_secret_cert(&mut orig, SecretMergeSource::Secret(Box::new(update)));
+            merge_secret_key(&mut orig, SecretMergeSource::Secret(Box::new(update)));
             secret_key_to_bytes(&orig)
         }
     }
 }
 
 /// Source of a merge into a `SignedSecretKey`. Either another secret
-/// cert (we can take its `secret_subkeys` too) or a public cert (we
+/// key (we can take its `secret_subkeys` too) or a public key (we
 /// merge signatures/components but our own secret material is untouched).
 enum SecretMergeSource {
     Secret(Box<SignedSecretKey>),
     Public(Box<SignedPublicKey>),
 }
 
-/// Merge a public update into an existing public cert, in place.
-fn merge_cert(orig: &mut SignedPublicKey, update: SignedPublicKey) {
+/// Merge a public update into an existing public key, in place.
+fn merge_public_key(orig: &mut SignedPublicKey, update: SignedPublicKey) {
     merge_details(&mut orig.details, update.details);
     merge_public_subkeys(&mut orig.public_subkeys, update.public_subkeys);
 }
 
-/// Merge an update into an existing secret cert, in place, preserving
+/// Merge an update into an existing secret key, in place, preserving
 /// the destination's secret key material.
-fn merge_secret_cert(orig: &mut SignedSecretKey, source: SecretMergeSource) {
+fn merge_secret_key(orig: &mut SignedSecretKey, source: SecretMergeSource) {
     let (src_details, src_pub_subkeys, src_sec_subkeys) = match source {
         SecretMergeSource::Secret(sec) => {
             let sec = *sec;
@@ -284,8 +290,7 @@ fn merge_secret_cert(orig: &mut SignedSecretKey, source: SecretMergeSource) {
                 if !prior_sigs.is_empty() {
                     merge_signatures(&mut sk_update.signatures, prior_sigs);
                 }
-                orig.public_subkeys
-                    .retain(|sk| sk.fingerprint() != upd_fp);
+                orig.public_subkeys.retain(|sk| sk.fingerprint() != upd_fp);
                 orig.secret_subkeys.push(sk_update);
             }
         }
