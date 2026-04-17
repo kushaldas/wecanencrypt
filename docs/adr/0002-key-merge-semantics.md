@@ -1,4 +1,4 @@
-# ADR 0002: Secret-Key-Aware Certificate Merging
+# ADR 0002: Secret-Key-Aware OpenPGP Key Merging
 
 ## Status
 
@@ -10,11 +10,11 @@ Accepted
 
 ## Context
 
-`merge_keys(cert_data, update_data)` is the single entry point for
-reconciling two OpenPGP certificates that share a primary key. It is
-called from tumpa's `--import` path whenever the incoming cert already
-exists in the keystore, and from any downstream consumer that wants to
-fold a keyserver / WKD / file-delivered update into a stored cert.
+`merge_keys(key_data, update_data)` is the single entry point for
+reconciling two OpenPGP keys that share a primary key. It is called
+from tumpa's `--import` path whenever the incoming key already exists
+in the keystore, and from any downstream consumer that wants to fold a
+keyserver / WKD / file-delivered update into a stored key.
 
 Three concerns collide in this function:
 
@@ -27,9 +27,9 @@ Three concerns collide in this function:
    Transferable Public Key (TPK) or a Transferable Secret Key (TSK).
    The old implementation parsed both sides through
    `parse_cert → SignedSecretKey::to_public_key()`, which *unconditionally
-   strips secret packets*. Re-importing a `.sec` file for a cert that
+   strips secret packets*. Re-importing a `.sec` file for a key that
    was already stored as public would silently downgrade the stored
-   cert to public-only (observed in the field via
+   key to public-only (observed in the field via
    `tcli --import ~/KEY.sec` followed by `tcli --list-keys` showing
    `pub` instead of `sec`).
 
@@ -49,7 +49,7 @@ therefore align with the two de-facto references:
   `Cert::merge_public_and_secret` (prefers any variant that carries
   secret material).
 - **rpgpie** (the rsop SOP implementation, on the same rpgp stack we
-  use) — `Certificate::merge` for public certs and `Tsk::merge` for
+  use) — `Certificate::merge` for public keys and `Tsk::merge` for
   secret-aware merging.
 
 Both split API surface into a public-only path and a secret-aware
@@ -69,7 +69,7 @@ is_secret: bool)`):
 | `orig`  | `update` | Result                                                                             |
 |---------|----------|------------------------------------------------------------------------------------|
 | public  | public   | `SignedPublicKey::to_bytes` (unchanged behaviour)                                  |
-| public  | secret   | incoming secret becomes the base; orig's public cert folded in → secret bytes      |
+| public  | secret   | incoming secret becomes the base; orig's public key folded in → secret bytes       |
 | secret  | secret   | orig's secret is the base; update's secret subkeys merged by FP → secret bytes     |
 | secret  | public   | orig's secret is the base; update's public signatures/components folded in         |
 | FP mismatch on primary | — | **`Error::InvalidInput`**, always — no override                          |
@@ -82,7 +82,7 @@ serialized secret bytes are scrubbed on drop.
 The previous `force: bool` parameter bypassed the primary-FP check.
 That parameter is removed. There is no legitimate workflow for
 merging two different primary keys: a user who actually wants to
-import cert B should call `import_cert(B)` directly, not
+import key B should call `import_cert(B)` directly, not
 `merge_keys(A, B)`.
 
 ### 3. Binding verification when absorbing a new secret subkey
@@ -128,8 +128,8 @@ match arm in `merge_keys`.
 
 #### 5.1 Public + public — keyserver refresh (unchanged behaviour)
 
-Stored: Bob's pubcert `FP=ABCD…`, with UID and binding sigs on K1, K2.
-Update: the same cert fetched from keys.openpgp.org, now carrying a
+Stored: Bob's public key `FP=ABCD…`, with UID and binding sigs on K1, K2.
+Update: the same key fetched from keys.openpgp.org, now carrying a
 third-party certification from Carol on the UID.
 
 ```
@@ -138,26 +138,26 @@ orig.details.users[0].signatures = [self-sig]
 update.details.users[0].signatures = [self-sig, carol's cert-sig]
 ```
 
-Dispatch: `(false, false)` → `merge_cert` → `merge_details` dedups
+Dispatch: `(false, false)` → `merge_public_key` → `merge_details` dedups
 self-sig by signature bytes, appends Carol's cert-sig. Serialized as
 `SignedPublicKey`. Result is public-only.
 
-#### 5.2 Public + secret — you imported your pubcert earlier, now you have the secret
+#### 5.2 Public + secret — you imported your public key earlier, now you have the secret
 
-Stored: Bob's pubcert, no secret material.
+Stored: Bob's public key, no secret material.
 Update: Bob's `.sec` file from his old laptop, same FP.
 
 Dispatch: `(false, true)` → the incoming secret becomes the base:
 
 ```rust
 let mut merged = parse_secret_key(update_data)?;
-merge_secret_cert(&mut merged, SecretMergeSource::Public(Box::new(orig_pub)));
+merge_secret_key(&mut merged, SecretMergeSource::Public(Box::new(orig_public)));
 ```
 
-Inside `merge_secret_cert`, the public form of the stored cert is
+Inside `merge_secret_key`, the public form of the stored key is
 walked: its UIDs, user-attrs, and subkey signatures are folded into
 the secret-bearing base. Any signatures that had accumulated on the
-public side (third-party certs, etc.) survive. Result: a secret cert
+public side (third-party certs, etc.) survive. Result: a secret key
 that has both the freshly-imported secret material *and* all the
 social data we had accumulated.
 
@@ -166,12 +166,12 @@ because `merge_keys` serialized as `SignedPublicKey`.
 
 #### 5.3 Secret + secret — re-importing, or merging two backups
 
-Stored: Bob's secret cert with subkeys K1 (signing) and K2 (enc).
-Update: Bob's secret cert again, this time with an additional new
+Stored: Bob's secret key with subkeys K1 (signing) and K2 (enc).
+Update: Bob's secret key again, this time with an additional new
 self-signature on the UID (he recently bumped the expiry) and a
 freshly generated subkey K3 (auth).
 
-Dispatch: `(true, true)` → `merge_secret_cert` with
+Dispatch: `(true, true)` → `merge_secret_key` with
 `SecretMergeSource::Secret`. For `src_pub_subkeys` (empty in the
 typical case — all subkeys in a fresh export live on the secret side)
 the public loop is a no-op. For `src_sec_subkeys`:
@@ -183,19 +183,19 @@ the public loop is a no-op. For `src_sec_subkeys`:
 - K3 fingerprint does not match → binding verification runs against
   the primary; on success, K3 is appended to `secret_subkeys`.
 
-Result: one cert carrying K1, K2, K3 as secret subkeys and the new UID
+Result: one key carrying K1, K2, K3 as secret subkeys and the new UID
 self-sig merged alongside the old one (latest-wins resolution happens
 later at read time per ADR 0001).
 
 #### 5.4 Secret + public — key-signing workflow
 
-Stored: Bob's secret cert.
-Update: Bob's public cert returned from Carol after she signed his
+Stored: Bob's secret key.
+Update: Bob's public key returned from Carol after she signed his
 UID at a key signing party.
 
-Dispatch: `(true, false)` → `merge_secret_cert` with
+Dispatch: `(true, false)` → `merge_secret_key` with
 `SecretMergeSource::Public`. The `src_pub_subkeys` loop walks the
-public subkeys from Carol's returned cert. For each, we look up the
+public subkeys from Carol's returned key. For each, we look up the
 FP:
 
 - If it matches one of our `orig.secret_subkeys`, merge sigs into that
@@ -207,17 +207,17 @@ FP:
 
 Carol's third-party certification on the UID is absorbed via
 `merge_details`. Bob's secret subkeys never move. Result: a secret
-cert with Carol's attestation attached.
+key with Carol's attestation attached.
 
 Before this ADR: this also silently dropped Bob's secret material.
 
 #### 5.5 Fingerprint mismatch — refused
 
-Stored: cert `FP=ABCD…`.
-Update: cert `FP=DEAD…`.
+Stored: key `FP=ABCD…`.
+Update: key `FP=DEAD…`.
 
 ```
-Error::InvalidInput("Certificate fingerprints do not match: ABCD… vs DEAD…")
+Error::InvalidInput("Key fingerprints do not match: ABCD… vs DEAD…")
 ```
 
 No override. If the caller genuinely wants to add DEAD… to the store,
@@ -225,8 +225,8 @@ they should `import_cert(update_data)` directly.
 
 #### 5.6 Tampered secret subkey — rejected with warning
 
-Stored: Alice's secret cert `FP=ABCD…`.
-Update: a crafted secret cert that advertises Alice's primary (FP
+Stored: Alice's secret key `FP=ABCD…`.
+Update: a crafted secret key that advertises Alice's primary (FP
 ABCD…) but smuggles in a secret subkey `K_bad` whose binding
 signature was made by some *other* primary `DEAD…`. Rpgp accepts this
 at parse time because the signature packet is well-formed.
@@ -243,17 +243,17 @@ K_bad is not inserted. Alice's legitimate subkeys remain untouched.
 
 #### 5.7 Demoted-then-promoted subkey — prior signatures preserved
 
-Stored: Bob's secret cert. K1 is in `public_subkeys` carrying both its
+Stored: Bob's secret key. K1 is in `public_subkeys` carrying both its
 original binding signature and a subkey revocation signature Bob
 issued last month (but the secret packet is absent — for example,
-this cert was produced earlier via
+this key was produced earlier via
 `gpg --export-secret-subkeys` with K1 excluded).
 
-Update: Bob's full secret cert from a backup, with K1 on the secret
+Update: Bob's full secret key from a backup, with K1 on the secret
 side. K1's secret subkey carries a freshly-regenerated binding sig
 (different bytes from the original) and no revocation signature.
 
-Dispatch: `(true, true)` → `merge_secret_cert` with
+Dispatch: `(true, true)` → `merge_secret_key` with
 `SecretMergeSource::Secret`.
 
 - K1 is not in `orig.secret_subkeys` → else-branch.
@@ -294,7 +294,7 @@ other byte slices keep working.
   `.sec` file) is fixed end-to-end. Secret material survives every
   merge that involves at least one secret-bearing input.
 - The key-signing workflow works without any user-facing knob.
-- Subkey injection attacks via crafted secret-cert updates are
+- Subkey injection attacks via crafted secret-key updates are
   blocked at the merge layer, not only at a hypothetical downstream
   `verify_bindings()` call that no current consumer makes.
 - FP mismatch is unconditionally rejected — safer default than the
@@ -334,7 +334,7 @@ result with `to_public_key()`; the underlying parse is cheap.
 Proposed at one point as a gate on `secret + public` merges (i.e.,
 refuse by default, opt in with `force`). Rejected when we realised
 this would block the key-signing workflow (third-party certifications
-returning on a public cert), which is the most common `secret +
+returning on a public key), which is the most common `secret +
 public` case and is entirely safe because the merge is secret-aware.
 
 ### Reject the whole merge on any binding-verification failure
