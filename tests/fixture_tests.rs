@@ -120,7 +120,7 @@ mod parse_cert {
         let old_data = read_file(&old_keypath);
         let new_data = read_file(&new_keypath);
 
-        let merged = merge_keys(&old_data, &new_data, false).unwrap();
+        let merged = merge_keys(&old_data, &new_data).unwrap();
 
         let info = parse_cert_bytes(&merged, false).unwrap();
 

@@ -1,6 +1,6 @@
 [package]
 name = "wecanencrypt"
-version = "0.9.0"
+version = "0.10.0"
 edition = "2021"
 license = "MIT"
 description = "Simple Rust OpenPGP library for encryption, signing, and key management."
@@ -59,10 +59,10 @@ ed25519-dalek = { version = "2", features = ["zeroize"] }
 zeroize = "1.8"
 
 # SQLite key storage (optional)
-rusqlite = { version = "0.32", features = ["bundled"], optional = true }
+rusqlite = { version = "0.39", features = ["bundled"], optional = true }
 
 # Network key fetching (optional)
-reqwest = { version = "0.12", features = ["blocking"], optional = true }
+reqwest = { version = "0.13", features = ["blocking"], optional = true }
 
 # DNS DANE OPENPGPKEY support (optional)
 hickory-proto = { version = "0.25", default-features = false, optional = true }

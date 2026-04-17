@@ -955,7 +955,7 @@ mod key_flag_policy {
 
     /// Helper: create a new self-signature on a UID with specific key flags,
     /// re-sign, and rebuild the cert. Returns the updated secret key bytes.
-    fn resign_uid_with_flags(
+    pub(super) fn resign_uid_with_flags(
         secret_data: &[u8],
         password: &str,
         sign_flag: bool,
@@ -992,11 +992,10 @@ mod key_flag_policy {
             config.hashed_subpackets = hashed_subpackets;
 
             if secret_key.primary_key.version() <= KeyVersion::V4 {
-                config.unhashed_subpackets =
-                    vec![Subpacket::regular(SubpacketData::IssuerKeyId(
-                        secret_key.primary_key.legacy_key_id(),
-                    ))
-                    .unwrap()];
+                config.unhashed_subpackets = vec![Subpacket::regular(SubpacketData::IssuerKeyId(
+                    secret_key.primary_key.legacy_key_id(),
+                ))
+                .unwrap()];
             }
 
             let sig = config
@@ -1120,7 +1119,7 @@ mod key_flag_policy {
 
         // Merge: original + updated. The updated cert has a newer self-sig
         // without the sign flag.
-        let merged = merge_keys(pub_orig.as_bytes(), pub_updated.as_bytes(), false).unwrap();
+        let merged = merge_keys(pub_orig.as_bytes(), pub_updated.as_bytes()).unwrap();
 
         let info = parse_cert_bytes(&merged, false).unwrap();
         assert!(
@@ -1154,7 +1153,7 @@ mod key_flag_policy {
 
         // Merge: start from cert WITH sign flag, merge in the OLDER cert without it.
         // The older self-sig should NOT override the newer one.
-        let merged = merge_keys(pub_with_sign.as_bytes(), pub_no_sign.as_bytes(), false).unwrap();
+        let merged = merge_keys(pub_with_sign.as_bytes(), pub_no_sign.as_bytes()).unwrap();
 
         let info = parse_cert_bytes(&merged, false).unwrap();
         assert!(
@@ -1196,5 +1195,477 @@ mod key_flag_policy {
             !info2.can_primary_sign,
             "After expiry update, certify-only key should still not have sign capability"
         );
+    }
+}
+
+// =============================================================================
+// merge_keys dispatch matrix: covers all combinations of public/secret inputs,
+// plus the FP-mismatch error path.
+// =============================================================================
+
+mod merge_secret_dispatch {
+    use super::*;
+    use pgp::composed::{Deserializable, SignedPublicKey, SignedSecretKey};
+    use pgp::ser::Serialize;
+    use pgp::types::KeyDetails;
+    use std::io::Cursor;
+
+    fn fresh_key() -> wecanencrypt::GeneratedKey {
+        create_key_simple(TEST_PASSWORD, &[TEST_UID]).unwrap()
+    }
+
+    fn parse_pub(data: &[u8]) -> SignedPublicKey {
+        SignedPublicKey::from_armor_single(Cursor::new(data))
+            .map(|(k, _)| k)
+            .or_else(|_| SignedPublicKey::from_bytes(Cursor::new(data)))
+            .expect("parse as public")
+    }
+
+    fn parse_sec(data: &[u8]) -> SignedSecretKey {
+        SignedSecretKey::from_armor_single(Cursor::new(data))
+            .map(|(k, _)| k)
+            .or_else(|_| SignedSecretKey::from_bytes(Cursor::new(data)))
+            .expect("parse as secret")
+    }
+
+    #[test]
+    fn test_merge_public_public_unchanged() {
+        // pub + pub should still produce a public cert (regression).
+        let key = fresh_key();
+        let pub_bytes = key.public_key.as_bytes();
+        let merged = merge_keys(pub_bytes, pub_bytes).unwrap();
+
+        // Must NOT parse as a secret key.
+        assert!(SignedSecretKey::from_bytes(Cursor::new(&*merged)).is_err());
+        // Must parse as a public key.
+        let _pub = parse_pub(&merged);
+
+        let info = parse_cert_bytes(&merged, false).unwrap();
+        assert!(!info.is_secret);
+        assert_eq!(info.fingerprint, key.fingerprint);
+    }
+
+    #[test]
+    fn test_merge_public_plus_secret_upgrades() {
+        // pub + sec → result carries secret material (upgrade path).
+        let key = fresh_key();
+        let pub_bytes = key.public_key.as_bytes();
+        let merged = merge_keys(pub_bytes, &key.secret_key).unwrap();
+
+        let info = parse_cert_bytes(&merged, true).unwrap();
+        assert!(
+            info.is_secret,
+            "pub + sec merge should produce a secret cert"
+        );
+        assert_eq!(info.fingerprint, key.fingerprint);
+
+        // The serialized bytes must parse back as a secret key.
+        let _sec = parse_sec(&merged);
+    }
+
+    #[test]
+    fn test_merge_secret_plus_secret_preserves() {
+        // sec + sec merges signatures; result remains secret.
+        let key = fresh_key();
+        let orig_secret = key.secret_key.to_vec();
+
+        // Produce a modified secret (newer self-sig on the UID).
+        let updated_secret =
+            key_flag_policy::resign_uid_with_flags(&orig_secret, TEST_PASSWORD, true, true);
+
+        let merged = merge_keys(&orig_secret, &updated_secret).unwrap();
+
+        let info = parse_cert_bytes(&merged, true).unwrap();
+        assert!(
+            info.is_secret,
+            "sec + sec merge should produce a secret cert"
+        );
+        assert_eq!(info.fingerprint, key.fingerprint);
+
+        // The new self-sig from the update should have been merged in —
+        // the merged cert should have at least 2 self-signatures on the
+        // UID (original + updated).
+        let merged_sec = parse_sec(&merged);
+        let sig_count: usize = merged_sec
+            .details
+            .users
+            .iter()
+            .map(|u| u.signatures.len())
+            .sum();
+        assert!(
+            sig_count >= 2,
+            "expected merged UID signatures from both inputs, got {}",
+            sig_count
+        );
+    }
+
+    #[test]
+    fn test_merge_secret_plus_public_preserves_secret() {
+        // Key-signing workflow: secret base + public update (e.g.
+        // third-party certification on our UID). Secret material must
+        // survive.
+        let key = fresh_key();
+        let secret_bytes = key.secret_key.to_vec();
+
+        // Produce a public update derived from the same key but with a
+        // fresh newer self-sig on the UID (stand-in for "someone
+        // returned an updated public cert").
+        let updated_secret =
+            key_flag_policy::resign_uid_with_flags(&secret_bytes, TEST_PASSWORD, true, true);
+        let updated_pub = get_pub_key(&updated_secret).unwrap();
+
+        let merged = merge_keys(&secret_bytes, updated_pub.as_bytes()).unwrap();
+
+        let info = parse_cert_bytes(&merged, true).unwrap();
+        assert!(
+            info.is_secret,
+            "sec + pub merge must preserve secret material"
+        );
+        assert_eq!(info.fingerprint, key.fingerprint);
+
+        // Round-trip must still parse as a secret key with secret
+        // subkey material intact.
+        let merged_sec = parse_sec(&merged);
+        assert!(
+            !merged_sec.secret_subkeys.is_empty(),
+            "secret subkeys must be preserved across sec + pub merge"
+        );
+
+        // And the new self-sig from the update should have been merged
+        // into the UID's signatures.
+        let sig_count: usize = merged_sec
+            .details
+            .users
+            .iter()
+            .map(|u| u.signatures.len())
+            .sum();
+        assert!(
+            sig_count >= 2,
+            "expected merged UID signatures, got {}",
+            sig_count
+        );
+    }
+
+    #[test]
+    fn test_merge_secret_subkey_packets_preserved() {
+        // Parse the fresh secret and count secret subkeys up front.
+        let key = fresh_key();
+        let secret_bytes = key.secret_key.to_vec();
+        let orig_sec = parse_sec(&secret_bytes);
+        let expected_sec_subkeys: Vec<_> = orig_sec
+            .secret_subkeys
+            .iter()
+            .map(|sk| fingerprint_hex(&sk.key.fingerprint()))
+            .collect();
+        assert!(
+            !expected_sec_subkeys.is_empty(),
+            "test precondition: fresh key should have secret subkeys"
+        );
+
+        // Public update: the public view of the same cert. Under the
+        // hood merge_keys should route each public subkey signature
+        // into the matching secret subkey, never overwriting the
+        // secret packet with a public one.
+        let pub_update = key.public_key.clone();
+        let merged = merge_keys(&secret_bytes, pub_update.as_bytes()).unwrap();
+
+        let merged_sec = parse_sec(&merged);
+        let got_sec_subkeys: Vec<_> = merged_sec
+            .secret_subkeys
+            .iter()
+            .map(|sk| fingerprint_hex(&sk.key.fingerprint()))
+            .collect();
+
+        for fp in &expected_sec_subkeys {
+            assert!(
+                got_sec_subkeys.contains(fp),
+                "secret subkey {} was dropped during merge",
+                fp
+            );
+        }
+    }
+
+    #[test]
+    fn test_merge_fingerprint_mismatch_errors() {
+        // Two distinct keys → merge must refuse.
+        let a = fresh_key();
+        let b = fresh_key();
+        assert_ne!(a.fingerprint, b.fingerprint);
+
+        let err = merge_keys(a.public_key.as_bytes(), b.public_key.as_bytes())
+            .expect_err("merge with different FPs must error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("fingerprint") || msg.contains("Fingerprint"),
+            "unexpected error: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_merge_absorbs_new_valid_secret_subkey() {
+        // Build a "smaller" base cert from a fresh key by dropping one
+        // of its secret subkeys, then merge the full key back in.
+        // The dropped (but primary-bound) subkey should be re-absorbed
+        // through the new-secret-subkey branch in merge_secret_cert.
+        let key = fresh_key();
+        let full_sec = parse_sec(&key.secret_key);
+        assert!(
+            full_sec.secret_subkeys.len() >= 2,
+            "test precondition: fresh key should have multiple secret subkeys"
+        );
+
+        let dropped_fp = fingerprint_hex(&full_sec.secret_subkeys[1].key.fingerprint());
+        let smaller = SignedSecretKey::new(
+            full_sec.primary_key.clone(),
+            full_sec.details.clone(),
+            full_sec.public_subkeys.clone(),
+            full_sec.secret_subkeys[..1].to_vec(),
+        );
+        let smaller_bytes = smaller.to_bytes().unwrap();
+
+        let merged = merge_keys(&smaller_bytes, &key.secret_key).unwrap();
+        let merged_sec = parse_sec(&merged);
+
+        let got: Vec<_> = merged_sec
+            .secret_subkeys
+            .iter()
+            .map(|sk| fingerprint_hex(&sk.key.fingerprint()))
+            .collect();
+        assert!(
+            got.contains(&dropped_fp),
+            "expected re-absorbed secret subkey {} in {:?}",
+            dropped_fp,
+            got
+        );
+    }
+
+    #[test]
+    fn test_merge_rejects_tampered_secret_subkey_binding() {
+        // Attack: craft an update that advertises A's primary but
+        // smuggles a secret subkey whose binding signature was made by
+        // a *different* primary (key B). merge_keys must refuse that
+        // subkey — otherwise anyone who can get a victim to import
+        // their "updated" secret cert can inject an arbitrary subkey.
+        let key_a = fresh_key();
+        let key_b = fresh_key();
+
+        let sec_a = parse_sec(&key_a.secret_key);
+        let sec_b = parse_sec(&key_b.secret_key);
+
+        let stolen_subkey = sec_b.secret_subkeys[0].clone();
+        let stolen_fp = fingerprint_hex(&stolen_subkey.key.fingerprint());
+
+        let mut tampered_sec_subkeys = sec_a.secret_subkeys.clone();
+        tampered_sec_subkeys.push(stolen_subkey);
+        let tampered = SignedSecretKey::new(
+            sec_a.primary_key.clone(),
+            sec_a.details.clone(),
+            sec_a.public_subkeys.clone(),
+            tampered_sec_subkeys,
+        );
+        let tampered_bytes = tampered.to_bytes().unwrap();
+
+        // Primary FP matches (both claim to be A), so FP check passes
+        // and merge enters the sec + sec dispatch.
+        let merged = merge_keys(&key_a.secret_key, &tampered_bytes).unwrap();
+        let merged_sec = parse_sec(&merged);
+
+        let got_sec_fps: Vec<_> = merged_sec
+            .secret_subkeys
+            .iter()
+            .map(|sk| fingerprint_hex(&sk.key.fingerprint()))
+            .collect();
+        assert!(
+            !got_sec_fps.contains(&stolen_fp),
+            "stolen subkey {} leaked into merged cert (got {:?})",
+            stolen_fp,
+            got_sec_fps
+        );
+
+        // Key A's legitimate subkeys must still be present.
+        for leg_sk in &sec_a.secret_subkeys {
+            let fp = fingerprint_hex(&leg_sk.key.fingerprint());
+            assert!(
+                got_sec_fps.contains(&fp),
+                "legitimate subkey {} dropped by merge",
+                fp
+            );
+        }
+    }
+
+    /// Build a variant of `full` where `victim_fp` has been demoted to
+    /// public_subkeys (its secret packet stripped). Returns the
+    /// binary-serialized variant.
+    fn demote_to_public(full: &SignedSecretKey, victim_fp: &pgp::types::Fingerprint) -> Vec<u8> {
+        let mut new_sec_subkeys = Vec::new();
+        let mut new_pub_subkeys = full.public_subkeys.clone();
+        for sk in &full.secret_subkeys {
+            if sk.key.fingerprint() == *victim_fp {
+                // Drop the secret packet; keep the signatures on the public form.
+                new_pub_subkeys.push(sk.signed_public_key());
+            } else {
+                new_sec_subkeys.push(sk.clone());
+            }
+        }
+        SignedSecretKey::new(
+            full.primary_key.clone(),
+            full.details.clone(),
+            new_pub_subkeys,
+            new_sec_subkeys,
+        )
+        .to_bytes()
+        .unwrap()
+    }
+
+    #[test]
+    fn test_merge_promotion_preserves_public_side_signatures() {
+        // orig has K2 in public_subkeys (say, because a previous import
+        // dropped its secret material while keeping the binding sig).
+        // update has K2 back as a full secret subkey — with a *renewed*
+        // binding sig (fresh timestamp, different bytes). Merge must
+        // promote K2 into secret_subkeys AND keep both sigs.
+        let key = fresh_key();
+        let full_sec = parse_sec(&key.secret_key);
+        assert!(
+            full_sec.secret_subkeys.len() >= 2,
+            "test precondition: multiple secret subkeys required"
+        );
+        let victim_fp = full_sec.secret_subkeys[1].key.fingerprint();
+        let victim_fp_hex = fingerprint_hex(&victim_fp);
+
+        // Build a renewed cert whose binding sig on K2 is distinct
+        // bytes from the original (update_subkeys_expiry regenerates
+        // the subkey binding signature with a fresh creation time).
+        let future = chrono::Utc::now() + chrono::Duration::days(365);
+        let renewed = wecanencrypt::update_subkeys_expiry(
+            &key.secret_key,
+            &[&victim_fp_hex],
+            future,
+            TEST_PASSWORD,
+        )
+        .unwrap();
+
+        // orig = key with K2 demoted to public_subkeys (carrying the
+        // ORIGINAL binding sig).
+        let orig_bytes = demote_to_public(&full_sec, &victim_fp);
+
+        // update = renewed full secret cert (K2 on the secret side
+        // carrying the NEW binding sig, different bytes).
+        let merged = merge_keys(&orig_bytes, &renewed).unwrap();
+        let merged_sec = parse_sec(&merged);
+
+        // K2 must now be on the secret side.
+        let k2 = merged_sec
+            .secret_subkeys
+            .iter()
+            .find(|sk| sk.key.fingerprint() == victim_fp)
+            .unwrap_or_else(|| panic!("K2 {} was not promoted to secret_subkeys", victim_fp_hex));
+
+        // K2 must carry BOTH binding sigs (old preserved from the
+        // public-form entry + new from the secret side). Without the
+        // preservation splice, only the renewed sig would survive.
+        assert!(
+            k2.signatures.len() >= 2,
+            "promoted subkey {} lost prior public-side signatures: got {}",
+            victim_fp_hex,
+            k2.signatures.len()
+        );
+
+        // Sanity: K2 must not be on the public side anymore.
+        assert!(
+            !merged_sec
+                .public_subkeys
+                .iter()
+                .any(|sk| sk.fingerprint() == victim_fp),
+            "K2 remained in public_subkeys after promotion"
+        );
+    }
+
+    #[test]
+    fn test_merge_promotion_dedups_identical_binding_sig() {
+        // Same subkey on both sides, with the SAME binding sig on both.
+        // The preservation splice must dedup via merge_signatures — no
+        // double-entry of the identical sig.
+        let key = fresh_key();
+        let full_sec = parse_sec(&key.secret_key);
+        let victim_fp = full_sec.secret_subkeys[1].key.fingerprint();
+
+        // orig = key with K2 demoted to public_subkeys; signatures
+        // there are verbatim copies of the original binding sig.
+        let orig_bytes = demote_to_public(&full_sec, &victim_fp);
+
+        // update = the unmodified full secret cert. K2's secret side
+        // has the exact same binding sig bytes.
+        let merged = merge_keys(&orig_bytes, &key.secret_key).unwrap();
+        let merged_sec = parse_sec(&merged);
+
+        let k2 = merged_sec
+            .secret_subkeys
+            .iter()
+            .find(|sk| sk.key.fingerprint() == victim_fp)
+            .expect("K2 promoted");
+
+        // Only one copy of each distinct signature — duplicates must be
+        // collapsed by merge_signatures' signature_bytes_eq dedup.
+        let original_sig_count = full_sec
+            .secret_subkeys
+            .iter()
+            .find(|sk| sk.key.fingerprint() == victim_fp)
+            .unwrap()
+            .signatures
+            .len();
+        assert_eq!(
+            k2.signatures.len(),
+            original_sig_count,
+            "dedup failed: expected {} sigs, got {}",
+            original_sig_count,
+            k2.signatures.len()
+        );
+    }
+
+    #[test]
+    fn test_merge_promotion_no_op_when_no_public_form() {
+        // When orig does NOT have K_new in public_subkeys at all, the
+        // preservation splice must be a no-op and the incoming secret
+        // subkey's signatures must be taken as-is.
+        let key = fresh_key();
+        let full_sec = parse_sec(&key.secret_key);
+        assert!(full_sec.secret_subkeys.len() >= 2);
+
+        // orig = key with K2 entirely removed (not on any side).
+        let k2_fp = full_sec.secret_subkeys[1].key.fingerprint();
+        let trimmed = SignedSecretKey::new(
+            full_sec.primary_key.clone(),
+            full_sec.details.clone(),
+            full_sec.public_subkeys.clone(),
+            full_sec.secret_subkeys[..1].to_vec(),
+        );
+        let orig_bytes = trimmed.to_bytes().unwrap();
+
+        // update = full secret cert (brings K2 back).
+        let merged = merge_keys(&orig_bytes, &key.secret_key).unwrap();
+        let merged_sec = parse_sec(&merged);
+
+        let k2 = merged_sec
+            .secret_subkeys
+            .iter()
+            .find(|sk| sk.key.fingerprint() == k2_fp)
+            .expect("K2 should be absorbed");
+
+        // Signature count must match what the update originally carried
+        // — nothing spliced in (because there was no public-form entry).
+        let update_sig_count = full_sec
+            .secret_subkeys
+            .iter()
+            .find(|sk| sk.key.fingerprint() == k2_fp)
+            .unwrap()
+            .signatures
+            .len();
+        assert_eq!(k2.signatures.len(), update_sig_count);
+    }
+
+    fn fingerprint_hex(fp: &pgp::types::Fingerprint) -> String {
+        hex::encode_upper(fp.as_bytes())
     }
 }

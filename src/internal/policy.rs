@@ -117,9 +117,7 @@ pub(crate) fn is_subkey_valid(subkey: &SignedPublicSubKey, allow_expired: bool) 
 /// authoritative for key flags, preferences, and other properties.
 ///
 /// Returns `None` if the user has no signatures.
-fn most_recent_self_sig(
-    user: &pgp::types::SignedUser,
-) -> Option<&pgp::packet::Signature> {
+fn most_recent_self_sig(user: &pgp::types::SignedUser) -> Option<&pgp::packet::Signature> {
     user.signatures
         .iter()
         .filter(|sig| {
@@ -172,14 +170,11 @@ pub(crate) fn can_primary_sign(key: &SignedPublicKey) -> bool {
 /// signatures when explicitly uploaded to the card's signing slot.
 #[cfg(feature = "card")]
 pub(crate) fn can_primary_certify(key: &SignedPublicKey) -> bool {
-    key.details
-        .users
-        .iter()
-        .any(|u| {
-            most_recent_self_sig(u)
-                .map(|sig| sig.key_flags().certify())
-                .unwrap_or(false)
-        })
+    key.details.users.iter().any(|u| {
+        most_recent_self_sig(u)
+            .map(|sig| sig.key_flags().certify())
+            .unwrap_or(false)
+    })
 }
 
 /// Check if key details indicate revocation.
