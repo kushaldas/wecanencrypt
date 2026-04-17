@@ -94,7 +94,7 @@ fn find_signing_subkey(secret_key: &SignedSecretKey) -> Option<&SignedSecretSubK
 /// the original data. The recipient can verify and extract the original message.
 ///
 /// # Arguments
-/// * `secret_cert` - The signer's secret key (armored or binary)
+/// * `secret_key` - The signer's secret key (armored or binary)
 /// * `data` - The data to sign
 /// * `password` - Password to unlock the secret key
 ///
@@ -116,8 +116,8 @@ fn find_signing_subkey(secret_key: &SignedSecretKey) -> Option<&SignedSecretSubK
 /// let valid = verify_bytes(public_key.as_bytes(), &signed).unwrap();
 /// assert!(valid);
 /// ```
-pub fn sign_bytes(secret_cert: &[u8], data: &[u8], password: &str) -> Result<Vec<u8>> {
-    sign_bytes_internal(secret_cert, data, password, false, false)
+pub fn sign_bytes(secret_key: &[u8], data: &[u8], password: &str) -> Result<Vec<u8>> {
+    sign_bytes_internal(secret_key, data, password, false, false)
 }
 
 /// Sign bytes with a binary signature, forcing use of the primary key.
@@ -127,15 +127,15 @@ pub fn sign_bytes(secret_cert: &[u8], data: &[u8], password: &str) -> Result<Vec
 /// from the primary key specifically (e.g., for certification-level trust).
 ///
 /// # Arguments
-/// * `secret_cert` - The signer's secret key (armored or binary)
+/// * `secret_key` - The signer's secret key (armored or binary)
 /// * `data` - The data to sign
 /// * `password` - Password to unlock the secret key
 pub fn sign_bytes_with_primary_key(
-    secret_cert: &[u8],
+    secret_key: &[u8],
     data: &[u8],
     password: &str,
 ) -> Result<Vec<u8>> {
-    sign_bytes_internal(secret_cert, data, password, false, true)
+    sign_bytes_internal(secret_key, data, password, false, true)
 }
 
 /// Sign bytes with a cleartext signature.
@@ -144,7 +144,7 @@ pub fn sign_bytes_with_primary_key(
 /// human-readable with the signature appended. Useful for email and text files.
 ///
 /// # Arguments
-/// * `secret_cert` - The signer's secret key (armored or binary)
+/// * `secret_key` - The signer's secret key (armored or binary)
 /// * `data` - The data to sign (should be text)
 /// * `password` - Password to unlock the secret key
 ///
@@ -168,8 +168,8 @@ pub fn sign_bytes_with_primary_key(
 /// // ...
 /// // -----END PGP SIGNATURE-----
 /// ```
-pub fn sign_bytes_cleartext(secret_cert: &[u8], data: &[u8], password: &str) -> Result<Vec<u8>> {
-    sign_bytes_internal(secret_cert, data, password, true, false)
+pub fn sign_bytes_cleartext(secret_key: &[u8], data: &[u8], password: &str) -> Result<Vec<u8>> {
+    sign_bytes_internal(secret_key, data, password, true, false)
 }
 
 /// Sign bytes with a cleartext signature, forcing use of the primary key.
@@ -177,15 +177,15 @@ pub fn sign_bytes_cleartext(secret_cert: &[u8], data: &[u8], password: &str) -> 
 /// Like [`sign_bytes_cleartext`], but always uses the primary key for signing.
 ///
 /// # Arguments
-/// * `secret_cert` - The signer's secret key (armored or binary)
+/// * `secret_key` - The signer's secret key (armored or binary)
 /// * `data` - The data to sign (should be text)
 /// * `password` - Password to unlock the secret key
 pub fn sign_bytes_cleartext_with_primary_key(
-    secret_cert: &[u8],
+    secret_key: &[u8],
     data: &[u8],
     password: &str,
 ) -> Result<Vec<u8>> {
-    sign_bytes_internal(secret_cert, data, password, true, true)
+    sign_bytes_internal(secret_key, data, password, true, true)
 }
 
 /// Create a detached signature for bytes.
@@ -194,7 +194,7 @@ pub fn sign_bytes_cleartext_with_primary_key(
 /// needs both the signature and the original file to verify.
 ///
 /// # Arguments
-/// * `secret_cert` - The signer's secret key (armored or binary)
+/// * `secret_key` - The signer's secret key (armored or binary)
 /// * `data` - The data to sign
 /// * `password` - Password to unlock the secret key
 ///
@@ -216,8 +216,8 @@ pub fn sign_bytes_cleartext_with_primary_key(
 /// let valid = verify_bytes_detached(public_key.as_bytes(), data, signature.as_bytes()).unwrap();
 /// assert!(valid);
 /// ```
-pub fn sign_bytes_detached(secret_cert: &[u8], data: &[u8], password: &str) -> Result<String> {
-    sign_bytes_detached_impl(secret_cert, data, password, false)
+pub fn sign_bytes_detached(secret_key: &[u8], data: &[u8], password: &str) -> Result<String> {
+    sign_bytes_detached_impl(secret_key, data, password, false)
 }
 
 /// Create a detached signature for bytes, forcing use of the primary key.
@@ -226,25 +226,25 @@ pub fn sign_bytes_detached(secret_cert: &[u8], data: &[u8], password: &str) -> R
 /// even when a signing subkey is available.
 ///
 /// # Arguments
-/// * `secret_cert` - The signer's secret key (armored or binary)
+/// * `secret_key` - The signer's secret key (armored or binary)
 /// * `data` - The data to sign
 /// * `password` - Password to unlock the secret key
 pub fn sign_bytes_detached_with_primary_key(
-    secret_cert: &[u8],
+    secret_key: &[u8],
     data: &[u8],
     password: &str,
 ) -> Result<String> {
-    sign_bytes_detached_impl(secret_cert, data, password, true)
+    sign_bytes_detached_impl(secret_key, data, password, true)
 }
 
 /// Internal implementation for detached signatures.
 fn sign_bytes_detached_impl(
-    secret_cert: &[u8],
+    secret_key: &[u8],
     data: &[u8],
     password: &str,
     use_primary: bool,
 ) -> Result<String> {
-    let secret_key = parse_secret_key(secret_cert)?;
+    let secret_key = parse_secret_key(secret_key)?;
     validate_signing_usage(
         secret_key.primary_key.created_at().into(),
         &secret_key.details,
@@ -301,7 +301,7 @@ fn sign_bytes_detached_impl(
 /// Reads the input file, signs it, and writes the signed message to the output file.
 ///
 /// # Arguments
-/// * `secret_cert` - The signer's secret key (armored or binary)
+/// * `secret_key` - The signer's secret key (armored or binary)
 /// * `input` - Path to the file to sign
 /// * `output` - Path to write the signed file
 /// * `password` - Password to unlock the secret key
@@ -315,13 +315,13 @@ fn sign_bytes_detached_impl(
 /// sign_file(&secret_key, "document.pdf", "document.pdf.sig", "password").unwrap();
 /// ```
 pub fn sign_file(
-    secret_cert: &[u8],
+    secret_key: &[u8],
     input: impl AsRef<Path>,
     output: impl AsRef<Path>,
     password: &str,
 ) -> Result<()> {
     let data = std::fs::read(input.as_ref())?;
-    let signed = sign_bytes(secret_cert, &data, password)?;
+    let signed = sign_bytes(secret_key, &data, password)?;
     std::fs::write(output.as_ref(), signed)?;
     Ok(())
 }
@@ -329,18 +329,18 @@ pub fn sign_file(
 /// Sign a file with cleartext signature.
 ///
 /// # Arguments
-/// * `secret_cert` - The signer's secret key
+/// * `secret_key` - The signer's secret key
 /// * `input` - Path to the file to sign (should be text)
 /// * `output` - Path to write the signed file
 /// * `password` - Password to unlock the secret key
 pub fn sign_file_cleartext(
-    secret_cert: &[u8],
+    secret_key: &[u8],
     input: impl AsRef<Path>,
     output: impl AsRef<Path>,
     password: &str,
 ) -> Result<()> {
     let data = std::fs::read(input.as_ref())?;
-    let signed = sign_bytes_cleartext(secret_cert, &data, password)?;
+    let signed = sign_bytes_cleartext(secret_key, &data, password)?;
     std::fs::write(output.as_ref(), signed)?;
     Ok(())
 }
@@ -348,30 +348,30 @@ pub fn sign_file_cleartext(
 /// Create a detached signature for a file.
 ///
 /// # Arguments
-/// * `secret_cert` - The signer's secret key
+/// * `secret_key` - The signer's secret key
 /// * `input` - Path to the file to sign
 /// * `password` - Password to unlock the secret key
 ///
 /// # Returns
 /// The ASCII-armored detached signature.
 pub fn sign_file_detached(
-    secret_cert: &[u8],
+    secret_key: &[u8],
     input: impl AsRef<Path>,
     password: &str,
 ) -> Result<String> {
     let data = std::fs::read(input.as_ref())?;
-    sign_bytes_detached(secret_cert, &data, password)
+    sign_bytes_detached(secret_key, &data, password)
 }
 
 /// Internal implementation for signing with or without cleartext.
 fn sign_bytes_internal(
-    secret_cert: &[u8],
+    secret_key: &[u8],
     data: &[u8],
     password: &str,
     cleartext: bool,
     use_primary: bool,
 ) -> Result<Vec<u8>> {
-    let secret_key = parse_secret_key(secret_cert)?;
+    let secret_key = parse_secret_key(secret_key)?;
     validate_signing_usage(
         secret_key.primary_key.created_at().into(),
         &secret_key.details,

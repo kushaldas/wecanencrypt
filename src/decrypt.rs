@@ -22,7 +22,7 @@ use crate::internal::parse_secret_key;
 /// Use [`decrypt_bytes_legacy`] to opt into decrypting legacy messages.
 ///
 /// # Arguments
-/// * `secret_cert` - The recipient's secret key (armored or binary)
+/// * `secret_key` - The recipient's secret key (armored or binary)
 /// * `ciphertext` - The encrypted data (armored or binary)
 /// * `password` - Password to unlock the secret key
 ///
@@ -48,8 +48,8 @@ use crate::internal::parse_secret_key;
 /// let plaintext = decrypt_bytes(&key.secret_key, &ciphertext, "password").unwrap();
 /// assert_eq!(plaintext, b"Hello!");
 /// ```
-pub fn decrypt_bytes(secret_cert: &[u8], ciphertext: &[u8], password: &str) -> Result<Vec<u8>> {
-    let secret_key = parse_secret_key(secret_cert)?;
+pub fn decrypt_bytes(secret_key: &[u8], ciphertext: &[u8], password: &str) -> Result<Vec<u8>> {
+    let secret_key = parse_secret_key(secret_key)?;
     decrypt_with_key(&secret_key, ciphertext, password, false)
 }
 
@@ -60,18 +60,18 @@ pub fn decrypt_bytes(secret_cert: &[u8], ciphertext: &[u8], password: &str) -> R
 /// historical data encrypted before 2007 that cannot be re-encrypted.
 ///
 /// # Arguments
-/// * `secret_cert` - The recipient's secret key (armored or binary)
+/// * `secret_key` - The recipient's secret key (armored or binary)
 /// * `ciphertext` - The encrypted data (armored or binary)
 /// * `password` - Password to unlock the secret key
 ///
 /// # Returns
 /// The decrypted plaintext bytes.
 pub fn decrypt_bytes_legacy(
-    secret_cert: &[u8],
+    secret_key: &[u8],
     ciphertext: &[u8],
     password: &str,
 ) -> Result<Vec<u8>> {
-    let secret_key = parse_secret_key(secret_cert)?;
+    let secret_key = parse_secret_key(secret_key)?;
     decrypt_with_key(&secret_key, ciphertext, password, true)
 }
 
@@ -137,18 +137,18 @@ pub fn decrypt_with_key(
 /// Decrypt a file using a secret key.
 ///
 /// # Arguments
-/// * `secret_cert` - The recipient's secret key
+/// * `secret_key` - The recipient's secret key
 /// * `input` - Path to the encrypted file
 /// * `output` - Path to write the decrypted file
 /// * `password` - Password to unlock the secret key
 pub fn decrypt_file(
-    secret_cert: &[u8],
+    secret_key: &[u8],
     input: impl AsRef<Path>,
     output: impl AsRef<Path>,
     password: &str,
 ) -> Result<()> {
     let ciphertext = std::fs::read(input.as_ref())?;
-    let plaintext = decrypt_bytes(secret_cert, &ciphertext, password)?;
+    let plaintext = decrypt_bytes(secret_key, &ciphertext, password)?;
     std::fs::write(output.as_ref(), plaintext)?;
     Ok(())
 }
@@ -156,19 +156,19 @@ pub fn decrypt_file(
 /// Decrypt data from a reader to a file.
 ///
 /// # Arguments
-/// * `secret_cert` - The recipient's secret key
+/// * `secret_key` - The recipient's secret key
 /// * `reader` - Source of encrypted data
 /// * `output` - Path to write the decrypted file
 /// * `password` - Password to unlock the secret key
 pub fn decrypt_reader_to_file<R: Read>(
-    secret_cert: &[u8],
+    secret_key: &[u8],
     mut reader: R,
     output: impl AsRef<Path>,
     password: &str,
 ) -> Result<()> {
     let mut ciphertext = Vec::new();
     reader.read_to_end(&mut ciphertext)?;
-    let plaintext = decrypt_bytes(secret_cert, &ciphertext, password)?;
+    let plaintext = decrypt_bytes(secret_key, &ciphertext, password)?;
     std::fs::write(output.as_ref(), plaintext)?;
     Ok(())
 }

@@ -16,10 +16,10 @@ use zeroize::Zeroizing;
 
 use crate::error::{Error, Result};
 use crate::internal::{
-    fingerprint_to_hex, parse_cert, parse_secret_key, public_key_to_armored, secret_key_to_bytes,
+    fingerprint_to_hex, parse_key, parse_secret_key, public_key_to_armored, secret_key_to_bytes,
 };
-use crate::parse::parse_cert_bytes;
-use crate::types::CertificateInfo;
+use crate::parse::parse_key_bytes;
+use crate::types::KeyInfo;
 
 /// Parse a keyring file containing multiple keys.
 ///
@@ -27,7 +27,7 @@ use crate::types::CertificateInfo;
 /// * `path` - Path to the keyring file
 ///
 /// # Returns
-/// A list of (CertificateInfo, raw_bytes) for each key in the keyring.
+/// A list of (KeyInfo, raw_bytes) for each key in the keyring.
 ///
 /// # Example
 /// ```ignore
@@ -37,7 +37,7 @@ use crate::types::CertificateInfo;
 ///     println!("Key: {} - {}", info.fingerprint, info.user_ids.first().unwrap_or(&"".to_string()));
 /// }
 /// ```
-pub fn parse_keyring_file(path: impl AsRef<Path>) -> Result<Vec<(CertificateInfo, Vec<u8>)>> {
+pub fn parse_keyring_file(path: impl AsRef<Path>) -> Result<Vec<(KeyInfo, Vec<u8>)>> {
     let keyring_data = std::fs::read(path.as_ref())?;
     parse_keyring_bytes(&keyring_data)
 }
@@ -48,8 +48,8 @@ pub fn parse_keyring_file(path: impl AsRef<Path>) -> Result<Vec<(CertificateInfo
 /// * `data` - Keyring data (armored or binary)
 ///
 /// # Returns
-/// A list of (CertificateInfo, raw_bytes) for each key.
-pub fn parse_keyring_bytes(data: &[u8]) -> Result<Vec<(CertificateInfo, Vec<u8>)>> {
+/// A list of (KeyInfo, raw_bytes) for each key.
+pub fn parse_keyring_bytes(data: &[u8]) -> Result<Vec<(KeyInfo, Vec<u8>)>> {
     let mut results = Vec::new();
 
     // Try to parse as multiple public keys
@@ -61,7 +61,7 @@ pub fn parse_keyring_bytes(data: &[u8]) -> Result<Vec<(CertificateInfo, Vec<u8>)
         match key_result {
             Ok(key) => {
                 let bytes = key.to_bytes().map_err(|e| Error::Crypto(e.to_string()))?;
-                let info = parse_cert_bytes(&bytes, true)?;
+                let info = parse_key_bytes(&bytes, true)?;
                 results.push((info, bytes));
             }
             Err(e) => {
@@ -91,7 +91,7 @@ pub fn export_keyring_file(keys: &[&[u8]], output: impl AsRef<Path>) -> Result<(
     let mut keyring_data = Vec::new();
 
     for key_data in keys {
-        let (public_key, _is_secret) = parse_cert(key_data)?;
+        let (public_key, _is_secret) = parse_key(key_data)?;
         let bytes = public_key
             .to_bytes()
             .map_err(|e| Error::Crypto(e.to_string()))?;
@@ -113,7 +113,7 @@ pub fn export_keyring_armored(keys: &[&[u8]]) -> Result<String> {
     let mut all_armored = String::new();
 
     for key_data in keys {
-        let (public_key, _is_secret) = parse_cert(key_data)?;
+        let (public_key, _is_secret) = parse_key(key_data)?;
         let armored = public_key_to_armored(&public_key)?;
         all_armored.push_str(&armored);
         all_armored.push('\n');
@@ -146,8 +146,8 @@ pub fn export_keyring_armored(keys: &[&[u8]]) -> Result<String> {
 /// * [`Error::InvalidInput`] if the two keys have different primary
 ///   fingerprints.
 pub fn merge_keys(key_data: &[u8], update_data: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
-    let (orig_public, orig_is_secret) = parse_cert(key_data)?;
-    let (update_public, update_is_secret) = parse_cert(update_data)?;
+    let (orig_public, orig_is_secret) = parse_key(key_data)?;
+    let (update_public, update_is_secret) = parse_key(update_data)?;
 
     let fp1 = fingerprint_to_hex(&orig_public.primary_key);
     let fp2 = fingerprint_to_hex(&update_public.primary_key);

@@ -12,8 +12,8 @@ pub enum Error {
     #[error("Cryptographic operation failed: {0}")]
     Crypto(String),
 
-    /// Certificate parsing failed
-    #[error("Certificate parsing failed: {0}")]
+    /// Key parsing failed
+    #[error("Key parsing failed: {0}")]
     Parse(String),
 
     /// Invalid password or unable to decrypt secret key
@@ -64,15 +64,15 @@ pub enum Error {
     #[error("No suitable authentication subkey found")]
     NoAuthenticationSubkey,
 
-    /// Certificate does not contain secret key material
-    #[error("Certificate does not contain secret key material")]
+    /// Key does not contain secret key material
+    #[error("Key does not contain secret key material")]
     NoSecretKey,
 
     /// Armored data is malformed
     #[error("Malformed armored data: {0}")]
     MalformedArmor(String),
 
-    /// User ID not found in certificate
+    /// User ID not found in key
     #[error("User ID not found: {0}")]
     UidNotFound(String),
 

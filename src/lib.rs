@@ -8,7 +8,7 @@
 //! - **Key Generation**: Create RSA, Curve25519, or NIST curve keys
 //! - **Encryption/Decryption**: Encrypt to one or multiple recipients
 //! - **Signing/Verification**: Create and verify signatures
-//! - **Certificate Management**: Parse, modify, and export certificates
+//! - **Key Management**: Parse, modify, and export OpenPGP keys
 //! - **Key Storage**: SQLite-backed keystore (optional feature)
 //!
 //! ## Migrating to 0.6.0
@@ -20,7 +20,7 @@
 //!   implements `Deref<Target = Vec<u8>>`, so most code works unchanged.
 //!   If you need a `Vec<u8>`, call `.to_vec()`.
 //!
-//! - **`CertificateInfo.user_ids`** is now `Vec<UserIDInfo>` (was `Vec<String>`).
+//! - **`KeyInfo.user_ids`** is now `Vec<UserIDInfo>` (was `Vec<String>`).
 //!   Each UID now includes `value` (the string), `revoked` (bool), and
 //!   `certifications` (third-party signatures). Access the UID string via
 //!   `.value` (e.g., `info.user_ids[0].value`).
@@ -75,7 +75,7 @@
 //! ## Design
 //!
 //! This library uses a functional API - all operations are standalone functions
-//! that take certificate data as `&[u8]`. This provides maximum flexibility
+//! that take key data as `&[u8]`. This provides maximum flexibility
 //! and avoids the overhead of wrapper types.
 
 // Re-export rpgp crate
@@ -108,17 +108,15 @@ pub use error::{Error, Result};
 
 // Re-export all public types
 pub use types::{
-    AvailableSubkey, CertificateInfo, CertificationType, CipherSuite, GeneratedKey,
-    KeyCipherDetails, KeyType, RsaPublicKey, SigningPublicKey, SubkeyFlags, SubkeyInfo,
-    UIDCertification, UserIDInfo,
+    AvailableSubkey, CertificationType, CipherSuite, GeneratedKey, KeyCipherDetails, KeyInfo,
+    KeyType, RsaPublicKey, SigningPublicKey, SubkeyFlags, SubkeyInfo, UIDCertification, UserIDInfo,
 };
 
 // Re-export parsing functions
 pub use parse::{
     get_all_available_subkeys, get_available_authentication_subkeys,
     get_available_encryption_subkeys, get_available_signing_subkeys, get_key_cipher_details,
-    has_available_encryption_subkey, has_available_signing_subkey, parse_cert_bytes,
-    parse_cert_file,
+    has_available_encryption_subkey, has_available_signing_subkey, parse_key_bytes, parse_key_file,
 };
 
 // Re-export encryption functions

@@ -8,15 +8,15 @@ on top of [rpgp](https://github.com/rpgp/rpgp) (pgp v0.19).
 - **Key Generation**: Create OpenPGP keys with multiple cipher suites (Cv25519, Cv25519Modern, Cv448Modern, NIST P-256/P-384/P-521, RSA-2048/4096)
 - **Encryption/Decryption**: Encrypt to one or multiple recipients (SEIPD v1 default, SEIPD v2 AEAD available), reject legacy SED by default
 - **Signing/Verification**: Inline, cleartext, and detached signatures with subkey preference; verification filters to signing-capable subkeys only
-- **Certificate Merging**: Proper packet-level merge with signature deduplication, following the rpgpie/rsop algorithm
+- **Key Merging**: Proper packet-level merge with signature deduplication, following the rpgpie/rsop algorithm
 - **Key Management**: Update expiration (primary and per-subkey), add/revoke UIDs, revoke keys, change passwords, third-party certification (4 levels)
-- **Key Parsing**: Parse certificates, extract subkey info, query available subkeys by capability
-- **Keyring Support**: Parse and export GPG keyrings with multiple certificates
+- **Key Parsing**: Parse keys, extract subkey info, query available subkeys by capability
+- **Keyring Support**: Parse and export GPG keyrings containing multiple keys
 - **SSH Key Export**: Convert OpenPGP authentication keys to SSH public key format (Ed25519, RSA, ECDSA)
 - **Network Operations**: Fetch keys via WKD (Web Key Directory) and VKS keyservers
 - **DNS DANE**: Fetch keys via OPENPGPKEY DNS records (RFC 7929)
 - **KeyStore**: SQLite-backed key storage with search, card-key associations, and management capabilities
-- **Smart Card Support**: Upload keys to YubiKey/OpenPGP cards, sign and decrypt on-card, discover which cards hold keys for a certificate, configure touch policies
+- **Smart Card Support**: Upload keys to YubiKey/OpenPGP cards, sign and decrypt on-card, discover which cards hold keys for a given key, configure touch policies
 
 ## Cipher Suites
 
@@ -60,15 +60,15 @@ use wecanencrypt::encrypt_bytes_v2;
 let encrypted = encrypt_bytes_v2(public_key.as_bytes(), plaintext, true)?;
 ```
 
-## Certificate Merging
+## Key Merging
 
-Merge updated certificates (e.g., after fetching from a keyserver) with proper
+Merge updated keys (e.g., after fetching from a keyserver) with proper
 signature deduplication:
 
 ```rust
 use wecanencrypt::merge_keys;
 
-let merged = merge_keys(&original_cert, &updated_cert, false)?;
+let merged = merge_keys(&original_key, &updated_key)?;
 ```
 
 The merge handles direct key signatures, revocation signatures, subkeys,
@@ -93,7 +93,7 @@ if is_card_connected() {
     let secret_key = std::fs::read("secret.asc")?;
     upload_key_to_card(&secret_key, b"password", CardKeySlot::Signing, b"12345678")?;
 
-    // Find which cards hold keys for a certificate
+    // Find which cards hold keys for a given key
     let public_key = std::fs::read("pubkey.asc")?;
     let matches = find_cards_for_key(&public_key)?;
     for m in &matches {
@@ -116,10 +116,10 @@ Fetch OpenPGP keys published in DNS via OPENPGPKEY records ([RFC 7929](https://d
 use wecanencrypt::fetch_key_by_email_from_dane;
 
 // Uses the system DNS resolver by default
-let cert = fetch_key_by_email_from_dane("user@example.com", None)?;
+let key = fetch_key_by_email_from_dane("user@example.com", None)?;
 
 // Or specify a resolver explicitly
-let cert = fetch_key_by_email_from_dane("user@example.com", Some("8.8.8.8:53"))?;
+let key = fetch_key_by_email_from_dane("user@example.com", Some("8.8.8.8:53"))?;
 ```
 
 ## Security Policy
@@ -127,9 +127,11 @@ let cert = fetch_key_by_email_from_dane("user@example.com", Some("8.8.8.8:53"))?
 The library enforces RFC 4880 section 5.2.3.3: when multiple self-signatures
 exist on a component (User ID or subkey), only the most recent one (by creation
 timestamp) is authoritative for key flags, expiration, and preferences. This
-matters after certificate merges where old and new self-signatures coexist.
+matters after key merges where old and new self-signatures coexist.
 
 See [docs/adr/0001-rfc4880-latest-self-signature-wins.md](docs/adr/0001-rfc4880-latest-self-signature-wins.md) for details.
+
+Release history lives in [CHANGELOG.md](CHANGELOG.md).
 
 Other policy decisions:
 - Symmetric algorithm allowlist per RFC 9580 section 9.3 (AES, Twofish, Camellia only)

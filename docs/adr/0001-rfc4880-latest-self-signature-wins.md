@@ -27,7 +27,7 @@ This mismatch created a correctness problem: if a key owner issued a
 newer self-signature removing the signing capability (e.g., converting
 to certify-only), the library would still report the key as
 signing-capable because the older self-signature still had the flag.
-After a certificate merge, both old and new self-signatures coexist,
+After a key merge, both old and new self-signatures coexist,
 making this scenario realistic.
 
 A cross-analysis against rsop/rpgpie (the reference SOP implementation
@@ -60,7 +60,7 @@ across the library:
 5. **Verification filtering**: Add `can_subkey_sign()` to all five
    verification code paths so only signing-capable subkeys are tried.
 
-6. **Certificate merge**: Implement proper packet-level merge
+6. **Key merge**: Implement proper packet-level merge
    (matching rpgpie's algorithm) so that renewed self-signatures
    accumulate correctly and the "latest wins" consumers see the right
    data.
@@ -78,7 +78,7 @@ across the library:
 - Third-party certifications cannot override the key owner's expiry
   even if they carry a `KeyExpirationTime` subpacket with a newer
   creation timestamp.
-- Certificate merge followed by flag evaluation produces correct
+- Key merge followed by flag evaluation produces correct
   results.
 - Verification no longer wastes computation trying non-signing subkeys.
 

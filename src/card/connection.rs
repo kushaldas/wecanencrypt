@@ -770,13 +770,13 @@ pub fn set_public_key_url(url: &str, admin_pin: &[u8], ident: Option<&str>) -> R
 
 /// Find all connected smart cards that hold subkeys belonging to a given OpenPGP key.
 ///
-/// Parses the certificate, enumerates all connected cards, and checks each card's
-/// three key slots (signature, encryption, authentication) against the certificate's
+/// Parses the key, enumerates all connected cards, and checks each card's
+/// three key slots (signature, encryption, authentication) against the key's
 /// primary key fingerprint and all subkey fingerprints.
 ///
 /// # Arguments
 ///
-/// * `cert_data` - The public certificate data (armored or binary)
+/// * `key_data` - The public key data (armored or binary)
 ///
 /// # Returns
 ///
@@ -789,8 +789,8 @@ pub fn set_public_key_url(url: &str, admin_pin: &[u8], ident: Option<&str>) -> R
 /// ```no_run
 /// use wecanencrypt::card::find_cards_for_key;
 ///
-/// let cert = std::fs::read("pubkey.asc").unwrap();
-/// let matches = find_cards_for_key(&cert).unwrap();
+/// let key = std::fs::read("pubkey.asc").unwrap();
+/// let matches = find_cards_for_key(&key).unwrap();
 /// for m in &matches {
 ///     println!("Card {} has {} matching slots", m.card.ident, m.matching_slots.len());
 ///     for slot in &m.matching_slots {
@@ -798,9 +798,9 @@ pub fn set_public_key_url(url: &str, admin_pin: &[u8], ident: Option<&str>) -> R
 ///     }
 /// }
 /// ```
-pub fn find_cards_for_key(cert_data: &[u8]) -> Result<Vec<CardKeyMatch>> {
-    // Parse the certificate to extract all fingerprints
-    let cert_info = crate::parse_cert_bytes(cert_data, true)?;
+pub fn find_cards_for_key(key_data: &[u8]) -> Result<Vec<CardKeyMatch>> {
+    // Parse the key to extract all fingerprints
+    let cert_info = crate::parse_key_bytes(key_data, true)?;
 
     // Build a list of all fingerprints (primary + subkeys), normalized to lowercase
     let mut key_fingerprints: Vec<String> = Vec::new();

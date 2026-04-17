@@ -1,6 +1,6 @@
-//! Certificate parsing functions.
+//! OpenPGP key parsing functions.
 //!
-//! This module provides functions for parsing OpenPGP certificates from
+//! This module provides functions for parsing OpenPGP keys from
 //! various sources and extracting information from them.
 
 use std::path::Path;
@@ -11,56 +11,55 @@ use pgp::types::KeyDetails;
 use crate::error::Result;
 use crate::internal::{
     fingerprint_to_hex, get_algorithm_name, get_key_bit_size, is_subkey_revoked, is_subkey_valid,
-    keyid_to_hex, parse_cert, system_time_to_datetime,
+    keyid_to_hex, parse_key, system_time_to_datetime,
 };
 use crate::types::{
-    AvailableSubkey, CertificateInfo, KeyCipherDetails, KeyType, SubkeyInfo, UIDCertification,
-    UserIDInfo,
+    AvailableSubkey, KeyCipherDetails, KeyInfo, KeyType, SubkeyInfo, UIDCertification, UserIDInfo,
 };
 
-/// Parse a certificate from bytes and extract its information.
+/// Parse an OpenPGP key from bytes and extract its information.
 ///
 /// # Arguments
-/// * `data` - Certificate data (armored or binary)
-/// * `allow_expired` - If true, allows parsing of expired certificates
+/// * `data` - Key data (armored or binary)
+/// * `allow_expired` - If true, allows parsing of expired keys
 ///
 /// # Returns
-/// Certificate information including user IDs, fingerprint, and subkey details.
+/// Key information including user IDs, fingerprint, and subkey details.
 ///
 /// # Example
 /// ```ignore
 /// // Ignored: illustrative example with placeholder file path
-/// let cert_data = std::fs::read("key.asc")?;
-/// let info = parse_cert_bytes(&cert_data, false)?;
+/// let key_data = std::fs::read("key.asc")?;
+/// let info = parse_key_bytes(&key_data, false)?;
 /// println!("Fingerprint: {}", info.fingerprint);
 /// ```
-pub fn parse_cert_bytes(data: &[u8], allow_expired: bool) -> Result<CertificateInfo> {
-    let (public_key, is_secret) = parse_cert(data)?;
-    extract_cert_info(&public_key, is_secret, allow_expired)
+pub fn parse_key_bytes(data: &[u8], allow_expired: bool) -> Result<KeyInfo> {
+    let (public_key, is_secret) = parse_key(data)?;
+    extract_key_info(&public_key, is_secret, allow_expired)
 }
 
-/// Parse a certificate from a file and extract its information.
+/// Parse an OpenPGP key from a file and extract its information.
 ///
 /// # Arguments
-/// * `path` - Path to the certificate file
-/// * `allow_expired` - If true, allows parsing of expired certificates
+/// * `path` - Path to the key file
+/// * `allow_expired` - If true, allows parsing of expired keys
 ///
 /// # Returns
-/// Certificate information including user IDs, fingerprint, and subkey details.
-pub fn parse_cert_file(path: impl AsRef<Path>, allow_expired: bool) -> Result<CertificateInfo> {
+/// Key information including user IDs, fingerprint, and subkey details.
+pub fn parse_key_file(path: impl AsRef<Path>, allow_expired: bool) -> Result<KeyInfo> {
     let data = std::fs::read(path.as_ref())?;
-    parse_cert_bytes(&data, allow_expired)
+    parse_key_bytes(&data, allow_expired)
 }
 
-/// Get cipher details for all keys in a certificate.
+/// Get cipher details for all keys in an OpenPGP key bundle.
 ///
 /// # Arguments
-/// * `data` - Certificate data (armored or binary)
+/// * `data` - Key data (armored or binary)
 ///
 /// # Returns
 /// A list of cipher details for the primary key and all subkeys.
 pub fn get_key_cipher_details(data: &[u8]) -> Result<Vec<KeyCipherDetails>> {
-    let (public_key, _) = parse_cert(data)?;
+    let (public_key, _) = parse_key(data)?;
     let mut details = Vec::new();
 
     // Primary key
@@ -82,12 +81,12 @@ pub fn get_key_cipher_details(data: &[u8]) -> Result<Vec<KeyCipherDetails>> {
     Ok(details)
 }
 
-/// Extract certificate information from a parsed cert.
-fn extract_cert_info(
+/// Extract OpenPGP key information from a parsed key.
+fn extract_key_info(
     public_key: &SignedPublicKey,
     is_secret: bool,
     allow_expired: bool,
-) -> Result<CertificateInfo> {
+) -> Result<KeyInfo> {
     // Get user IDs with certification details
     let primary_fp = fingerprint_to_hex(&public_key.primary_key);
     let user_ids: Vec<UserIDInfo> = public_key
@@ -194,7 +193,7 @@ fn extract_cert_info(
     // Get subkey info
     let subkeys = extract_subkey_info(public_key, allow_expired);
 
-    Ok(CertificateInfo {
+    Ok(KeyInfo {
         user_ids,
         fingerprint,
         key_id,
@@ -270,7 +269,7 @@ fn determine_key_type(subkey: &pgp::composed::SignedPublicSubKey) -> KeyType {
 /// Get available encryption subkeys (valid, not expired, not revoked).
 ///
 /// # Arguments
-/// * `data` - Certificate data (armored or binary)
+/// * `data` - Key data (armored or binary)
 ///
 /// # Returns
 /// List of available encryption subkeys.
@@ -283,7 +282,7 @@ pub fn get_available_encryption_subkeys(data: &[u8]) -> Result<Vec<AvailableSubk
 /// Get available signing subkeys (valid, not expired, not revoked).
 ///
 /// # Arguments
-/// * `data` - Certificate data (armored or binary)
+/// * `data` - Key data (armored or binary)
 ///
 /// # Returns
 /// List of available signing subkeys.
@@ -294,7 +293,7 @@ pub fn get_available_signing_subkeys(data: &[u8]) -> Result<Vec<AvailableSubkey>
 /// Get available authentication subkeys (valid, not expired, not revoked).
 ///
 /// # Arguments
-/// * `data` - Certificate data (armored or binary)
+/// * `data` - Key data (armored or binary)
 ///
 /// # Returns
 /// List of available authentication subkeys.
@@ -305,7 +304,7 @@ pub fn get_available_authentication_subkeys(data: &[u8]) -> Result<Vec<Available
 /// Get all available subkeys (valid, not expired, not revoked).
 ///
 /// # Arguments
-/// * `data` - Certificate data (armored or binary)
+/// * `data` - Key data (armored or binary)
 ///
 /// # Returns
 /// List of all available subkeys.
@@ -318,7 +317,7 @@ fn get_available_subkeys_by_type<F>(data: &[u8], predicate: F) -> Result<Vec<Ava
 where
     F: Fn(&pgp::packet::KeyFlags) -> bool,
 {
-    let (public_key, _) = parse_cert(data)?;
+    let (public_key, _) = parse_key(data)?;
     let mut available = Vec::new();
 
     for subkey in &public_key.public_subkeys {
@@ -365,10 +364,10 @@ where
     Ok(available)
 }
 
-/// Check if a certificate has any available encryption subkeys.
+/// Check if an OpenPGP key has any available encryption subkeys.
 ///
 /// # Arguments
-/// * `data` - Certificate data (armored or binary)
+/// * `data` - Key data (armored or binary)
 ///
 /// # Returns
 /// True if at least one valid encryption subkey is available.
@@ -376,10 +375,10 @@ pub fn has_available_encryption_subkey(data: &[u8]) -> Result<bool> {
     Ok(!get_available_encryption_subkeys(data)?.is_empty())
 }
 
-/// Check if a certificate has any available signing subkeys.
+/// Check if an OpenPGP key has any available signing subkeys.
 ///
 /// # Arguments
-/// * `data` - Certificate data (armored or binary)
+/// * `data` - Key data (armored or binary)
 ///
 /// # Returns
 /// True if at least one valid signing subkey is available.

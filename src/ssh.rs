@@ -13,10 +13,10 @@ use crate::error::{Error, Result};
 use crate::internal::{is_key_expired, is_subkey_valid, parse_public_key, parse_secret_key};
 use crate::types::{RsaPublicKey, SigningPublicKey};
 
-/// Convert a certificate's authentication key to SSH public key format.
+/// Convert a key's authentication key to SSH public key format.
 ///
 /// # Arguments
-/// * `cert_data` - The certificate data
+/// * `key_data` - The key data
 /// * `comment` - Optional comment to append (e.g., email address)
 ///
 /// # Returns
@@ -25,12 +25,12 @@ use crate::types::{RsaPublicKey, SigningPublicKey};
 /// # Example
 /// ```ignore
 /// // Ignored: illustrative example with placeholder file path
-/// let cert = std::fs::read("key.asc")?;
-/// let ssh_key = get_ssh_pubkey(&cert, Some("user@example.com"))?;
+/// let key = std::fs::read("key.asc")?;
+/// let ssh_key = get_ssh_pubkey(&key, Some("user@example.com"))?;
 /// println!("{}", ssh_key);
 /// ```
-pub fn get_ssh_pubkey(cert_data: &[u8], comment: Option<&str>) -> Result<String> {
-    let public_key = parse_public_key(cert_data)?;
+pub fn get_ssh_pubkey(key_data: &[u8], comment: Option<&str>) -> Result<String> {
+    let public_key = parse_public_key(key_data)?;
 
     // Find an authentication-capable subkey
     let auth_subkey = public_key.public_subkeys.iter().find(|sk| {
@@ -223,12 +223,12 @@ fn write_ssh_mpint(buf: &mut Vec<u8>, data: &[u8]) {
 /// Get signing public key components for external verification.
 ///
 /// # Arguments
-/// * `cert_data` - The certificate data
+/// * `key_data` - The key data
 ///
 /// # Returns
 /// Public key components in algorithm-specific format.
-pub fn get_signing_pubkey(cert_data: &[u8]) -> Result<SigningPublicKey> {
-    let public_key = parse_public_key(cert_data)?;
+pub fn get_signing_pubkey(key_data: &[u8]) -> Result<SigningPublicKey> {
+    let public_key = parse_public_key(key_data)?;
 
     // Find a signing-capable subkey
     let sign_subkey = public_key.public_subkeys.iter().find(|sk| {
@@ -388,7 +388,7 @@ pub enum SshHashAlgorithm {
 /// OpenPGP signature).
 ///
 /// # Arguments
-/// * `secret_cert` - The secret certificate data (armored or binary)
+/// * `secret_key` - The secret key data (armored or binary)
 /// * `data` - The data to sign (for Ed25519: the raw message; for ECDSA/RSA: the pre-hashed digest)
 /// * `password` - Password to unlock the secret key
 /// * `hash_alg` - Hash algorithm hint (used for RSA PKCS#1v15 signing)
@@ -396,12 +396,12 @@ pub enum SshHashAlgorithm {
 /// # Returns
 /// An `SshSignResult` containing the algorithm-specific signature.
 pub fn ssh_sign_raw(
-    secret_cert: &[u8],
+    secret_key: &[u8],
     data: &[u8],
     password: &str,
     hash_alg: SshHashAlgorithm,
 ) -> Result<SshSignResult> {
-    let secret_key = parse_secret_key(secret_cert)?;
+    let secret_key = parse_secret_key(secret_key)?;
     let pw: Password = password.into();
 
     // Find the authentication subkey

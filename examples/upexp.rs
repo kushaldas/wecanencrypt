@@ -19,7 +19,7 @@ use wecanencrypt::card::{
     is_card_connected, update_primary_expiry_on_card, update_subkeys_expiry_on_card,
     verify_user_pin,
 };
-use wecanencrypt::parse_cert_bytes;
+use wecanencrypt::parse_key_bytes;
 
 fn read_line(prompt: &str) -> String {
     print!("{}", prompt);
@@ -63,7 +63,7 @@ fn main() {
     };
 
     // Parse and display key information
-    let info = match parse_cert_bytes(&public_key, true) {
+    let info = match parse_key_bytes(&public_key, true) {
         Ok(info) => info,
         Err(e) => {
             eprintln!("Error: Failed to parse public key: {}", e);

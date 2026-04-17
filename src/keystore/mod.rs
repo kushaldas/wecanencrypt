@@ -1,6 +1,6 @@
 //! SQLite-backed key storage.
 //!
-//! This module provides persistent storage for OpenPGP certificates
+//! This module provides persistent storage for OpenPGP keys
 //! using SQLite. Keys are stored with their fingerprints, user IDs,
 //! and subkey information for efficient lookup.
 //!
@@ -21,13 +21,13 @@
 //!
 //! // Generate and import a key
 //! let key = create_key_simple("password", &["Alice <alice@example.com>"]).unwrap();
-//! let fingerprint = store.import_cert(&key.secret_key).unwrap();
+//! let fingerprint = store.import_key(&key.secret_key).unwrap();
 //!
 //! println!("Imported key: {}", fingerprint);
 //!
 //! // List all keys
-//! for cert in store.list_certs().unwrap() {
-//!     println!("  {} - {:?}", cert.fingerprint, cert.user_ids);
+//! for key in store.list_keys().unwrap() {
+//!     println!("  {} - {:?}", key.fingerprint, key.user_ids);
 //! }
 //! ```
 //!

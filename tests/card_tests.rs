@@ -1038,7 +1038,7 @@ mod card_tests {
     #[test]
     #[ignore = "requires physical smart card - will reset card"]
     fn test_update_primary_expiry_on_card_cv25519() {
-        use wecanencrypt::parse_cert_bytes;
+        use wecanencrypt::parse_key_bytes;
 
         println!("\n=== Testing Primary Key Expiry Update (CV25519) ===\n");
 
@@ -1057,7 +1057,7 @@ mod card_tests {
 
         // 4. Get original expiry info
         let original_info =
-            parse_cert_bytes(&public_key, true).expect("Failed to parse original certificate");
+            parse_key_bytes(&public_key, true).expect("Failed to parse original certificate");
         println!("Original certificate info:");
         println!("  Primary fingerprint: {}", original_info.fingerprint);
         println!("  Expiration: {:?}", original_info.expiration_time);
@@ -1065,12 +1065,12 @@ mod card_tests {
         // 5. Update primary key expiry (1 year from now = ~31536000 seconds)
         println!("\nUpdating primary key expiry to 1 year from now...");
         let one_year_seconds: u64 = 365 * 24 * 60 * 60;
-        let updated_cert = update_primary_expiry_on_card(&public_key, one_year_seconds, USER_PIN)
+        let updated_key = update_primary_expiry_on_card(&public_key, one_year_seconds, USER_PIN)
             .expect("Failed to update primary expiry on card");
 
         // 6. Verify the updated certificate
         let updated_info =
-            parse_cert_bytes(&updated_cert, true).expect("Failed to parse updated certificate");
+            parse_key_bytes(&updated_key, true).expect("Failed to parse updated certificate");
         println!("\nUpdated certificate info:");
         println!("  Primary fingerprint: {}", updated_info.fingerprint);
         println!("  Expiration: {:?}", updated_info.expiration_time);
@@ -1095,7 +1095,7 @@ mod card_tests {
     #[test]
     #[ignore = "requires physical smart card - will reset card"]
     fn test_update_subkeys_expiry_on_card_cv25519() {
-        use wecanencrypt::parse_cert_bytes;
+        use wecanencrypt::parse_key_bytes;
 
         println!("\n=== Testing Subkey Expiry Update (CV25519) ===\n");
 
@@ -1114,7 +1114,7 @@ mod card_tests {
 
         // 4. Get original certificate info including subkeys
         let original_info =
-            parse_cert_bytes(&public_key, true).expect("Failed to parse original certificate");
+            parse_key_bytes(&public_key, true).expect("Failed to parse original certificate");
         println!("Original certificate info:");
         println!("  Primary fingerprint: {}", original_info.fingerprint);
         println!("  Number of subkeys: {}", original_info.subkeys.len());
@@ -1136,13 +1136,13 @@ mod card_tests {
         // 6. Update subkey expiry (6 months from now)
         println!("\nUpdating subkey expiry to 6 months from now...");
         let six_months_seconds: u64 = 180 * 24 * 60 * 60;
-        let updated_cert =
+        let updated_key =
             update_subkeys_expiry_on_card(&public_key, &subkey_fps, six_months_seconds, USER_PIN)
                 .expect("Failed to update subkeys expiry on card");
 
         // 7. Verify the updated certificate
         let updated_info =
-            parse_cert_bytes(&updated_cert, true).expect("Failed to parse updated certificate");
+            parse_key_bytes(&updated_key, true).expect("Failed to parse updated certificate");
         println!("\nUpdated certificate info:");
         println!("  Primary fingerprint: {}", updated_info.fingerprint);
         println!("  Number of subkeys: {}", updated_info.subkeys.len());
@@ -1182,7 +1182,7 @@ mod card_tests {
     #[test]
     #[ignore = "requires physical smart card - will reset card"]
     fn test_update_full_key_expiry_on_card_cv25519() {
-        use wecanencrypt::parse_cert_bytes;
+        use wecanencrypt::parse_key_bytes;
 
         println!("\n=== Testing Full Key Expiry Update (CV25519) ===\n");
 
@@ -1208,7 +1208,7 @@ mod card_tests {
 
         // 5. Get subkey fingerprints
         let info =
-            parse_cert_bytes(&updated_with_primary, true).expect("Failed to parse certificate");
+            parse_key_bytes(&updated_with_primary, true).expect("Failed to parse certificate");
         let subkey_fps: Vec<&str> = info
             .subkeys
             .iter()
@@ -1227,7 +1227,7 @@ mod card_tests {
 
         // 7. Verify final certificate
         let final_info =
-            parse_cert_bytes(&updated_full, true).expect("Failed to parse final certificate");
+            parse_key_bytes(&updated_full, true).expect("Failed to parse final certificate");
         println!("\nFinal certificate info:");
         println!("  Primary fingerprint: {}", final_info.fingerprint);
         println!("  Primary expiration: {:?}", final_info.expiration_time);

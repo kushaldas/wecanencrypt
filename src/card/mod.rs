@@ -33,10 +33,10 @@
 //!     println!("Card serial: {}", info.serial_number);
 //!
 //!     // Sign data using the card
-//!     let cert = std::fs::read("pubkey.asc").unwrap();
+//!     let key = std::fs::read("pubkey.asc").unwrap();
 //!     let signature = sign_bytes_detached_on_card(
 //!         b"Hello, world!",
-//!         &cert,
+//!         &key,
 //!         b"123456",  // User PIN
 //!     ).unwrap();
 //! }

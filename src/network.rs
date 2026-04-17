@@ -4,7 +4,7 @@
 //! using Web Key Directory (WKD), HKP keyservers, and DNS DANE (OPENPGPKEY records).
 
 use crate::error::{Error, Result};
-use crate::internal::parse_cert;
+use crate::internal::parse_key;
 #[cfg(feature = "network")]
 use crate::internal::{fingerprint_to_hex, keyid_to_hex};
 
@@ -20,12 +20,12 @@ const MAX_KEY_RESPONSE_SIZE: u64 = 10 * 1024 * 1024;
 /// * `email` - Email address to look up
 ///
 /// # Returns
-/// The certificate data if found.
+/// The key data if found.
 ///
 /// # Example
 /// ```ignore
 /// // Ignored: requires network access to WKD servers
-/// let cert = fetch_key_by_email("user@example.com")?;
+/// let key = fetch_key_by_email("user@example.com")?;
 /// ```
 #[cfg(feature = "network")]
 pub fn fetch_key_by_email(email: &str) -> Result<Vec<u8>> {
@@ -47,8 +47,8 @@ pub fn fetch_key_by_email(email: &str) -> Result<Vec<u8>> {
                 if response.status().is_success() {
                     let bytes = read_response_limited(response)?;
 
-                    // Verify it's a valid certificate
-                    let _ = parse_cert(&bytes)?;
+                    // Verify it's a valid key
+                    let _ = parse_key(&bytes)?;
 
                     return Ok(bytes);
                 }
@@ -73,12 +73,12 @@ pub fn fetch_key_by_email(email: &str) -> Result<Vec<u8>> {
 /// * `keyserver` - Optional keyserver URL (defaults to keys.openpgp.org)
 ///
 /// # Returns
-/// The certificate data if found.
+/// The key data if found.
 ///
 /// # Example
 /// ```ignore
 /// // Ignored: requires network access to keyservers
-/// let cert = fetch_key_by_fingerprint(
+/// let key = fetch_key_by_fingerprint(
 ///     "A4F388BBB194925AE301F844C52B42177857DD79",
 ///     None,
 /// )?;
@@ -111,8 +111,8 @@ pub fn fetch_key_by_fingerprint(fingerprint: &str, keyserver: Option<&str>) -> R
 
     let bytes = read_response_limited(response)?;
 
-    // Verify it's a valid certificate and matches the requested fingerprint
-    let (public_key, _) = parse_cert(&bytes)?;
+    // Verify it's a valid key and matches the requested fingerprint
+    let (public_key, _) = parse_key(&bytes)?;
     let fetched_fp = fingerprint_to_hex(&public_key.primary_key);
     if fetched_fp != fingerprint.to_uppercase() {
         return Err(Error::KeyNotFound(format!(
@@ -131,7 +131,7 @@ pub fn fetch_key_by_fingerprint(fingerprint: &str, keyserver: Option<&str>) -> R
 /// * `keyserver` - Optional keyserver URL (defaults to keys.openpgp.org)
 ///
 /// # Returns
-/// The certificate data if found.
+/// The key data if found.
 #[cfg(feature = "network")]
 pub fn fetch_key_by_keyid(key_id: &str, keyserver: Option<&str>) -> Result<Vec<u8>> {
     let server = keyserver.unwrap_or("https://keys.openpgp.org");
@@ -156,8 +156,8 @@ pub fn fetch_key_by_keyid(key_id: &str, keyserver: Option<&str>) -> Result<Vec<u
 
     let bytes = read_response_limited(response)?;
 
-    // Verify it's a valid certificate and matches the requested key ID
-    let (public_key, _) = parse_cert(&bytes)?;
+    // Verify it's a valid key and matches the requested key ID
+    let (public_key, _) = parse_key(&bytes)?;
     let fetched_keyid = keyid_to_hex(&public_key.primary_key);
     if fetched_keyid != key_id.to_uppercase() {
         // Also check subkey IDs — the key ID might refer to a subkey
@@ -189,12 +189,12 @@ pub fn fetch_key_by_keyid(key_id: &str, keyserver: Option<&str>) -> Result<Vec<u
 /// * `keyserver` - Optional keyserver URL (defaults to keys.openpgp.org)
 ///
 /// # Returns
-/// The certificate data if found.
+/// The key data if found.
 ///
 /// # Example
 /// ```ignore
 /// // Ignored: requires network access to keyservers
-/// let cert = fetch_key_by_email_from_keyserver("user@example.com", None)?;
+/// let key = fetch_key_by_email_from_keyserver("user@example.com", None)?;
 /// ```
 #[cfg(feature = "network")]
 pub fn fetch_key_by_email_from_keyserver(email: &str, keyserver: Option<&str>) -> Result<Vec<u8>> {
@@ -220,8 +220,8 @@ pub fn fetch_key_by_email_from_keyserver(email: &str, keyserver: Option<&str>) -
 
     let bytes = read_response_limited(response)?;
 
-    // Verify it's a valid certificate
-    let _ = parse_cert(&bytes)?;
+    // Verify it's a valid key
+    let _ = parse_key(&bytes)?;
 
     Ok(bytes)
 }
@@ -589,10 +589,10 @@ fn dns_query_tcp(name: &str, resolver: &str, wire: &[u8]) -> Result<Vec<u8>> {
 /// use wecanencrypt::fetch_key_by_email_from_dane;
 ///
 /// // Use system DNS resolver
-/// let cert = fetch_key_by_email_from_dane("user@example.com", None)?;
+/// let key = fetch_key_by_email_from_dane("user@example.com", None)?;
 ///
 /// // Use a specific DNS resolver
-/// let cert = fetch_key_by_email_from_dane("user@example.com", Some("8.8.8.8:53"))?;
+/// let key = fetch_key_by_email_from_dane("user@example.com", Some("8.8.8.8:53"))?;
 /// ```
 #[cfg(feature = "dane")]
 pub fn fetch_key_by_email_from_dane(email: &str, dns_resolver: Option<&str>) -> Result<Vec<u8>> {
@@ -606,8 +606,8 @@ pub fn fetch_key_by_email_from_dane(email: &str, dns_resolver: Option<&str>) -> 
 
     let key_bytes = dns_query(&name, &resolver)?;
 
-    // Validate that the returned data is a valid OpenPGP certificate
-    parse_cert(&key_bytes)?;
+    // Validate that the returned data is a valid OpenPGP key
+    parse_key(&key_bytes)?;
 
     Ok(key_bytes)
 }

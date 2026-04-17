@@ -3,7 +3,7 @@
 //! Run with: cargo run --example fetch_key
 
 use std::io::{self, Write};
-use wecanencrypt::{fetch_key_by_email, parse_cert_bytes, KeyType};
+use wecanencrypt::{fetch_key_by_email, parse_key_bytes, KeyType};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Prompt user for email
@@ -22,10 +22,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\nFetching key for '{}'...\n", email);
 
     // Fetch key via WKD
-    let cert_data = fetch_key_by_email(email)?;
+    let key_data = fetch_key_by_email(email)?;
 
     // Parse and display key details
-    let info = parse_cert_bytes(&cert_data, true)?;
+    let info = parse_key_bytes(&key_data, true)?;
 
     println!("Key found!");
     println!("==========\n");

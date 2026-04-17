@@ -26,7 +26,7 @@ Three concerns collide in this function:
 2. **Treatment of secret key material.** OpenPGP data can arrive as a
    Transferable Public Key (TPK) or a Transferable Secret Key (TSK).
    The old implementation parsed both sides through
-   `parse_cert → SignedSecretKey::to_public_key()`, which *unconditionally
+   `parse_key → SignedSecretKey::to_public_key()`, which *unconditionally
    strips secret packets*. Re-importing a `.sec` file for a key that
    was already stored as public would silently downgrade the stored
    key to public-only (observed in the field via
@@ -63,7 +63,7 @@ always post-process the result by calling `to_public_key()` itself.
 ### 1. Dispatch matrix
 
 `merge_keys(orig, update)` dispatches on the secret-ness of each side,
-detected via `parse_cert` (which already returns `(SignedPublicKey,
+detected via `parse_key` (which already returns `(SignedPublicKey,
 is_secret: bool)`):
 
 | `orig`  | `update` | Result                                                                             |
@@ -82,7 +82,7 @@ serialized secret bytes are scrubbed on drop.
 The previous `force: bool` parameter bypassed the primary-FP check.
 That parameter is removed. There is no legitimate workflow for
 merging two different primary keys: a user who actually wants to
-import key B should call `import_cert(B)` directly, not
+import key B should call `import_key(B)` directly, not
 `merge_keys(A, B)`.
 
 ### 3. Binding verification when absorbing a new secret subkey
@@ -221,7 +221,7 @@ Error::InvalidInput("Key fingerprints do not match: ABCD… vs DEAD…")
 ```
 
 No override. If the caller genuinely wants to add DEAD… to the store,
-they should `import_cert(update_data)` directly.
+they should `import_key(update_data)` directly.
 
 #### 5.6 Tampered secret subkey — rejected with warning
 
@@ -283,7 +283,7 @@ is wrapped too (for type uniformity; the zeroing is cheap and
 harmless). This matches the trajectory of commit `1644d9f`
 ("security: apply zeroize to secret key material and card upload
 paths"). `Zeroizing<Vec<u8>>` derefs to `&[u8]`, so existing call
-sites that pass the result into `import_cert` or compare against
+sites that pass the result into `import_key` or compare against
 other byte slices keep working.
 
 ## Consequences
