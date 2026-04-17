@@ -19,7 +19,7 @@ use wecanencrypt::{
     get_pub_key,
     merge_keys,
     // Parsing
-    parse_cert_bytes,
+    parse_key_bytes,
     revoke_uid,
     // Signing
     sign_bytes,
@@ -121,7 +121,7 @@ mod key_generation {
         let uids = &["Alice <alice@example.com>", "Alice Work <alice@work.com>"];
         let key = create_key_simple(TEST_PASSWORD, uids).unwrap();
 
-        let info = parse_cert_bytes(&key.secret_key, true).unwrap();
+        let info = parse_key_bytes(&key.secret_key, true).unwrap();
         assert_eq!(info.user_ids.len(), 2);
         assert!(info
             .user_ids
@@ -170,10 +170,10 @@ mod parsing {
     use super::*;
 
     #[test]
-    fn test_parse_cert_bytes() {
+    fn test_parse_key_bytes() {
         let (secret_key, fingerprint) = generate_test_key();
 
-        let info = parse_cert_bytes(&secret_key, false).unwrap();
+        let info = parse_key_bytes(&secret_key, false).unwrap();
 
         assert_eq!(info.fingerprint, fingerprint);
         assert!(info.is_secret);
@@ -186,7 +186,7 @@ mod parsing {
         let (secret_key, _) = generate_test_key();
         let public_key = get_pub_key(&secret_key).unwrap();
 
-        let info = parse_cert_bytes(public_key.as_bytes(), false).unwrap();
+        let info = parse_key_bytes(public_key.as_bytes(), false).unwrap();
 
         assert!(!info.is_secret);
         assert_eq!(info.user_ids.len(), 1);
@@ -412,7 +412,7 @@ mod encryption {
 
         let (secret_key, _) = generate_test_key();
         let public_key = get_pub_key(&secret_key).unwrap();
-        let info = parse_cert_bytes(&secret_key, true).unwrap();
+        let info = parse_key_bytes(&secret_key, true).unwrap();
 
         let dir = tempdir().unwrap();
         let encrypted_path = dir.path().join("encrypted.pgp");
@@ -738,7 +738,7 @@ mod key_management {
         let new_uid = "New Identity <new@example.com>";
         let updated_key = add_uid(&secret_key, new_uid, TEST_PASSWORD).unwrap();
 
-        let info = parse_cert_bytes(&updated_key, true).unwrap();
+        let info = parse_key_bytes(&updated_key, true).unwrap();
         assert_eq!(info.user_ids.len(), 2);
         assert!(info.user_ids.iter().any(|u| u.value == new_uid));
     }
@@ -763,7 +763,7 @@ mod key_management {
         .unwrap();
 
         // Key should still parse (revoked UID is still present but marked as revoked)
-        let info = parse_cert_bytes(&updated_key, true).unwrap();
+        let info = parse_key_bytes(&updated_key, true).unwrap();
         assert!(!info.user_ids.is_empty());
     }
 
@@ -814,7 +814,7 @@ mod key_management {
         assert!(public_key.contains("-----BEGIN PGP PUBLIC KEY BLOCK-----"));
 
         // Should parse and have same fingerprint
-        let info = parse_cert_bytes(public_key.as_bytes(), false).unwrap();
+        let info = parse_key_bytes(public_key.as_bytes(), false).unwrap();
         assert_eq!(info.fingerprint, fingerprint);
         assert!(!info.is_secret);
     }
@@ -1046,7 +1046,7 @@ mod key_flag_policy {
         )
         .unwrap();
 
-        let info = parse_cert_bytes(&key.secret_key, true).unwrap();
+        let info = parse_key_bytes(&key.secret_key, true).unwrap();
         assert!(
             info.can_primary_sign,
             "Original key should have primary sign capability"
@@ -1055,7 +1055,7 @@ mod key_flag_policy {
         // Create a newer self-sig that REMOVES the sign flag (certify-only).
         let updated = resign_uid_with_flags(&key.secret_key, TEST_PASSWORD, false, true);
 
-        let info2 = parse_cert_bytes(&updated, true).unwrap();
+        let info2 = parse_key_bytes(&updated, true).unwrap();
         assert!(
             !info2.can_primary_sign,
             "After adding newer self-sig without sign flag, can_primary_sign should be false"
@@ -1078,7 +1078,7 @@ mod key_flag_policy {
         )
         .unwrap();
 
-        let info = parse_cert_bytes(&key.secret_key, true).unwrap();
+        let info = parse_key_bytes(&key.secret_key, true).unwrap();
         assert!(
             !info.can_primary_sign,
             "Original key should NOT have primary sign capability"
@@ -1087,7 +1087,7 @@ mod key_flag_policy {
         // Create a newer self-sig that ADDS the sign flag.
         let updated = resign_uid_with_flags(&key.secret_key, TEST_PASSWORD, true, true);
 
-        let info2 = parse_cert_bytes(&updated, true).unwrap();
+        let info2 = parse_key_bytes(&updated, true).unwrap();
         assert!(
             info2.can_primary_sign,
             "After adding newer self-sig with sign flag, can_primary_sign should be true"
@@ -1121,7 +1121,7 @@ mod key_flag_policy {
         // without the sign flag.
         let merged = merge_keys(pub_orig.as_bytes(), pub_updated.as_bytes()).unwrap();
 
-        let info = parse_cert_bytes(&merged, false).unwrap();
+        let info = parse_key_bytes(&merged, false).unwrap();
         assert!(
             !info.can_primary_sign,
             "After merging cert with newer self-sig removing sign flag, can_primary_sign should be false"
@@ -1155,7 +1155,7 @@ mod key_flag_policy {
         // The older self-sig should NOT override the newer one.
         let merged = merge_keys(pub_with_sign.as_bytes(), pub_no_sign.as_bytes()).unwrap();
 
-        let info = parse_cert_bytes(&merged, false).unwrap();
+        let info = parse_key_bytes(&merged, false).unwrap();
         assert!(
             info.can_primary_sign,
             "Merging in older self-sig without sign flag should not override newer self-sig that has it"
@@ -1178,7 +1178,7 @@ mod key_flag_policy {
         )
         .unwrap();
 
-        let info = parse_cert_bytes(&key.secret_key, true).unwrap();
+        let info = parse_key_bytes(&key.secret_key, true).unwrap();
         assert!(
             !info.can_primary_sign,
             "Certify-only key should not have sign capability"
@@ -1190,7 +1190,7 @@ mod key_flag_policy {
         let updated =
             wecanencrypt::update_primary_expiry(&key.secret_key, exp, TEST_PASSWORD).unwrap();
 
-        let info2 = parse_cert_bytes(&updated, true).unwrap();
+        let info2 = parse_key_bytes(&updated, true).unwrap();
         assert!(
             !info2.can_primary_sign,
             "After expiry update, certify-only key should still not have sign capability"
@@ -1240,7 +1240,7 @@ mod merge_secret_dispatch {
         // Must parse as a public key.
         let _pub = parse_pub(&merged);
 
-        let info = parse_cert_bytes(&merged, false).unwrap();
+        let info = parse_key_bytes(&merged, false).unwrap();
         assert!(!info.is_secret);
         assert_eq!(info.fingerprint, key.fingerprint);
     }
@@ -1252,7 +1252,7 @@ mod merge_secret_dispatch {
         let pub_bytes = key.public_key.as_bytes();
         let merged = merge_keys(pub_bytes, &key.secret_key).unwrap();
 
-        let info = parse_cert_bytes(&merged, true).unwrap();
+        let info = parse_key_bytes(&merged, true).unwrap();
         assert!(
             info.is_secret,
             "pub + sec merge should produce a secret cert"
@@ -1275,7 +1275,7 @@ mod merge_secret_dispatch {
 
         let merged = merge_keys(&orig_secret, &updated_secret).unwrap();
 
-        let info = parse_cert_bytes(&merged, true).unwrap();
+        let info = parse_key_bytes(&merged, true).unwrap();
         assert!(
             info.is_secret,
             "sec + sec merge should produce a secret cert"
@@ -1316,7 +1316,7 @@ mod merge_secret_dispatch {
 
         let merged = merge_keys(&secret_bytes, updated_pub.as_bytes()).unwrap();
 
-        let info = parse_cert_bytes(&merged, true).unwrap();
+        let info = parse_key_bytes(&merged, true).unwrap();
         assert!(
             info.is_secret,
             "sec + pub merge must preserve secret material"

@@ -85,7 +85,7 @@ pub struct SlotMatch {
     pub fingerprint: String,
 }
 
-/// A connected card that holds one or more keys from a certificate.
+/// A connected card that holds one or more keys from a key.
 #[derive(Debug, Clone)]
 pub struct CardKeyMatch {
     /// Full card details

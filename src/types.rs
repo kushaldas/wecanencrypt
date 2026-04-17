@@ -1,7 +1,7 @@
 //! Public type definitions for the wecanencrypt library.
 //!
 //! This module contains all the data structures used throughout the library
-//! for representing certificates, keys, and their properties.
+//! for representing OpenPGP keys and their properties.
 
 use chrono::{DateTime, Utc};
 use zeroize::Zeroizing;
@@ -184,20 +184,20 @@ pub struct SubkeyInfo {
     pub bit_length: usize,
 }
 
-/// Parsed certificate information.
+/// Parsed OpenPGP key information.
 #[derive(Debug, Clone)]
-pub struct CertificateInfo {
-    /// List of User IDs associated with this certificate
+pub struct KeyInfo {
+    /// List of User IDs associated with this key
     pub user_ids: Vec<UserIDInfo>,
     /// Primary key fingerprint as hex string
     pub fingerprint: String,
     /// Short key ID (last 16 hex characters)
     pub key_id: String,
-    /// Whether this certificate contains secret key material
+    /// Whether this key contains secret key material
     pub is_secret: bool,
-    /// When the certificate was created
+    /// When the key was created
     pub creation_time: DateTime<Utc>,
-    /// When the certificate expires (None if never)
+    /// When the key expires (None if never)
     pub expiration_time: Option<DateTime<Utc>>,
     /// Whether the primary key can sign
     pub can_primary_sign: bool,
@@ -300,7 +300,7 @@ pub struct UIDCertification {
     pub issuers: Vec<(String, String)>,
 }
 
-/// Information about a User ID on a certificate.
+/// Information about a User ID on a key.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UserIDInfo {
     /// The full UID string (e.g., "Name <email@example.com>")

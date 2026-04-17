@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use chrono::{Duration, NaiveDate, Utc};
 use wecanencrypt::{
-    add_uid, certify_key, create_key, create_key_simple, get_pub_key, parse_cert_bytes, revoke_key,
+    add_uid, certify_key, create_key, create_key_simple, get_pub_key, parse_key_bytes, revoke_key,
     revoke_uid, sign_bytes_detached, update_primary_expiry, update_subkeys_expiry,
     CertificationType, CipherSuite, Error, SubkeyFlags,
 };
@@ -41,7 +41,7 @@ fn test_update_primary_expiry_with_fixture() {
     let keydata = read_file(&keypath);
 
     // Verify initial dates
-    let info = parse_cert_bytes(&keydata, false).unwrap();
+    let info = parse_key_bytes(&keydata, false).unwrap();
     assert_eq!(info.creation_time.date_naive(), expected_creation);
     assert_eq!(info.expiration_time.unwrap().date_naive(), expected_expiry);
     assert!(info.can_primary_sign);
@@ -55,7 +55,7 @@ fn test_update_primary_expiry_with_fixture() {
     let updated = update_primary_expiry(&keydata, new_expiry, "redhat").unwrap();
 
     // Verify creation preserved, expiry updated
-    let updated_info = parse_cert_bytes(&updated, true).unwrap();
+    let updated_info = parse_key_bytes(&updated, true).unwrap();
     assert_eq!(updated_info.creation_time.date_naive(), expected_creation);
     assert_eq!(
         updated_info.expiration_time.unwrap().date_naive(),
@@ -78,7 +78,7 @@ fn test_expired_key_cannot_sign_data_but_can_extend_expiry() {
         .and_utc();
     let updated = update_primary_expiry(&keydata, new_expiry, "redhat").unwrap();
 
-    let updated_info = parse_cert_bytes(&updated, true).unwrap();
+    let updated_info = parse_key_bytes(&updated, true).unwrap();
     assert_eq!(
         updated_info.expiration_time.unwrap().date_naive(),
         NaiveDate::from_ymd_opt(2050, 10, 25).unwrap()
@@ -94,14 +94,14 @@ fn test_expired_key_can_do_self_maintenance_but_not_third_party_certification() 
     let keydata = read_file(&keypath);
 
     let with_uid = add_uid(&keydata, "Expiry Maint <expiry@example.com>", "redhat").unwrap();
-    let with_uid_info = parse_cert_bytes(&with_uid, true).unwrap();
+    let with_uid_info = parse_key_bytes(&with_uid, true).unwrap();
     assert!(with_uid_info
         .user_ids
         .iter()
         .any(|uid| uid.value == "Expiry Maint <expiry@example.com>"),);
 
     let revoked_uid = revoke_uid(&with_uid, "Expiry Maint <expiry@example.com>", "redhat").unwrap();
-    let revoked_uid_info = parse_cert_bytes(&revoked_uid, true).unwrap();
+    let revoked_uid_info = parse_key_bytes(&revoked_uid, true).unwrap();
     assert!(revoked_uid_info
         .user_ids
         .iter()
@@ -134,7 +134,7 @@ fn test_update_subkey_expiry_with_fixture() {
 
     let updated = update_subkeys_expiry(&keydata, &[subkey_fp], new_expiry, "redhat").unwrap();
 
-    let updated_info = parse_cert_bytes(&updated, true).unwrap();
+    let updated_info = parse_key_bytes(&updated, true).unwrap();
     for subkey in &updated_info.subkeys {
         if subkey.fingerprint == subkey_fp {
             assert_eq!(
@@ -159,7 +159,7 @@ fn test_update_primary_expiry_fixture_key() {
 
     let updated = update_primary_expiry(&keydata, new_expiry, "redhat").unwrap();
 
-    let updated_info = parse_cert_bytes(&updated, true).unwrap();
+    let updated_info = parse_key_bytes(&updated, true).unwrap();
     assert!(updated_info.expiration_time.is_some());
     assert_eq!(
         updated_info.expiration_time.unwrap().date_naive(),
@@ -184,7 +184,7 @@ fn test_revoked_key_cannot_sign_or_extend_expiry() {
     let primary_update = update_primary_expiry(&revoked, new_expiry, "redhat");
     assert!(matches!(primary_update, Err(Error::KeyRevoked)));
 
-    let info = parse_cert_bytes(&revoked, true).unwrap();
+    let info = parse_key_bytes(&revoked, true).unwrap();
     let subkey_fps: Vec<&str> = info
         .subkeys
         .iter()
@@ -223,7 +223,7 @@ fn test_update_subkey_expiry_duration() {
 
     let updated = update_subkeys_expiry(&keydata, &[subkey_fp], tomorrow, "redhat").unwrap();
 
-    let updated_info = parse_cert_bytes(&updated, true).unwrap();
+    let updated_info = parse_key_bytes(&updated, true).unwrap();
     let tomorrow_date = (Utc::now() + Duration::days(1)).date_naive();
     for subkey in &updated_info.subkeys {
         if subkey.fingerprint == subkey_fp {
@@ -265,7 +265,7 @@ fn test_create_primary_key_with_sign() {
     )
     .unwrap();
 
-    let info = parse_cert_bytes(&key.secret_key, true).unwrap();
+    let info = parse_key_bytes(&key.secret_key, true).unwrap();
     assert!(info.can_primary_sign);
 }
 
@@ -295,7 +295,7 @@ fn test_create_key_with_creation_time() {
     )
     .unwrap();
 
-    let info = parse_cert_bytes(&key.secret_key, true).unwrap();
+    let info = parse_key_bytes(&key.secret_key, true).unwrap();
     assert_eq!(
         info.creation_time.date_naive(),
         NaiveDate::from_ymd_opt(2010, 10, 10).unwrap()
@@ -325,7 +325,7 @@ fn test_create_key_with_primary_expiration() {
     )
     .unwrap();
 
-    let info = parse_cert_bytes(&key.secret_key, true).unwrap();
+    let info = parse_key_bytes(&key.secret_key, true).unwrap();
     assert_eq!(info.creation_time.date_naive(), Utc::now().date_naive());
     assert_eq!(
         info.expiration_time.unwrap().date_naive(),
@@ -360,7 +360,7 @@ fn test_create_key_with_subkeys_expiration() {
     )
     .unwrap();
 
-    let info = parse_cert_bytes(&key.secret_key, true).unwrap();
+    let info = parse_key_bytes(&key.secret_key, true).unwrap();
     assert_eq!(
         info.creation_time.date_naive(),
         NaiveDate::from_ymd_opt(2008, 10, 10).unwrap()
@@ -402,7 +402,7 @@ fn test_create_key_subkeys_only_expiration() {
     )
     .unwrap();
 
-    let info = parse_cert_bytes(&key.secret_key, true).unwrap();
+    let info = parse_key_bytes(&key.secret_key, true).unwrap();
     assert_eq!(info.creation_time.date_naive(), Utc::now().date_naive());
     assert!(info.expiration_time.is_none(), "Primary should NOT expire");
 
@@ -441,7 +441,7 @@ fn test_create_key_both_primary_and_subkeys_expire() {
     )
     .unwrap();
 
-    let info = parse_cert_bytes(&key.secret_key, true).unwrap();
+    let info = parse_key_bytes(&key.secret_key, true).unwrap();
     assert_eq!(info.creation_time.date_naive(), Utc::now().date_naive());
     assert_eq!(
         info.expiration_time.unwrap().date_naive(),
@@ -488,7 +488,7 @@ fn test_create_key_with_creation_and_primary_expiry() {
     )
     .unwrap();
 
-    let info = parse_cert_bytes(&key.secret_key, true).unwrap();
+    let info = parse_key_bytes(&key.secret_key, true).unwrap();
     assert_eq!(
         info.creation_time.date_naive(),
         NaiveDate::from_ymd_opt(2008, 10, 10).unwrap()

@@ -47,9 +47,9 @@ pub(crate) fn parse_public_key(data: &[u8]) -> Result<SignedPublicKey> {
     Err(Error::Parse("no matching packet found".to_string()))
 }
 
-/// Parse a certificate from bytes - tries secret key first, then public.
+/// Parse an OpenPGP key from bytes — tries secret key first, then public.
 /// Returns (public_key, is_secret).
-pub(crate) fn parse_cert(data: &[u8]) -> Result<(SignedPublicKey, bool)> {
+pub(crate) fn parse_key(data: &[u8]) -> Result<(SignedPublicKey, bool)> {
     // Try as secret key first
     if let Ok(secret_key) = parse_secret_key(data) {
         let public_key = secret_key.to_public_key();

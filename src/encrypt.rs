@@ -26,7 +26,7 @@ use crate::internal::{can_subkey_encrypt, is_subkey_valid, parse_public_key};
 /// be decrypted by someone with the corresponding secret key.
 ///
 /// # Arguments
-/// * `recipient_cert` - The recipient's public key (armored or binary)
+/// * `recipient_key` - The recipient's public key (armored or binary)
 /// * `plaintext` - The data to encrypt
 /// * `armor` - If true, output ASCII-armored; otherwise binary
 ///
@@ -49,8 +49,8 @@ use crate::internal::{can_subkey_encrypt, is_subkey_valid, parse_public_key};
 /// let plaintext = decrypt_bytes(&key.secret_key, &ciphertext, "password").unwrap();
 /// assert_eq!(plaintext, b"Secret message");
 /// ```
-pub fn encrypt_bytes(recipient_cert: &[u8], plaintext: &[u8], armor: bool) -> Result<Vec<u8>> {
-    encrypt_bytes_to_multiple(&[recipient_cert], plaintext, armor)
+pub fn encrypt_bytes(recipient_key: &[u8], plaintext: &[u8], armor: bool) -> Result<Vec<u8>> {
+    encrypt_bytes_to_multiple(&[recipient_key], plaintext, armor)
 }
 
 /// Encrypt bytes to a single recipient using SEIPD v2 (RFC 9580, AEAD).
@@ -59,11 +59,11 @@ pub fn encrypt_bytes(recipient_cert: &[u8], plaintext: &[u8], armor: bool) -> Re
 /// authenticated encryption. Requires recipients with V6 key support.
 ///
 /// # Arguments
-/// * `recipient_cert` - The recipient's public key (armored or binary)
+/// * `recipient_key` - The recipient's public key (armored or binary)
 /// * `plaintext` - The data to encrypt
 /// * `armor` - If true, output ASCII-armored; otherwise binary
-pub fn encrypt_bytes_v2(recipient_cert: &[u8], plaintext: &[u8], armor: bool) -> Result<Vec<u8>> {
-    encrypt_bytes_to_multiple_v2(&[recipient_cert], plaintext, armor)
+pub fn encrypt_bytes_v2(recipient_key: &[u8], plaintext: &[u8], armor: bool) -> Result<Vec<u8>> {
+    encrypt_bytes_to_multiple_v2(&[recipient_key], plaintext, armor)
 }
 
 /// Encrypt bytes to multiple recipients.
@@ -75,7 +75,7 @@ pub fn encrypt_bytes_v2(recipient_cert: &[u8], plaintext: &[u8], armor: bool) ->
 /// Each recipient only needs their own secret key to decrypt.
 ///
 /// # Arguments
-/// * `recipient_certs` - Slice of recipient public keys (armored or binary)
+/// * `recipient_keys` - Slice of recipient public keys (armored or binary)
 /// * `plaintext` - The data to encrypt
 /// * `armor` - If true, output ASCII-armored; otherwise binary
 ///
@@ -107,12 +107,12 @@ pub fn encrypt_bytes_v2(recipient_cert: &[u8], plaintext: &[u8], armor: bool) ->
 /// assert_eq!(plain_alice, plain_bob);
 /// ```
 pub fn encrypt_bytes_to_multiple(
-    recipient_certs: &[&[u8]],
+    recipient_keys: &[&[u8]],
     plaintext: &[u8],
     armor: bool,
 ) -> Result<Vec<u8>> {
     encrypt_bytes_to_multiple_with_algo(
-        recipient_certs,
+        recipient_keys,
         plaintext,
         armor,
         SymmetricKeyAlgorithm::AES256,
@@ -125,19 +125,19 @@ pub fn encrypt_bytes_to_multiple(
 /// AEAD-based authenticated encryption. Requires recipients with V6 key support.
 ///
 /// # Arguments
-/// * `recipient_certs` - Slice of recipient public keys (armored or binary)
+/// * `recipient_keys` - Slice of recipient public keys (armored or binary)
 /// * `plaintext` - The data to encrypt
 /// * `armor` - If true, output ASCII-armored; otherwise binary
 ///
 /// # Returns
 /// The encrypted message using SEIPD v2 format.
 pub fn encrypt_bytes_to_multiple_v2(
-    recipient_certs: &[&[u8]],
+    recipient_keys: &[&[u8]],
     plaintext: &[u8],
     armor: bool,
 ) -> Result<Vec<u8>> {
     encrypt_bytes_to_multiple_seipd_v2(
-        recipient_certs,
+        recipient_keys,
         plaintext,
         armor,
         SymmetricKeyAlgorithm::AES256,
@@ -151,7 +151,7 @@ pub fn encrypt_bytes_to_multiple_v2(
 /// RFC 9580 requires implementations to support both AES-128 and AES-256.
 ///
 /// # Arguments
-/// * `recipient_certs` - Slice of recipient public keys (armored or binary)
+/// * `recipient_keys` - Slice of recipient public keys (armored or binary)
 /// * `plaintext` - The data to encrypt
 /// * `armor` - If true, output ASCII-armored; otherwise binary
 /// * `sym_algo` - The symmetric algorithm to use (e.g., AES128, AES256)
@@ -159,20 +159,20 @@ pub fn encrypt_bytes_to_multiple_v2(
 /// # Returns
 /// The encrypted message that can be decrypted by any of the recipients.
 pub fn encrypt_bytes_to_multiple_with_algo(
-    recipient_certs: &[&[u8]],
+    recipient_keys: &[&[u8]],
     plaintext: &[u8],
     armor: bool,
     sym_algo: SymmetricKeyAlgorithm,
 ) -> Result<Vec<u8>> {
     validate_sym_algo(sym_algo)?;
 
-    if recipient_certs.is_empty() {
+    if recipient_keys.is_empty() {
         return Err(Error::InvalidInput("No recipients specified".to_string()));
     }
 
     let mut rng = thread_rng();
 
-    let encryption_keys = collect_encryption_keys(recipient_certs)?;
+    let encryption_keys = collect_encryption_keys(recipient_keys)?;
 
     // Build the encrypted message using SEIPD v1 (MDC)
     let mut builder =
@@ -205,7 +205,7 @@ pub fn encrypt_bytes_to_multiple_with_algo(
 /// with V6 key support.
 ///
 /// # Arguments
-/// * `recipient_certs` - Slice of recipient public keys (armored or binary)
+/// * `recipient_keys` - Slice of recipient public keys (armored or binary)
 /// * `plaintext` - The data to encrypt
 /// * `armor` - If true, output ASCII-armored; otherwise binary
 /// * `sym_algo` - The symmetric algorithm to use (e.g., AES128, AES256)
@@ -213,20 +213,20 @@ pub fn encrypt_bytes_to_multiple_with_algo(
 /// # Returns
 /// The encrypted message using SEIPD v2 format.
 pub fn encrypt_bytes_to_multiple_seipd_v2(
-    recipient_certs: &[&[u8]],
+    recipient_keys: &[&[u8]],
     plaintext: &[u8],
     armor: bool,
     sym_algo: SymmetricKeyAlgorithm,
 ) -> Result<Vec<u8>> {
     validate_sym_algo(sym_algo)?;
 
-    if recipient_certs.is_empty() {
+    if recipient_keys.is_empty() {
         return Err(Error::InvalidInput("No recipients specified".to_string()));
     }
 
     let mut rng = thread_rng();
 
-    let encryption_keys = collect_encryption_keys(recipient_certs)?;
+    let encryption_keys = collect_encryption_keys(recipient_keys)?;
 
     // Build the encrypted message using SEIPD v2 (AEAD with OCB)
     let mut builder = MessageBuilder::from_bytes("", plaintext.to_vec()).seipd_v2(
@@ -273,13 +273,13 @@ fn validate_sym_algo(sym_algo: SymmetricKeyAlgorithm) -> Result<()> {
     }
 }
 
-/// Parse recipient certs and collect valid encryption subkeys.
+/// Parse recipient keys and collect valid encryption subkeys.
 fn collect_encryption_keys(
-    recipient_certs: &[&[u8]],
+    recipient_keys: &[&[u8]],
 ) -> Result<Vec<pgp::composed::SignedPublicSubKey>> {
     let mut encryption_keys = Vec::new();
-    for cert_data in recipient_certs {
-        let public_key = parse_public_key(cert_data)?;
+    for key_data in recipient_keys {
+        let public_key = parse_public_key(key_data)?;
         let subkeys = find_valid_encryption_subkeys(&public_key)?;
         encryption_keys.extend(subkeys);
     }
@@ -296,7 +296,7 @@ fn collect_encryption_keys(
 /// Reads the input file, encrypts it, and writes the result to the output file.
 ///
 /// # Arguments
-/// * `recipient_cert` - The recipient's public key (armored or binary)
+/// * `recipient_key` - The recipient's public key (armored or binary)
 /// * `input` - Path to the input file
 /// * `output` - Path to the output file
 /// * `armor` - If true, output ASCII-armored; otherwise binary
@@ -310,18 +310,18 @@ fn collect_encryption_keys(
 /// encrypt_file(&public_key, "document.pdf", "document.pdf.gpg", true).unwrap();
 /// ```
 pub fn encrypt_file(
-    recipient_cert: &[u8],
+    recipient_key: &[u8],
     input: impl AsRef<Path>,
     output: impl AsRef<Path>,
     armor: bool,
 ) -> Result<()> {
-    encrypt_file_to_multiple(&[recipient_cert], input, output, armor)
+    encrypt_file_to_multiple(&[recipient_key], input, output, armor)
 }
 
 /// Encrypt a file to multiple recipients.
 ///
 /// # Arguments
-/// * `recipient_certs` - Slice of recipient public keys (armored or binary)
+/// * `recipient_keys` - Slice of recipient public keys (armored or binary)
 /// * `input` - Path to the input file
 /// * `output` - Path to the output file
 /// * `armor` - If true, output ASCII-armored; otherwise binary
@@ -342,13 +342,13 @@ pub fn encrypt_file(
 /// ).unwrap();
 /// ```
 pub fn encrypt_file_to_multiple(
-    recipient_certs: &[&[u8]],
+    recipient_keys: &[&[u8]],
     input: impl AsRef<Path>,
     output: impl AsRef<Path>,
     armor: bool,
 ) -> Result<()> {
     let plaintext = std::fs::read(input.as_ref())?;
-    let ciphertext = encrypt_bytes_to_multiple(recipient_certs, &plaintext, armor)?;
+    let ciphertext = encrypt_bytes_to_multiple(recipient_keys, &plaintext, armor)?;
     std::fs::write(output.as_ref(), ciphertext)?;
     Ok(())
 }
@@ -356,19 +356,19 @@ pub fn encrypt_file_to_multiple(
 /// Encrypt data from a reader to a file.
 ///
 /// # Arguments
-/// * `recipient_certs` - Slice of recipient public keys
+/// * `recipient_keys` - Slice of recipient public keys
 /// * `reader` - Source of plaintext data
 /// * `output` - Path to the output file
 /// * `armor` - If true, output ASCII-armored
 pub fn encrypt_reader_to_file<R: Read>(
-    recipient_certs: &[&[u8]],
+    recipient_keys: &[&[u8]],
     mut reader: R,
     output: impl AsRef<Path>,
     armor: bool,
 ) -> Result<()> {
     let mut plaintext = Vec::new();
     reader.read_to_end(&mut plaintext)?;
-    let ciphertext = encrypt_bytes_to_multiple(recipient_certs, &plaintext, armor)?;
+    let ciphertext = encrypt_bytes_to_multiple(recipient_keys, &plaintext, armor)?;
     std::fs::write(output.as_ref(), ciphertext)?;
     Ok(())
 }

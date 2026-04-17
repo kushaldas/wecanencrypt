@@ -40,7 +40,7 @@ impl CardKeySlot {
     }
 }
 
-/// Which key to upload from a certificate
+/// Which key to upload from a key
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeySelection {
     /// Automatically select the best key for the slot (default behavior)
@@ -92,7 +92,7 @@ pub fn upload_key_to_card(
 
 /// Upload the PRIMARY key to a specific card slot.
 ///
-/// Use this when you have a certificate with subkeys but specifically want
+/// Use this when you have a key with subkeys but specifically want
 /// to upload the primary key (e.g., a primary key with Sign+Certify capabilities).
 ///
 /// # Arguments

@@ -35,7 +35,7 @@ use pgp::types::{
 /// # Arguments
 ///
 /// * `data` - The data to sign
-/// * `public_cert` - The public certificate corresponding to the key on the card
+/// * `public_key` - The public key corresponding to the key on the card
 /// * `pin` - The user PIN for the card
 ///
 /// # Returns
@@ -54,8 +54,8 @@ use pgp::types::{
 ///     b"123456",
 /// ).unwrap();
 /// ```
-pub fn sign_bytes_detached_on_card(data: &[u8], public_cert: &[u8], pin: &[u8]) -> Result<String> {
-    let public_key = parse_public_key(public_cert)?;
+pub fn sign_bytes_detached_on_card(data: &[u8], public_key: &[u8], pin: &[u8]) -> Result<String> {
+    let public_key = parse_public_key(public_key)?;
 
     // Get signing key info from the public key
     let key_info = get_signing_key_info(&public_key, SigningKeyUsage::DataSignature)?;
@@ -92,10 +92,10 @@ struct SigningKeyInfo {
     hash_alg: HashAlgorithm,
 }
 
-/// Get signing key info by matching the card's signing slot fingerprint against the public certificate.
+/// Get signing key info by matching the card's signing slot fingerprint against the public key.
 ///
 /// This queries the card to get the actual fingerprint of the key in the signing slot,
-/// then finds the matching key in the public certificate.
+/// then finds the matching key in the public key.
 fn get_signing_key_info(
     public_key: &SignedPublicKey,
     usage: SigningKeyUsage,
@@ -148,7 +148,7 @@ fn get_signing_key_info(
     }
 
     Err(Error::Crypto(format!(
-        "No key in certificate matches card signing slot fingerprint: {}",
+        "No key in key matches card signing slot fingerprint: {}",
         card_fp
     )))
 }
@@ -392,7 +392,7 @@ fn create_signature_bytes(raw_sig: &[u8], public_params: &PublicParams) -> Resul
 /// # Arguments
 ///
 /// * `data` - The encrypted data (OpenPGP message)
-/// * `public_cert` - The public certificate corresponding to the key on the card
+/// * `public_key` - The public key corresponding to the key on the card
 /// * `pin` - The user PIN for the card
 ///
 /// # Returns
@@ -412,8 +412,8 @@ fn create_signature_bytes(raw_sig: &[u8], public_params: &PublicParams) -> Resul
 ///     b"123456",
 /// ).unwrap();
 /// ```
-pub fn decrypt_bytes_on_card(data: &[u8], public_cert: &[u8], pin: &[u8]) -> Result<Vec<u8>> {
-    let public_key = parse_public_key(public_cert)?;
+pub fn decrypt_bytes_on_card(data: &[u8], public_key: &[u8], pin: &[u8]) -> Result<Vec<u8>> {
+    let public_key = parse_public_key(public_key)?;
 
     // Parse the encrypted message (try armored first, then binary)
     let message = match Message::from_armor(Cursor::new(data)) {
@@ -523,7 +523,7 @@ impl KeyDetails for EncryptionKeyInfo {
     }
 }
 
-/// Get encryption key info from the public certificate.
+/// Get encryption key info from the public key.
 fn get_encryption_key_info(public_key: &SignedPublicKey) -> Result<EncryptionKeyInfo> {
     // First try to find an encryption-capable subkey
     // Check both algorithm and key flags
@@ -897,7 +897,7 @@ impl pgp::types::SigningKey for CardSigningKey<'_> {
 
 /// Get primary key info for card signing operations.
 ///
-/// This retrieves the primary key from the certificate and verifies it matches
+/// This retrieves the primary key from the key and verifies it matches
 /// the card's signing slot fingerprint.
 fn get_primary_key_for_card_signing<'a>(
     public_key: &'a SignedPublicKey,
@@ -957,13 +957,13 @@ fn get_primary_key_for_card_signing<'a>(
 ///
 /// # Arguments
 ///
-/// * `certdata` - The public certificate data (armored or binary)
+/// * `certdata` - The public key data (armored or binary)
 /// * `expirytime` - Expiration time as seconds from now
 /// * `pin` - The user PIN for the card
 ///
 /// # Returns
 ///
-/// The updated public certificate with new expiration signatures (armored).
+/// The updated public key with new expiration signatures (armored).
 ///
 /// # Errors
 ///
@@ -971,7 +971,7 @@ fn get_primary_key_for_card_signing<'a>(
 /// - No smart card is connected
 /// - The primary key fingerprint doesn't match the card's signature slot
 /// - PIN verification fails
-/// - The certificate has no self-certification signatures
+/// - The key has no self-certification signatures
 ///
 /// # Example
 ///
@@ -1163,7 +1163,7 @@ pub fn update_primary_expiry_on_card(
 /// # Signature Details
 ///
 /// Subkey binding signatures are created by the primary key to bind a subkey
-/// to the certificate and define its properties (capabilities, expiration).
+/// to the key and define its properties (capabilities, expiration).
 /// This function updates these signatures while preserving all other subpackets:
 ///
 /// - **Key flags** - Preserved to maintain subkey capabilities (encrypt, sign, etc.)
@@ -1182,14 +1182,14 @@ pub fn update_primary_expiry_on_card(
 ///
 /// # Arguments
 ///
-/// * `certdata` - The public certificate data (armored or binary)
+/// * `certdata` - The public key data (armored or binary)
 /// * `fingerprints` - Fingerprints of subkeys to update (hex strings)
 /// * `expirytime` - Expiration time as seconds from now
 /// * `pin` - The user PIN for the card
 ///
 /// # Returns
 ///
-/// The updated public certificate with new binding signatures (armored).
+/// The updated public key with new binding signatures (armored).
 ///
 /// # Errors
 ///
@@ -1198,7 +1198,7 @@ pub fn update_primary_expiry_on_card(
 /// - The primary key fingerprint doesn't match the card's signature slot
 /// - PIN verification fails
 /// - A specified subkey has no binding signature to update
-/// - A specified subkey fingerprint is not found in the certificate
+/// - A specified subkey fingerprint is not found in the key
 ///
 /// # Example
 ///

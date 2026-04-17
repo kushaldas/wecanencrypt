@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use tempfile::tempdir;
 use wecanencrypt::{
     add_uid, create_key, create_key_simple, decrypt_bytes_from_store, encrypt_bytes_from_store,
-    encrypt_bytes_to_multiple_from_store, get_pub_key, parse_cert_bytes, revoke_uid,
+    encrypt_bytes_to_multiple_from_store, get_pub_key, parse_key_bytes, revoke_uid,
     sign_bytes_detached, sign_bytes_detached_from_store, update_password,
     verify_bytes_detached_from_store, CipherSuite, KeyStore, SubkeyFlags,
 };
@@ -47,7 +47,7 @@ fn test_keystore_create() {
 }
 
 #[test]
-fn test_keystore_import_and_export_cert() {
+fn test_keystore_import_and_export_key() {
     let dir = tempdir().unwrap();
     let db_path = dir.path().join("test.db");
 
@@ -57,13 +57,13 @@ fn test_keystore_import_and_export_cert() {
     let (secret_key, fingerprint) = create_test_key("Test <test@example.com>");
     let public_key = get_pub_key(&secret_key).unwrap();
 
-    store.import_cert(public_key.as_bytes()).unwrap();
+    store.import_key(public_key.as_bytes()).unwrap();
 
     // Retrieve by fingerprint
-    let retrieved = store.export_cert(&fingerprint).unwrap();
+    let retrieved = store.export_key(&fingerprint).unwrap();
     assert!(!retrieved.is_empty());
 
-    let info = parse_cert_bytes(&retrieved, true).unwrap();
+    let info = parse_key_bytes(&retrieved, true).unwrap();
     assert_eq!(info.fingerprint, fingerprint);
 }
 
@@ -76,10 +76,10 @@ fn test_keystore_import_secret_key() {
 
     let (secret_key, fingerprint) = create_test_key("Secret <secret@example.com>");
 
-    store.import_cert(&secret_key).unwrap();
+    store.import_key(&secret_key).unwrap();
 
-    let retrieved = store.export_cert(&fingerprint).unwrap();
-    let info = parse_cert_bytes(&retrieved, true).unwrap();
+    let retrieved = store.export_key(&fingerprint).unwrap();
+    let info = parse_key_bytes(&retrieved, true).unwrap();
 
     // Should preserve secret key material
     assert!(info.is_secret);
@@ -99,7 +99,7 @@ fn test_keystore_contains() {
     assert!(!store.contains(&fingerprint).unwrap());
 
     // Import
-    store.import_cert(public_key.as_bytes()).unwrap();
+    store.import_key(public_key.as_bytes()).unwrap();
 
     // Now it should be in store
     assert!(store.contains(&fingerprint).unwrap());
@@ -111,7 +111,7 @@ fn test_keystore_contains() {
 }
 
 #[test]
-fn test_keystore_delete_cert() {
+fn test_keystore_delete_key() {
     let dir = tempdir().unwrap();
     let db_path = dir.path().join("test.db");
 
@@ -120,20 +120,20 @@ fn test_keystore_delete_cert() {
     let (secret_key, fingerprint) = create_test_key("Delete <delete@example.com>");
     let public_key = get_pub_key(&secret_key).unwrap();
 
-    store.import_cert(public_key.as_bytes()).unwrap();
+    store.import_key(public_key.as_bytes()).unwrap();
 
     // Verify it exists
     assert!(store.contains(&fingerprint).unwrap());
 
     // Delete
-    store.delete_cert(&fingerprint).unwrap();
+    store.delete_key(&fingerprint).unwrap();
 
     // Verify it's gone
     assert!(!store.contains(&fingerprint).unwrap());
 }
 
 #[test]
-fn test_keystore_list_certs() {
+fn test_keystore_list_keys() {
     let dir = tempdir().unwrap();
     let db_path = dir.path().join("test.db");
 
@@ -145,16 +145,16 @@ fn test_keystore_list_certs() {
     let (key3, fp3) = create_test_key("User3 <user3@example.com>");
 
     store
-        .import_cert(get_pub_key(&key1).unwrap().as_bytes())
+        .import_key(get_pub_key(&key1).unwrap().as_bytes())
         .unwrap();
     store
-        .import_cert(get_pub_key(&key2).unwrap().as_bytes())
+        .import_key(get_pub_key(&key2).unwrap().as_bytes())
         .unwrap();
     store
-        .import_cert(get_pub_key(&key3).unwrap().as_bytes())
+        .import_key(get_pub_key(&key3).unwrap().as_bytes())
         .unwrap();
 
-    let certs = store.list_certs().unwrap();
+    let certs = store.list_keys().unwrap();
     assert_eq!(certs.len(), 3);
 
     let fingerprints: Vec<_> = certs.iter().map(|c| c.fingerprint.as_str()).collect();
@@ -175,13 +175,13 @@ fn test_keystore_search_by_uid() {
     let (key3, _) = create_test_key("Alice Work <alice@work.com>");
 
     store
-        .import_cert(get_pub_key(&key1).unwrap().as_bytes())
+        .import_key(get_pub_key(&key1).unwrap().as_bytes())
         .unwrap();
     store
-        .import_cert(get_pub_key(&key2).unwrap().as_bytes())
+        .import_key(get_pub_key(&key2).unwrap().as_bytes())
         .unwrap();
     store
-        .import_cert(get_pub_key(&key3).unwrap().as_bytes())
+        .import_key(get_pub_key(&key3).unwrap().as_bytes())
         .unwrap();
 
     // Search for Alice
@@ -207,22 +207,22 @@ fn test_keystore_find_by_key_id() {
     let (secret_key, fingerprint) = create_test_key("KeyID <keyid@example.com>");
     let public_key = get_pub_key(&secret_key).unwrap();
 
-    store.import_cert(public_key.as_bytes()).unwrap();
+    store.import_key(public_key.as_bytes()).unwrap();
 
-    let info = parse_cert_bytes(public_key.as_bytes(), true).unwrap();
+    let info = parse_key_bytes(public_key.as_bytes(), true).unwrap();
     let key_id = &info.key_id;
 
     // Get by key ID
     let retrieved = store.find_by_key_id(key_id).unwrap();
     assert!(retrieved.is_some());
 
-    let cert_data = retrieved.unwrap();
-    let retrieved_info = parse_cert_bytes(&cert_data, true).unwrap();
+    let key_data = retrieved.unwrap();
+    let retrieved_info = parse_key_bytes(&key_data, true).unwrap();
     assert_eq!(retrieved_info.fingerprint, fingerprint);
 }
 
 #[test]
-fn test_keystore_update_cert() {
+fn test_keystore_update_key() {
     let dir = tempdir().unwrap();
     let db_path = dir.path().join("test.db");
 
@@ -230,18 +230,18 @@ fn test_keystore_update_cert() {
 
     // Create and import initial key
     let key = create_key_simple(TEST_PASSWORD, &["Original <original@example.com>"]).unwrap();
-    store.import_cert(key.secret_key.as_slice()).unwrap();
+    store.import_key(key.secret_key.as_slice()).unwrap();
 
     // Add a UID to the key
     let updated_key =
         wecanencrypt::add_uid(&key.secret_key, "Added <added@example.com>", TEST_PASSWORD).unwrap();
 
     // Update in store
-    store.update_cert(&key.fingerprint, &updated_key).unwrap();
+    store.update_key(&key.fingerprint, &updated_key).unwrap();
 
     // Retrieve and verify
-    let retrieved = store.export_cert(&key.fingerprint).unwrap();
-    let info = parse_cert_bytes(&retrieved, true).unwrap();
+    let retrieved = store.export_key(&key.fingerprint).unwrap();
+    let info = parse_key_bytes(&retrieved, true).unwrap();
 
     assert_eq!(info.user_ids.len(), 2);
 }
@@ -257,7 +257,7 @@ fn test_keystore_persistence() {
     // Create store, import key, close
     {
         let store = KeyStore::open(&db_path).unwrap();
-        store.import_cert(public_key.as_bytes()).unwrap();
+        store.import_key(public_key.as_bytes()).unwrap();
     }
 
     // Reopen and verify data persisted
@@ -278,14 +278,14 @@ fn test_keystore_import_duplicate() {
     let public_key = get_pub_key(&secret_key).unwrap();
 
     // Import once
-    store.import_cert(public_key.as_bytes()).unwrap();
+    store.import_key(public_key.as_bytes()).unwrap();
 
     // Import again (should update, not error)
-    let result = store.import_cert(public_key.as_bytes());
+    let result = store.import_key(public_key.as_bytes());
     assert!(result.is_ok());
 
     // Should still have only one cert
-    let certs = store.list_certs().unwrap();
+    let certs = store.list_keys().unwrap();
     assert_eq!(certs.len(), 1);
 }
 
@@ -302,12 +302,12 @@ fn test_keystore_count() {
     let (key2, _) = create_test_key("User2 <user2@example.com>");
 
     store
-        .import_cert(get_pub_key(&key1).unwrap().as_bytes())
+        .import_key(get_pub_key(&key1).unwrap().as_bytes())
         .unwrap();
     assert_eq!(store.count().unwrap(), 1);
 
     store
-        .import_cert(get_pub_key(&key2).unwrap().as_bytes())
+        .import_key(get_pub_key(&key2).unwrap().as_bytes())
         .unwrap();
     assert_eq!(store.count().unwrap(), 2);
 }
@@ -324,8 +324,8 @@ fn test_keystore_list_secret_keys() {
     let (public_key_src, _) = create_test_key("Public <public@example.com>");
     let public_key = get_pub_key(&public_key_src).unwrap();
 
-    store.import_cert(&secret_key).unwrap();
-    store.import_cert(public_key.as_bytes()).unwrap();
+    store.import_key(&secret_key).unwrap();
+    store.import_key(public_key.as_bytes()).unwrap();
 
     let secret_keys = store.list_secret_keys().unwrap();
     assert_eq!(secret_keys.len(), 1);
@@ -348,7 +348,7 @@ fn test_keystore_get_nonexistent_key() {
     let store = KeyStore::open(&db_path).unwrap();
 
     // Try to get a key that doesn't exist
-    let result = store.export_cert("A4F388BBB194925AE301F844C52B42177857DD79");
+    let result = store.export_key("A4F388BBB194925AE301F844C52B42177857DD79");
     assert!(result.is_err());
 }
 
@@ -360,7 +360,7 @@ fn test_keystore_delete_nonexistent_key() {
     let store = KeyStore::open(&db_path).unwrap();
 
     // Try to delete a key that doesn't exist
-    let result = store.delete_cert("A4F388BBB194925AE301F844C52B42177857DD79");
+    let result = store.delete_key("A4F388BBB194925AE301F844C52B42177857DD79");
     assert!(result.is_err());
 }
 
@@ -372,7 +372,7 @@ fn test_keystore_in_memory() {
     assert_eq!(store.count().unwrap(), 0);
 
     let (secret_key, fingerprint) = create_test_key("InMemory <inmemory@example.com>");
-    store.import_cert(&secret_key).unwrap();
+    store.import_key(&secret_key).unwrap();
 
     assert_eq!(store.count().unwrap(), 1);
     assert!(store.contains(&fingerprint).unwrap());
@@ -390,13 +390,13 @@ fn test_keystore_search_by_email() {
     let (key3, _) = create_test_key("Alice Work <alice@work.com>");
 
     store
-        .import_cert(get_pub_key(&key1).unwrap().as_bytes())
+        .import_key(get_pub_key(&key1).unwrap().as_bytes())
         .unwrap();
     store
-        .import_cert(get_pub_key(&key2).unwrap().as_bytes())
+        .import_key(get_pub_key(&key2).unwrap().as_bytes())
         .unwrap();
     store
-        .import_cert(get_pub_key(&key3).unwrap().as_bytes())
+        .import_key(get_pub_key(&key3).unwrap().as_bytes())
         .unwrap();
 
     // Search by exact email
@@ -420,25 +420,25 @@ fn test_keystore_export_armored() {
     let store = KeyStore::open(&db_path).unwrap();
 
     let (secret_key, fingerprint) = create_test_key("Armored <armored@example.com>");
-    store.import_cert(&secret_key).unwrap();
+    store.import_key(&secret_key).unwrap();
 
-    let armored = store.export_cert_armored(&fingerprint).unwrap();
+    let armored = store.export_key_armored(&fingerprint).unwrap();
 
     assert!(armored.starts_with("-----BEGIN PGP PUBLIC KEY BLOCK-----"));
     assert!(armored.contains("-----END PGP PUBLIC KEY BLOCK-----"));
 }
 
 #[test]
-fn test_keystore_get_cert_info() {
+fn test_keystore_get_key_info() {
     let dir = tempdir().unwrap();
     let db_path = dir.path().join("test.db");
 
     let store = KeyStore::open(&db_path).unwrap();
 
     let (secret_key, fingerprint) = create_test_key("Info <info@example.com>");
-    store.import_cert(&secret_key).unwrap();
+    store.import_key(&secret_key).unwrap();
 
-    let info = store.get_cert_info(&fingerprint).unwrap();
+    let info = store.get_key_info(&fingerprint).unwrap();
 
     assert_eq!(info.fingerprint, fingerprint);
     assert!(info.is_secret);
@@ -457,10 +457,10 @@ fn test_keystore_list_fingerprints() {
     let (key2, fp2) = create_test_key("User2 <user2@example.com>");
 
     store
-        .import_cert(get_pub_key(&key1).unwrap().as_bytes())
+        .import_key(get_pub_key(&key1).unwrap().as_bytes())
         .unwrap();
     store
-        .import_cert(get_pub_key(&key2).unwrap().as_bytes())
+        .import_key(get_pub_key(&key2).unwrap().as_bytes())
         .unwrap();
 
     let fingerprints = store.list_fingerprints().unwrap();
@@ -479,7 +479,7 @@ fn test_keystore_import_from_file() {
 
     // Import from fixture file
     let key_path = store_dir().join("public.asc");
-    let fingerprint = store.import_cert_file(&key_path).unwrap();
+    let fingerprint = store.import_key_file(&key_path).unwrap();
 
     assert!(!fingerprint.is_empty());
     assert!(store.contains(&fingerprint).unwrap());
@@ -493,23 +493,23 @@ fn test_keystore_password_change() {
     let store = KeyStore::open(&db_path).unwrap();
 
     let (secret_key, fingerprint) = create_test_key("Password <password@example.com>");
-    store.import_cert(&secret_key).unwrap();
+    store.import_key(&secret_key).unwrap();
 
     // Change password
-    let cert_data = store.export_cert(&fingerprint).unwrap();
+    let key_data = store.export_key(&fingerprint).unwrap();
     let new_password = "new-password-456";
-    let updated_key = update_password(&cert_data, TEST_PASSWORD, new_password).unwrap();
+    let updated_key = update_password(&key_data, TEST_PASSWORD, new_password).unwrap();
 
     // Update in store
-    store.update_cert(&fingerprint, &updated_key).unwrap();
+    store.update_key(&fingerprint, &updated_key).unwrap();
 
     // Verify new password works for signing
-    let updated_cert = store.export_cert(&fingerprint).unwrap();
-    let signature = sign_bytes_detached(&updated_cert, b"test data", new_password).unwrap();
+    let updated_key = store.export_key(&fingerprint).unwrap();
+    let signature = sign_bytes_detached(&updated_key, b"test data", new_password).unwrap();
     assert!(signature.contains("-----BEGIN PGP SIGNATURE-----"));
 
     // Old password should fail
-    let result = sign_bytes_detached(&updated_cert, b"test data", TEST_PASSWORD);
+    let result = sign_bytes_detached(&updated_key, b"test data", TEST_PASSWORD);
     assert!(result.is_err());
 }
 
@@ -524,8 +524,8 @@ fn test_keystore_encrypt_decrypt_multiple_recipients() {
     let (key1, fp1) = create_test_key("Recipient1 <r1@example.com>");
     let (key2, fp2) = create_test_key("Recipient2 <r2@example.com>");
 
-    store.import_cert(&key1).unwrap();
-    store.import_cert(&key2).unwrap();
+    store.import_key(&key1).unwrap();
+    store.import_key(&key2).unwrap();
 
     let message = b"Message for multiple recipients";
 
@@ -549,7 +549,7 @@ fn test_keystore_sign_verify_wrong_data_fails() {
     let store = KeyStore::open(&db_path).unwrap();
 
     let (secret_key, fingerprint) = create_test_key("Signer <signer@example.com>");
-    store.import_cert(&secret_key).unwrap();
+    store.import_key(&secret_key).unwrap();
 
     // Sign some data
     let signature =
@@ -585,25 +585,25 @@ fn test_keystore_add_and_revoke_uid() {
     let store = KeyStore::open(&db_path).unwrap();
 
     let (secret_key, fingerprint) = create_test_key("Original <original@example.com>");
-    store.import_cert(&secret_key).unwrap();
+    store.import_key(&secret_key).unwrap();
 
     // Add a UID
-    let cert_data = store.export_cert(&fingerprint).unwrap();
-    let with_new_uid = add_uid(&cert_data, "Added <added@example.com>", TEST_PASSWORD).unwrap();
-    store.update_cert(&fingerprint, &with_new_uid).unwrap();
+    let key_data = store.export_key(&fingerprint).unwrap();
+    let with_new_uid = add_uid(&key_data, "Added <added@example.com>", TEST_PASSWORD).unwrap();
+    store.update_key(&fingerprint, &with_new_uid).unwrap();
 
     // Verify UID was added
-    let info = store.get_cert_info(&fingerprint).unwrap();
+    let info = store.get_key_info(&fingerprint).unwrap();
     assert_eq!(info.user_ids.len(), 2);
 
     // Revoke the added UID
-    let updated_cert = store.export_cert(&fingerprint).unwrap();
+    let updated_key = store.export_key(&fingerprint).unwrap();
     let with_revoked =
-        revoke_uid(&updated_cert, "Added <added@example.com>", TEST_PASSWORD).unwrap();
-    store.update_cert(&fingerprint, &with_revoked).unwrap();
+        revoke_uid(&updated_key, "Added <added@example.com>", TEST_PASSWORD).unwrap();
+    store.update_key(&fingerprint, &with_revoked).unwrap();
 
     // UID count stays same (revoked UIDs still present)
-    let info = store.get_cert_info(&fingerprint).unwrap();
+    let info = store.get_key_info(&fingerprint).unwrap();
     assert!(!info.user_ids.is_empty());
 }
 
@@ -617,11 +617,11 @@ fn test_keystore_add_uid_to_public_key_fails() {
     // Import public key only
     let (secret_key, fingerprint) = create_test_key("Public <public@example.com>");
     let public_key = get_pub_key(&secret_key).unwrap();
-    store.import_cert(public_key.as_bytes()).unwrap();
+    store.import_key(public_key.as_bytes()).unwrap();
 
     // Try to add UID - should fail because it's a public key
-    let cert_data = store.export_cert(&fingerprint).unwrap();
-    let result = add_uid(&cert_data, "New <new@example.com>", TEST_PASSWORD);
+    let key_data = store.export_key(&fingerprint).unwrap();
+    let result = add_uid(&key_data, "New <new@example.com>", TEST_PASSWORD);
     assert!(result.is_err());
 }
 
@@ -661,9 +661,9 @@ fn test_keystore_key_with_multiple_uids() {
     ];
     let key = create_key_simple(TEST_PASSWORD, uids).unwrap();
 
-    store.import_cert(&key.secret_key).unwrap();
+    store.import_key(&key.secret_key).unwrap();
 
-    let info = store.get_cert_info(&key.fingerprint).unwrap();
+    let info = store.get_key_info(&key.fingerprint).unwrap();
     assert_eq!(info.user_ids.len(), 3);
 
     // Search should find by any UID
@@ -686,9 +686,9 @@ fn test_keystore_creation_expiration_times() {
 
     // Import Kushal's key with known creation/expiration times
     let key_path = store_dir().join("pgp_keys.asc");
-    let fingerprint = store.import_cert_file(&key_path).unwrap();
+    let fingerprint = store.import_key_file(&key_path).unwrap();
 
-    let info = store.get_cert_info(&fingerprint).unwrap();
+    let info = store.get_key_info(&fingerprint).unwrap();
 
     // Verify creation time exists (it's always set, not optional)
     // Kushal's key was created on 2017-10-17
@@ -708,7 +708,7 @@ fn test_keystore_encrypt_decrypt_from_store() {
     let store = KeyStore::open(&db_path).unwrap();
 
     let (secret_key, fingerprint) = create_test_key("Store <store@example.com>");
-    store.import_cert(&secret_key).unwrap();
+    store.import_key(&secret_key).unwrap();
 
     let message = b"Secret message via store";
 
@@ -737,13 +737,13 @@ fn test_keystore_with_fixture_files() {
     ];
 
     for path in &files {
-        store.import_cert_file(path).unwrap();
+        store.import_key_file(path).unwrap();
     }
 
     assert_eq!(store.count().unwrap(), 3);
 
     // List and verify
-    let certs = store.list_certs().unwrap();
+    let certs = store.list_keys().unwrap();
     assert_eq!(certs.len(), 3);
 }
 
@@ -756,16 +756,16 @@ fn test_keystore_update_key_merges_correctly() {
 
     // Import old key
     let old_key_path = store_dir().join("pgp_keys.asc");
-    let fingerprint = store.import_cert_file(&old_key_path).unwrap();
+    let fingerprint = store.import_key_file(&old_key_path).unwrap();
 
-    let old_info = store.get_cert_info(&fingerprint).unwrap();
+    let old_info = store.get_key_info(&fingerprint).unwrap();
 
     // Import updated key (should merge/update)
     let new_key_path = store_dir().join("kushal_updated_key.asc");
     let new_key_data = read_file(&new_key_path);
-    store.update_cert(&fingerprint, &new_key_data).unwrap();
+    store.update_key(&fingerprint, &new_key_data).unwrap();
 
-    let new_info = store.get_cert_info(&fingerprint).unwrap();
+    let new_info = store.get_key_info(&fingerprint).unwrap();
 
     // The updated key should have more UIDs or different expiration
     // Just verify the update succeeded
@@ -785,7 +785,7 @@ fn test_keystore_encrypt_decrypt_file() {
 
     // Create and import a key
     let (secret_key, fingerprint) = create_test_key("FileTest <filetest@example.com>");
-    store.import_cert(&secret_key).unwrap();
+    store.import_key(&secret_key).unwrap();
 
     // Create a test file
     let input_path = dir.path().join("input.txt");
@@ -824,7 +824,7 @@ fn test_keystore_sign_verify_file_detached() {
 
     // Create and import a key
     let (secret_key, fingerprint) = create_test_key("SignFile <signfile@example.com>");
-    store.import_cert(&secret_key).unwrap();
+    store.import_key(&secret_key).unwrap();
 
     // Create a test file
     let data_path = dir.path().join("data.txt");
@@ -865,8 +865,8 @@ fn test_keystore_encrypt_file_multiple_recipients() {
     let (key1, fp1) = create_test_key("Recipient1 <r1@example.com>");
     let (key2, fp2) = create_test_key("Recipient2 <r2@example.com>");
 
-    store.import_cert(&key1).unwrap();
-    store.import_cert(&key2).unwrap();
+    store.import_key(&key1).unwrap();
+    store.import_key(&key2).unwrap();
 
     // Create a test file
     let input_path = dir.path().join("input.txt");
@@ -930,7 +930,7 @@ fn test_keystore_schema_upgrade() {
 
     // Verify the store works after upgrade
     // The old database should have keys that are now accessible
-    let certs = store.list_certs().unwrap();
+    let certs = store.list_keys().unwrap();
     let count = store.count().unwrap();
 
     // Verify count matches list length (store is consistent after upgrade)
@@ -947,10 +947,10 @@ fn test_keystore_keyids() {
 
     // Import Kushal's updated key
     let key_path = store_dir().join("kushal_updated_key.asc");
-    let fp = store.import_cert_file(&key_path).unwrap();
+    let fp = store.import_key_file(&key_path).unwrap();
 
     // Verify key_id is the last 16 hex chars of the fingerprint
-    let info = store.get_cert_info(&fp).unwrap();
+    let info = store.get_key_info(&fp).unwrap();
     assert_eq!(info.key_id, "D8219C8C43F6C5E1");
 }
 
@@ -965,15 +965,15 @@ fn test_keystore_deletion_cleans_subkeys() {
     // Import a key with subkeys
     let key_path = store_dir().join("public.asc");
     let key_data = read_file(&key_path);
-    let fp = store.import_cert(&key_data).unwrap();
+    let fp = store.import_key(&key_data).unwrap();
 
     // Verify the key is there
     assert!(store.contains(&fp).unwrap());
-    let info = store.get_cert_info(&fp).unwrap();
+    let info = store.get_key_info(&fp).unwrap();
     assert!(!info.subkeys.is_empty(), "Key should have subkeys");
 
     // Delete the key
-    store.delete_cert(&fp).unwrap();
+    store.delete_key(&fp).unwrap();
 
     // Verify the key is gone
     assert!(!store.contains(&fp).unwrap());
@@ -989,7 +989,7 @@ fn test_keystore_save_and_get_card_keys() {
     // Import a key first (card_keys has FK to certificates)
     let key_path = store_dir().join("public.asc");
     let key_data = read_file(&key_path);
-    let fp = store.import_cert(&key_data).unwrap();
+    let fp = store.import_key(&key_data).unwrap();
 
     // Save card-key associations
     store
@@ -1042,7 +1042,7 @@ fn test_keystore_card_keys_replace_on_duplicate() {
 
     let key_path = store_dir().join("public.asc");
     let key_data = read_file(&key_path);
-    let fp = store.import_cert(&key_data).unwrap();
+    let fp = store.import_key(&key_data).unwrap();
 
     // Save a card-key association
     store
@@ -1079,7 +1079,7 @@ fn test_keystore_remove_card_keys_for_card() {
 
     let key_path = store_dir().join("public.asc");
     let key_data = read_file(&key_path);
-    let fp = store.import_cert(&key_data).unwrap();
+    let fp = store.import_key(&key_data).unwrap();
 
     store
         .save_card_key(
@@ -1126,7 +1126,7 @@ fn test_keystore_card_keys_cascade_delete() {
 
     let key_path = store_dir().join("public.asc");
     let key_data = read_file(&key_path);
-    let fp = store.import_cert(&key_data).unwrap();
+    let fp = store.import_key(&key_data).unwrap();
 
     store
         .save_card_key(
@@ -1140,10 +1140,10 @@ fn test_keystore_card_keys_cascade_delete() {
         .unwrap();
 
     // Delete the certificate — card_keys should cascade
-    store.delete_cert(&fp).unwrap();
+    store.delete_key(&fp).unwrap();
 
     // Re-import the key and check card_keys are gone
-    let fp2 = store.import_cert(&key_data).unwrap();
+    let fp2 = store.import_key(&key_data).unwrap();
     let card_keys = store.get_card_keys(&fp2).unwrap();
     assert_eq!(card_keys.len(), 0);
 }
@@ -1154,7 +1154,7 @@ fn test_keystore_card_keys_empty_result() {
 
     let key_path = store_dir().join("public.asc");
     let key_data = read_file(&key_path);
-    let fp = store.import_cert(&key_data).unwrap();
+    let fp = store.import_key(&key_data).unwrap();
 
     // No card keys saved — should return empty
     let card_keys = store.get_card_keys(&fp).unwrap();
@@ -1179,7 +1179,7 @@ fn test_keystore_encrypt_bytes_to_file() {
     let store = KeyStore::open(&db_path).unwrap();
 
     let (secret_key, fp) = create_test_key("FileEnc <fileenc@example.com>");
-    store.import_cert(&secret_key).unwrap();
+    store.import_key(&secret_key).unwrap();
 
     // Encrypt bytes and write to file
     let plaintext = b"Bytes to file encryption test";
@@ -1204,8 +1204,8 @@ fn test_keystore_encrypt_bytes_to_file_multiple_recipients() {
 
     let (secret_key1, fp1) = create_test_key("Multi1 <multi1@example.com>");
     let (secret_key2, fp2) = create_test_key("Multi2 <multi2@example.com>");
-    store.import_cert(&secret_key1).unwrap();
-    store.import_cert(&secret_key2).unwrap();
+    store.import_key(&secret_key1).unwrap();
+    store.import_key(&secret_key2).unwrap();
 
     // Encrypt bytes for both recipients and write to file
     let plaintext = b"Multi-recipient bytes to file";
@@ -1237,12 +1237,12 @@ fn test_keystore_certify_uid() {
     // Create signer and target keys
     let (signer_key, signer_fp) = create_test_key("Signer <signer@example.com>");
     let (target_key, target_fp) = create_test_key("Target <target@example.com>");
-    store.import_cert(&signer_key).unwrap();
-    store.import_cert(&target_key).unwrap();
+    store.import_key(&signer_key).unwrap();
+    store.import_key(&target_key).unwrap();
 
     // Export target's public key from store, certify it, re-import
-    let target_pub = store.export_cert(&target_fp).unwrap();
-    let signer_sec = store.export_cert(&signer_fp).unwrap();
+    let target_pub = store.export_key(&target_fp).unwrap();
+    let signer_sec = store.export_key(&signer_fp).unwrap();
 
     let certified = certify_key(
         &signer_sec,
@@ -1254,10 +1254,10 @@ fn test_keystore_certify_uid() {
     .unwrap();
 
     // Re-import certified key and verify certification appears
-    store.update_cert(&target_fp, &certified).unwrap();
+    store.update_key(&target_fp, &certified).unwrap();
 
-    let updated_cert = store.export_cert(&target_fp).unwrap();
-    let info = parse_cert_bytes(&updated_cert, true).unwrap();
+    let updated_key = store.export_key(&target_fp).unwrap();
+    let info = parse_key_bytes(&updated_key, true).unwrap();
 
     let target_uid = info
         .user_ids

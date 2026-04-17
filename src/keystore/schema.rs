@@ -3,7 +3,7 @@
 use rusqlite::Connection;
 
 /// Current schema version.
-pub const SCHEMA_VERSION: u32 = 20260413;
+pub const SCHEMA_VERSION: u32 = 20260416;
 
 /// Initialize the database schema.
 pub fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
@@ -39,6 +39,9 @@ fn migrate(conn: &Connection, from_version: u32) -> rusqlite::Result<()> {
     if from_version < 20260413 {
         migrate_v2(conn)?;
     }
+    if from_version < 20260416 {
+        migrate_v3(conn)?;
+    }
 
     // Update version
     conn.execute("DELETE FROM schema_version", [])?;
@@ -51,6 +54,12 @@ fn migrate(conn: &Connection, from_version: u32) -> rusqlite::Result<()> {
 }
 
 /// Migration to version 1 - initial schema.
+///
+/// Creates the original `certificates` table with a `cert_data` column.
+/// Migration v3 (2026-04-16) renames the table to `keys` and the column
+/// to `key_data`; keep this v1 migration creating the legacy names so
+/// that any fresh install still runs v1→v2→v3 in sequence and existing
+/// v1/v2 installs migrate forward correctly.
 fn migrate_v1(conn: &Connection) -> rusqlite::Result<()> {
     // Main certificates table
     conn.execute(
@@ -142,6 +151,34 @@ fn migrate_v2(conn: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
+/// Migration to version 3 (2026-04-16) — rename `certificates` table
+/// to `keys` and its `cert_data` column to `key_data`. The term
+/// "certificate" in this codebase used to be a synonym for an OpenPGP
+/// key bundle; now "key" is used consistently and "certification"
+/// refers only to the OpenPGP signature type. SQLite ≥ 3.26 updates
+/// foreign-key references to the renamed table automatically.
+///
+/// A pre-existing `keys` table may be present from the legacy
+/// johnnycanencrypt schema (carried across the v0→v1 migration as
+/// dead weight — nothing in this codebase ever reads it). Drop it
+/// along with its old helper tables before the rename, or the rename
+/// would fail with "there is already another table or index with
+/// this name: keys".
+fn migrate_v3(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(
+        "DROP TABLE IF EXISTS uidemails;
+         DROP TABLE IF EXISTS uidnames;
+         DROP TABLE IF EXISTS uiduris;
+         DROP TABLE IF EXISTS uidvalues;
+         DROP TABLE IF EXISTS keys;
+         ALTER TABLE certificates RENAME TO keys;
+         ALTER TABLE keys RENAME COLUMN cert_data TO key_data;
+         DROP INDEX IF EXISTS idx_certificates_is_secret;
+         CREATE INDEX IF NOT EXISTS idx_keys_is_secret ON keys(is_secret);",
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,15 +188,71 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         init_schema(&conn).unwrap();
 
-        // Verify tables exist
+        // Verify tables exist (schema v3 renamed `certificates` -> `keys`).
         let count: i32 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='keys'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+
+        // The old `certificates` table name must not linger after migration.
+        let legacy: i32 = conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='certificates'",
                 [],
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(count, 1);
+        assert_eq!(legacy, 0);
+    }
+
+    #[test]
+    fn test_schema_upgrade_v2_to_v3() {
+        // Build a v2 database by hand, then reopen via init_schema and
+        // confirm the v3 migration renames the table and column without
+        // losing data or FK integrity.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
+        migrate_v1(&conn).unwrap();
+        migrate_v2(&conn).unwrap();
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO schema_version (version) VALUES (?1)",
+            [20260413u32],
+        )
+        .unwrap();
+
+        // Seed a row via the legacy column name so we can verify
+        // it survives the rename.
+        conn.execute(
+            "INSERT INTO certificates (fingerprint, cert_data, is_secret, primary_uid)
+             VALUES ('ABCD', x'DEADBEEF', 0, 'alice')",
+            [],
+        )
+        .unwrap();
+
+        init_schema(&conn).unwrap();
+
+        let data: Vec<u8> = conn
+            .query_row(
+                "SELECT key_data FROM keys WHERE fingerprint = 'ABCD'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(data, vec![0xDE, 0xAD, 0xBE, 0xEF]);
+
+        let v: u32 = conn
+            .query_row("SELECT version FROM schema_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(v, SCHEMA_VERSION);
     }
 
     #[test]

@@ -18,8 +18,8 @@ use wecanencrypt::{
     get_ssh_pubkey,
     merge_keys,
     // Parsing
-    parse_cert_bytes,
-    parse_cert_file,
+    parse_key_bytes,
+    parse_key_file,
     // Keyring
     parse_keyring_file,
     // Signing/Verification
@@ -52,7 +52,7 @@ fn read_file(path: &PathBuf) -> Vec<u8> {
 // Certificate Parsing Tests (from test_parse_cert.py)
 // =============================================================================
 
-mod parse_cert {
+mod parse_key {
     use super::*;
     use chrono::NaiveDate;
 
@@ -70,12 +70,12 @@ mod parse_cert {
         let keypath = store_dir().join("old.asc");
 
         // Parse with null policy (should succeed despite expiry)
-        let info = parse_cert_file(&keypath, true).unwrap();
+        let info = parse_key_file(&keypath, true).unwrap();
         assert!(!info.fingerprint.is_empty());
     }
 
     #[test]
-    fn test_parse_cert_file_kushal() {
+    fn test_parse_key_file_kushal() {
         // Known values from Kushal's key (same as Python test)
         // etime = datetime.datetime(2020, 10, 16, 20, 53, 47)
         // ctime = datetime.datetime(2017, 10, 17, 20, 53, 47)
@@ -83,7 +83,7 @@ mod parse_cert {
         let expected_creation = NaiveDate::from_ymd_opt(2017, 10, 17).unwrap();
 
         let keypath = store_dir().join("pgp_keys.asc");
-        let info = parse_cert_file(&keypath, false).unwrap();
+        let info = parse_key_file(&keypath, false).unwrap();
 
         // Verify expected expiration and creation times match Python test
         assert_eq!(info.expiration_time.unwrap().date_naive(), expected_expiry);
@@ -92,7 +92,7 @@ mod parse_cert {
     }
 
     #[test]
-    fn test_parse_cert_bytes_kushal() {
+    fn test_parse_key_bytes_kushal() {
         // Same date assertions as Python test
         let expected_expiry = NaiveDate::from_ymd_opt(2020, 10, 16).unwrap();
         let expected_creation = NaiveDate::from_ymd_opt(2017, 10, 17).unwrap();
@@ -100,14 +100,14 @@ mod parse_cert {
         let keypath = store_dir().join("pgp_keys.asc");
         let data = read_file(&keypath);
 
-        let info = parse_cert_bytes(&data, false).unwrap();
+        let info = parse_key_bytes(&data, false).unwrap();
 
         assert_eq!(info.expiration_time.unwrap().date_naive(), expected_expiry);
         assert_eq!(info.creation_time.date_naive(), expected_creation);
     }
 
     #[test]
-    fn test_merge_certs() {
+    fn test_merge_keys() {
         // Same as Python test:
         // ctime = datetime.datetime(2017, 10, 17, 20, 53, 47)
         // etime = datetime.datetime(2027, 10, 15)
@@ -122,7 +122,7 @@ mod parse_cert {
 
         let merged = merge_keys(&old_data, &new_data).unwrap();
 
-        let info = parse_cert_bytes(&merged, false).unwrap();
+        let info = parse_key_bytes(&merged, false).unwrap();
 
         // Verify creation time unchanged, expiration updated
         assert_eq!(info.creation_time.date_naive(), expected_creation);
@@ -133,7 +133,7 @@ mod parse_cert {
     fn test_no_primary_sign() {
         // This key has a primary that can't sign
         let keypath = store_dir().join("secret.asc");
-        let info = parse_cert_file(&keypath, false).unwrap();
+        let info = parse_key_file(&keypath, false).unwrap();
 
         assert!(!info.can_primary_sign);
     }
@@ -742,11 +742,11 @@ mod keystore_fixtures {
         // Note: public.asc and secret.asc are the same key, so we use different keys
         let public_path = store_dir().join("public.asc");
         let public_data = read_file(&public_path);
-        store.import_cert(&public_data).unwrap();
+        store.import_key(&public_data).unwrap();
 
         let hello_path = store_dir().join("hellosecret.asc");
         let hello_data = read_file(&hello_path);
-        store.import_cert(&hello_data).unwrap();
+        store.import_key(&hello_data).unwrap();
 
         assert_eq!(store.count().unwrap(), 2);
     }
@@ -760,11 +760,11 @@ mod keystore_fixtures {
 
         let public_path = store_dir().join("public.asc");
         let public_data = read_file(&public_path);
-        let fp = store.import_cert(&public_data).unwrap();
+        let fp = store.import_key(&public_data).unwrap();
 
         // Get the cert back
-        let cert_data = store.export_cert(&fp).unwrap();
-        let details = get_key_cipher_details(&cert_data).unwrap();
+        let key_data = store.export_key(&fp).unwrap();
+        let details = get_key_cipher_details(&key_data).unwrap();
 
         // Verify known cipher details
         assert!(!details.is_empty());
@@ -784,18 +784,18 @@ mod keystore_fixtures {
         // Import secret key (contains both secret and public parts)
         let secret_path = store_dir().join("secret.asc");
         let secret_data = read_file(&secret_path);
-        let fp = store.import_cert(&secret_data).unwrap();
+        let fp = store.import_key(&secret_data).unwrap();
 
         // Get public key for encryption
-        let cert_data = store.export_cert(&fp).unwrap();
-        let public_key = get_pub_key(&cert_data).unwrap();
+        let key_data = store.export_key(&fp).unwrap();
+        let public_key = get_pub_key(&key_data).unwrap();
 
         // Encrypt
         let ciphertext = encrypt_bytes(public_key.as_bytes(), DATA.as_bytes(), true).unwrap();
         assert!(String::from_utf8_lossy(&ciphertext).starts_with("-----BEGIN PGP MESSAGE-----"));
 
         // Decrypt using the secret key
-        let decrypted = decrypt_bytes(&cert_data, &ciphertext, PASSWORD).unwrap();
+        let decrypted = decrypt_bytes(&key_data, &ciphertext, PASSWORD).unwrap();
         assert_eq!(String::from_utf8_lossy(&decrypted), DATA);
     }
 
@@ -809,7 +809,7 @@ mod keystore_fixtures {
         // Import Kushal's key which has multiple UIDs
         let key_path = store_dir().join("kushal_updated_key.asc");
         let key_data = read_file(&key_path);
-        store.import_cert(&key_data).unwrap();
+        store.import_key(&key_data).unwrap();
 
         // Search by email substring
         let results = store.search_by_uid("kushaldas").unwrap();
@@ -826,11 +826,11 @@ mod keystore_fixtures {
         // Import one public key and one secret key
         let public_path = store_dir().join("public.asc");
         let public_data = read_file(&public_path);
-        store.import_cert(&public_data).unwrap();
+        store.import_key(&public_data).unwrap();
 
         let secret_path = store_dir().join("hellosecret.asc");
         let secret_data = read_file(&secret_path);
-        store.import_cert(&secret_data).unwrap();
+        store.import_key(&secret_data).unwrap();
 
         let public_keys = store.list_public_keys().unwrap();
         let secret_keys = store.list_secret_keys().unwrap();
@@ -851,16 +851,16 @@ mod keystore_fixtures {
         // Import secret key
         let secret_path = store_dir().join("secret.asc");
         let secret_data = read_file(&secret_path);
-        let fp = store.import_cert(&secret_data).unwrap();
+        let fp = store.import_key(&secret_data).unwrap();
 
-        let cert_data = store.export_cert(&fp).unwrap();
-        let info = parse_cert_bytes(&cert_data, true).unwrap();
+        let key_data = store.export_key(&fp).unwrap();
+        let info = parse_key_bytes(&key_data, true).unwrap();
         let original_uid_count = info.user_ids.len();
 
         // Add a new UID
-        let updated_cert = add_uid(&cert_data, "New User <new@example.com>", PASSWORD).unwrap();
+        let updated_key = add_uid(&key_data, "New User <new@example.com>", PASSWORD).unwrap();
 
-        let updated_info = parse_cert_bytes(&updated_cert, true).unwrap();
+        let updated_info = parse_key_bytes(&updated_key, true).unwrap();
         assert_eq!(updated_info.user_ids.len(), original_uid_count + 1);
         assert!(updated_info
             .user_ids
@@ -878,16 +878,16 @@ mod keystore_fixtures {
         // Import secret key
         let secret_path = store_dir().join("secret.asc");
         let secret_data = read_file(&secret_path);
-        let fp = store.import_cert(&secret_data).unwrap();
+        let fp = store.import_key(&secret_data).unwrap();
 
-        let cert_data = store.export_cert(&fp).unwrap();
+        let key_data = store.export_key(&fp).unwrap();
 
         // Sign
-        let signature = sign_bytes_detached(&cert_data, b"hello", PASSWORD).unwrap();
+        let signature = sign_bytes_detached(&key_data, b"hello", PASSWORD).unwrap();
         assert!(signature.starts_with("-----BEGIN PGP SIGNATURE-----"));
 
         // Verify with public key
-        let public_key = get_pub_key(&cert_data).unwrap();
+        let public_key = get_pub_key(&key_data).unwrap();
         assert!(
             verify_bytes_detached(public_key.as_bytes(), b"hello", signature.as_bytes()).unwrap()
         );
@@ -903,18 +903,18 @@ mod keystore_fixtures {
         // Import secret key
         let secret_path = store_dir().join("secret.asc");
         let secret_data = read_file(&secret_path);
-        let fp = store.import_cert(&secret_data).unwrap();
+        let fp = store.import_key(&secret_data).unwrap();
 
-        let cert_data = store.export_cert(&fp).unwrap();
-        let info = parse_cert_bytes(&cert_data, true).unwrap();
+        let key_data = store.export_key(&fp).unwrap();
+        let info = parse_key_bytes(&key_data, true).unwrap();
         assert!(info.is_secret);
 
         // Get public key
-        let public_key = get_pub_key(&cert_data).unwrap();
+        let public_key = get_pub_key(&key_data).unwrap();
         assert!(public_key.starts_with("-----BEGIN PGP PUBLIC KEY BLOCK-----"));
 
         // Verify it's a public key (not secret)
-        let pub_info = parse_cert_bytes(public_key.as_bytes(), true).unwrap();
+        let pub_info = parse_key_bytes(public_key.as_bytes(), true).unwrap();
         assert!(!pub_info.is_secret);
         assert_eq!(pub_info.fingerprint, fp);
     }
@@ -965,7 +965,7 @@ mod primary_sign {
         let keypath = test_files_dir().join("primary_with_sign.asc");
         let key_data = read_file(&keypath);
 
-        let info = parse_cert_bytes(&key_data, false).unwrap();
+        let info = parse_key_bytes(&key_data, false).unwrap();
 
         // This key should have a primary that can sign
         assert!(info.can_primary_sign);
@@ -976,7 +976,7 @@ mod primary_sign {
         let keypath = test_files_dir().join("primary_with_sign_public.asc");
         let key_data = read_file(&keypath);
 
-        let info = parse_cert_bytes(&key_data, false).unwrap();
+        let info = parse_key_bytes(&key_data, false).unwrap();
 
         assert!(info.can_primary_sign);
         assert!(!info.is_secret);
@@ -1007,7 +1007,7 @@ mod subkey_availability {
         let secret_data = read_file(&secret_path);
 
         // Verify we have the correct key
-        let info = parse_cert_bytes(&secret_data, true).unwrap();
+        let info = parse_key_bytes(&secret_data, true).unwrap();
         assert_eq!(info.fingerprint, "F51C310E02DC1B7771E176D8A1C5C364EB5B9A20");
 
         // Check availability - same assertions as Python test
@@ -1037,7 +1037,7 @@ mod subkey_availability {
         let expired_key_data = read_file(&expired_key_path);
 
         // Verify we have the correct key (Kushal's expired key)
-        let info = parse_cert_bytes(&expired_key_data, true).unwrap();
+        let info = parse_key_bytes(&expired_key_data, true).unwrap();
         assert_eq!(info.fingerprint, "A85FF376759C994A8A1168D8D8219C8C43F6C5E1");
 
         // Verify this key is actually expired (expiration was 2020-10-16)
@@ -1101,7 +1101,7 @@ mod expiry_updates {
         let updated = update_primary_expiry(&key.secret_key, new_expiry, PASSWORD).unwrap();
 
         // Parse and verify
-        let info = parse_cert_bytes(&updated, true).unwrap();
+        let info = parse_key_bytes(&updated, true).unwrap();
         assert!(
             info.expiration_time.is_some(),
             "Expiration time should be set"
@@ -1121,7 +1121,7 @@ mod expiry_updates {
         let key = create_key_simple(PASSWORD, &["Test <test@example.com>"]).unwrap();
 
         // Get subkey fingerprints
-        let info = parse_cert_bytes(&key.secret_key, true).unwrap();
+        let info = parse_key_bytes(&key.secret_key, true).unwrap();
         assert!(!info.subkeys.is_empty());
 
         let subkey_fps: Vec<&str> = info
@@ -1136,7 +1136,7 @@ mod expiry_updates {
             update_subkeys_expiry(&key.secret_key, &subkey_fps, new_expiry, PASSWORD).unwrap();
 
         // Parse and verify subkeys have new expiry
-        let updated_info = parse_cert_bytes(&updated, true).unwrap();
+        let updated_info = parse_key_bytes(&updated, true).unwrap();
         for subkey in &updated_info.subkeys {
             if subkey_fps.contains(&subkey.fingerprint.as_str()) {
                 assert!(subkey.expiration_time.is_some());
@@ -1178,7 +1178,7 @@ mod certification {
         assert!(!certified.is_empty());
 
         // The certified key should be parseable
-        let info = parse_cert_bytes(&certified, true).unwrap();
+        let info = parse_key_bytes(&certified, true).unwrap();
         assert_eq!(info.fingerprint, target.fingerprint);
     }
 
@@ -1209,7 +1209,7 @@ mod certification {
         .unwrap();
 
         // Verify the key is valid
-        let info = parse_cert_bytes(&certified, true).unwrap();
+        let info = parse_key_bytes(&certified, true).unwrap();
         assert_eq!(info.user_ids.len(), 2);
     }
 }
@@ -1245,7 +1245,7 @@ mod new_cipher_suites {
         .unwrap_or_else(|_| panic!("Failed to generate {} key", name));
 
         // Parse the generated key
-        let info = parse_cert_bytes(&key.secret_key, true)
+        let info = parse_key_bytes(&key.secret_key, true)
             .unwrap_or_else(|_| panic!("Failed to parse {} secret key", name));
         assert!(info.is_secret);
         assert!(!info.subkeys.is_empty(), "{} key should have subkeys", name);
@@ -1305,8 +1305,8 @@ mod new_cipher_suites {
         let public = read_file(&public_path);
         let secret = read_file(&secret_path);
 
-        let pub_info = parse_cert_bytes(&public, true).unwrap();
-        let sec_info = parse_cert_bytes(&secret, true).unwrap();
+        let pub_info = parse_key_bytes(&public, true).unwrap();
+        let sec_info = parse_key_bytes(&secret, true).unwrap();
 
         assert!(!pub_info.is_secret);
         assert!(sec_info.is_secret);
@@ -1327,8 +1327,8 @@ mod new_cipher_suites {
         let public = read_file(&public_path);
         let secret = read_file(&secret_path);
 
-        let pub_info = parse_cert_bytes(&public, true).unwrap();
-        let sec_info = parse_cert_bytes(&secret, true).unwrap();
+        let pub_info = parse_key_bytes(&public, true).unwrap();
+        let sec_info = parse_key_bytes(&secret, true).unwrap();
 
         assert!(!pub_info.is_secret);
         assert!(sec_info.is_secret);
@@ -1343,8 +1343,8 @@ mod new_cipher_suites {
         let public = read_file(&public_path);
         let secret = read_file(&secret_path);
 
-        let pub_info = parse_cert_bytes(&public, true).unwrap();
-        let sec_info = parse_cert_bytes(&secret, true).unwrap();
+        let pub_info = parse_key_bytes(&public, true).unwrap();
+        let sec_info = parse_key_bytes(&secret, true).unwrap();
 
         assert!(!pub_info.is_secret);
         assert!(sec_info.is_secret);
@@ -1359,8 +1359,8 @@ mod new_cipher_suites {
         let public = read_file(&public_path);
         let secret = read_file(&secret_path);
 
-        let pub_info = parse_cert_bytes(&public, true).unwrap();
-        let sec_info = parse_cert_bytes(&secret, true).unwrap();
+        let pub_info = parse_key_bytes(&public, true).unwrap();
+        let sec_info = parse_key_bytes(&secret, true).unwrap();
 
         assert!(!pub_info.is_secret);
         assert!(sec_info.is_secret);
@@ -1537,7 +1537,7 @@ mod new_cipher_suites {
 
 #[cfg(feature = "network")]
 mod network_fetch {
-    use wecanencrypt::{fetch_key_by_email, fetch_key_by_fingerprint, parse_cert_bytes};
+    use wecanencrypt::{fetch_key_by_email, fetch_key_by_fingerprint, parse_key_bytes};
 
     /// Test fetching Tor Browser Developers key by fingerprint from keys.openpgp.org
     /// Same test as johnnycanencrypt test_fetch_key_by_fingerprint
@@ -1546,10 +1546,10 @@ mod network_fetch {
         // Tor Browser Developers key (same as Python test)
         let fingerprint = "EF6E286DDA85EA2A4BA7DE684E2C6E8793298290";
 
-        let cert_data = fetch_key_by_fingerprint(fingerprint, None).unwrap();
+        let key_data = fetch_key_by_fingerprint(fingerprint, None).unwrap();
 
         // Verify we got a valid certificate
-        let info = parse_cert_bytes(&cert_data, true).unwrap();
+        let info = parse_key_bytes(&key_data, true).unwrap();
         assert_eq!(info.user_ids.len(), 1);
 
         // Check UID contains expected values
@@ -1565,10 +1565,10 @@ mod network_fetch {
         // Kushal Das's email (has WKD configured)
         let email = "mail@kushaldas.in";
 
-        let cert_data = fetch_key_by_email(email).unwrap();
+        let key_data = fetch_key_by_email(email).unwrap();
 
         // Verify we got a valid certificate
-        let info = parse_cert_bytes(&cert_data, true).unwrap();
+        let info = parse_key_bytes(&key_data, true).unwrap();
         assert!(!info.user_ids.is_empty());
 
         // Check fingerprint matches expected
@@ -1699,7 +1699,7 @@ mod certification_fixtures {
         .unwrap();
 
         // The certified key should be valid and parseable
-        let info = parse_cert_bytes(&certified, true).unwrap();
+        let info = parse_key_bytes(&certified, true).unwrap();
         assert_eq!(info.fingerprint, target.fingerprint);
         assert_eq!(info.user_ids.len(), 2);
 
@@ -1748,7 +1748,7 @@ mod certification_fixtures {
         let keypath = store_dir().join("kushal_updated_key.asc");
         let key_data = read_file(&keypath);
 
-        let info = parse_cert_bytes(&key_data, true).unwrap();
+        let info = parse_key_bytes(&key_data, true).unwrap();
 
         // Find the UID "Kushal Das <kushaldas@gmail.com>"
         let uid = info
@@ -1791,7 +1791,7 @@ mod certification_fixtures {
         let secret_data = read_file(&secret_path);
 
         // Check that there is only one userid and it's not revoked
-        let info = parse_cert_bytes(&secret_data, true).unwrap();
+        let info = parse_key_bytes(&secret_data, true).unwrap();
         assert_eq!(info.user_ids.len(), 1);
         assert!(!info.user_ids[0].revoked);
 
@@ -1799,7 +1799,7 @@ mod certification_fixtures {
         let with_new_uid =
             add_uid(&secret_data, "Off Spinner <spin@example.com>", password).unwrap();
 
-        let info2 = parse_cert_bytes(&with_new_uid, true).unwrap();
+        let info2 = parse_key_bytes(&with_new_uid, true).unwrap();
         assert_eq!(info2.user_ids.len(), 2);
         // All UIDs should be non-revoked
         for uid in &info2.user_ids {
@@ -1810,7 +1810,7 @@ mod certification_fixtures {
         let with_revoked =
             revoke_uid(&with_new_uid, "Off Spinner <spin@example.com>", password).unwrap();
 
-        let info3 = parse_cert_bytes(&with_revoked, true).unwrap();
+        let info3 = parse_key_bytes(&with_revoked, true).unwrap();
         assert_eq!(info3.user_ids.len(), 2);
         for uid in &info3.user_ids {
             if uid.value == "Off Spinner <spin@example.com>" {
@@ -1833,9 +1833,9 @@ mod dane_tests {
         // so KeyNotFound is the expected result for most addresses.
         let result = fetch_key_by_email_from_dane("test@example.com", None);
         match result {
-            Ok(cert_data) => {
+            Ok(key_data) => {
                 // If we got data, it should be a valid certificate
-                let info = wecanencrypt::parse_cert_bytes(&cert_data, true)
+                let info = wecanencrypt::parse_key_bytes(&key_data, true)
                     .expect("Fetched DANE key should be a valid certificate");
                 println!("Found DANE key: {}", info.fingerprint);
             }

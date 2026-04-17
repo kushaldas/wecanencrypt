@@ -5,22 +5,22 @@ use std::path::{Path, PathBuf};
 use rusqlite::{params, Connection};
 
 use crate::error::{Error, Result};
-use crate::internal::{fingerprint_to_hex, keyid_to_hex, parse_cert, public_key_to_armored};
-use crate::parse::parse_cert_bytes;
-use crate::types::CertificateInfo;
+use crate::internal::{fingerprint_to_hex, keyid_to_hex, parse_key, public_key_to_armored};
+use crate::parse::parse_key_bytes;
+use crate::types::KeyInfo;
 
 use super::schema::init_schema;
 
-/// SQLite-backed certificate storage.
+/// SQLite-backed key storage.
 ///
-/// The `KeyStore` provides persistent storage for OpenPGP certificates
+/// The `KeyStore` provides persistent storage for OpenPGP keys
 /// in a SQLite database. It indexes keys by fingerprint, key ID, user ID,
 /// and email for efficient lookup.
 ///
 /// # Database Schema
 ///
 /// The keystore uses three tables:
-/// - `certificates`: Stores the raw certificate data and metadata
+/// - `keys`: Stores the raw key data and metadata
 /// - `user_ids`: Indexes user IDs and emails for search
 /// - `subkeys`: Indexes subkey fingerprints and key IDs
 ///
@@ -91,17 +91,17 @@ impl KeyStore {
         Ok(Self { conn, path: None })
     }
 
-    /// Import a certificate into the keystore.
+    /// Import a key into the keystore.
     ///
-    /// Stores the certificate and indexes it by fingerprint, key ID, user IDs,
-    /// and email addresses. If a certificate with the same fingerprint already
+    /// Stores the key and indexes it by fingerprint, key ID, user IDs,
+    /// and email addresses. If a key with the same fingerprint already
     /// exists, it will be replaced.
     ///
     /// # Arguments
-    /// * `cert_data` - Certificate data (armored or binary), can be public or secret key
+    /// * `key_data` - Key data (armored or binary), can be public or secret key
     ///
     /// # Returns
-    /// The fingerprint of the imported certificate.
+    /// The fingerprint of the imported key.
     ///
     /// # Example
     ///
@@ -114,15 +114,15 @@ impl KeyStore {
     /// let key = create_key_simple("password", &["Alice <alice@example.com>"]).unwrap();
     ///
     /// // Import the secret key
-    /// let fp = store.import_cert(&key.secret_key).unwrap();
+    /// let fp = store.import_key(&key.secret_key).unwrap();
     /// println!("Imported key with fingerprint: {}", fp);
     ///
     /// // Can also import just the public key
-    /// let fp2 = store.import_cert(key.public_key.as_bytes()).unwrap();
+    /// let fp2 = store.import_key(key.public_key.as_bytes()).unwrap();
     /// assert_eq!(fp, fp2);  // Same fingerprint
     /// ```
-    pub fn import_cert(&self, cert_data: &[u8]) -> Result<String> {
-        let (public_key, is_secret) = parse_cert(cert_data)?;
+    pub fn import_key(&self, key_data: &[u8]) -> Result<String> {
+        let (public_key, is_secret) = parse_key(key_data)?;
         let fingerprint = fingerprint_to_hex(&public_key.primary_key);
 
         // Get primary UID
@@ -132,11 +132,11 @@ impl KeyStore {
             .first()
             .map(|u| String::from_utf8_lossy(u.id.id()).to_string());
 
-        // Store the certificate
+        // Store the key
         self.conn.execute(
-            "INSERT OR REPLACE INTO certificates (fingerprint, cert_data, is_secret, primary_uid, updated_at)
+            "INSERT OR REPLACE INTO keys (fingerprint, key_data, is_secret, primary_uid, updated_at)
              VALUES (?1, ?2, ?3, ?4, CURRENT_TIMESTAMP)",
-            params![&fingerprint, cert_data, is_secret as i32, primary_uid,],
+            params![&fingerprint, key_data, is_secret as i32, primary_uid,],
         )?;
 
         // Update user IDs
@@ -200,16 +200,16 @@ impl KeyStore {
         Ok(fingerprint)
     }
 
-    /// Import a certificate from a file.
+    /// Import a key from a file.
     ///
-    /// Reads a certificate file (armored or binary) and imports it into
+    /// Reads a key file (armored or binary) and imports it into
     /// the keystore.
     ///
     /// # Arguments
-    /// * `path` - Path to the certificate file
+    /// * `path` - Path to the key file
     ///
     /// # Returns
-    /// The fingerprint of the imported certificate.
+    /// The fingerprint of the imported key.
     ///
     /// # Example
     ///
@@ -219,28 +219,28 @@ impl KeyStore {
     /// let store = KeyStore::open("keys.db").unwrap();
     ///
     /// // Import a public key from file
-    /// let fp = store.import_cert_file("alice.asc").unwrap();
+    /// let fp = store.import_key_file("alice.asc").unwrap();
     /// println!("Imported: {}", fp);
     /// ```
-    pub fn import_cert_file(&self, path: impl AsRef<Path>) -> Result<String> {
+    pub fn import_key_file(&self, path: impl AsRef<Path>) -> Result<String> {
         let data = std::fs::read(path.as_ref())?;
-        self.import_cert(&data)
+        self.import_key(&data)
     }
 
-    /// Export a certificate by fingerprint.
+    /// Export a key by fingerprint.
     ///
-    /// Returns the certificate in its original format (as imported).
-    /// If the certificate was imported as a secret key, the secret key
+    /// Returns the key in its original format (as imported).
+    /// If the key was imported as a secret key, the secret key
     /// material is returned.
     ///
     /// # Arguments
-    /// * `fingerprint` - The certificate fingerprint (hex string)
+    /// * `fingerprint` - The key fingerprint (hex string)
     ///
     /// # Returns
-    /// The certificate data in its original format.
+    /// The key data in its original format.
     ///
     /// # Errors
-    /// Returns `Error::KeyNotFound` if no certificate with the given
+    /// Returns `Error::KeyNotFound` if no key with the given
     /// fingerprint exists.
     ///
     /// # Example
@@ -250,17 +250,17 @@ impl KeyStore {
     ///
     /// let store = KeyStore::open("keys.db").unwrap();
     ///
-    /// // Export a certificate
-    /// let cert_data = store.export_cert("ABCD1234...").unwrap();
+    /// // Export a key
+    /// let key_data = store.export_key("ABCD1234...").unwrap();
     ///
     /// // Write to file
-    /// std::fs::write("exported.key", &cert_data).unwrap();
+    /// std::fs::write("exported.key", &key_data).unwrap();
     /// ```
-    pub fn export_cert(&self, fingerprint: &str) -> Result<Vec<u8>> {
+    pub fn export_key(&self, fingerprint: &str) -> Result<Vec<u8>> {
         let data: Vec<u8> = self
             .conn
             .query_row(
-                "SELECT cert_data FROM certificates WHERE fingerprint = ?1",
+                "SELECT key_data FROM keys WHERE fingerprint = ?1",
                 [fingerprint],
                 |row| row.get(0),
             )
@@ -269,14 +269,14 @@ impl KeyStore {
         Ok(data)
     }
 
-    /// Export a certificate as ASCII-armored public key.
+    /// Export a key as ASCII-armored public key.
     ///
-    /// Always exports as a public key, even if the stored certificate
+    /// Always exports as a public key, even if the stored key
     /// contains secret key material. The output is suitable for sharing
     /// with others.
     ///
     /// # Arguments
-    /// * `fingerprint` - The certificate fingerprint (hex string)
+    /// * `fingerprint` - The key fingerprint (hex string)
     ///
     /// # Returns
     /// ASCII-armored public key string.
@@ -289,28 +289,28 @@ impl KeyStore {
     /// let store = KeyStore::open("keys.db").unwrap();
     ///
     /// // Export public key for sharing
-    /// let armored = store.export_cert_armored("ABCD1234...").unwrap();
+    /// let armored = store.export_key_armored("ABCD1234...").unwrap();
     /// println!("{}", armored);
     /// // -----BEGIN PGP PUBLIC KEY BLOCK-----
     /// // ...
     /// // -----END PGP PUBLIC KEY BLOCK-----
     /// ```
-    pub fn export_cert_armored(&self, fingerprint: &str) -> Result<String> {
-        let data = self.export_cert(fingerprint)?;
-        let (public_key, _) = parse_cert(&data)?;
+    pub fn export_key_armored(&self, fingerprint: &str) -> Result<String> {
+        let data = self.export_key(fingerprint)?;
+        let (public_key, _) = parse_key(&data)?;
         public_key_to_armored(&public_key)
     }
 
-    /// Get certificate info by fingerprint.
+    /// Get key info by fingerprint.
     ///
-    /// Returns detailed information about the certificate including
+    /// Returns detailed information about the key including
     /// fingerprint, user IDs, subkeys, and expiration dates.
     ///
     /// # Arguments
-    /// * `fingerprint` - The certificate fingerprint (hex string)
+    /// * `fingerprint` - The key fingerprint (hex string)
     ///
     /// # Returns
-    /// A `CertificateInfo` struct with certificate details.
+    /// A `KeyInfo` struct with key details.
     ///
     /// # Example
     ///
@@ -319,32 +319,32 @@ impl KeyStore {
     ///
     /// let store = KeyStore::open("keys.db").unwrap();
     ///
-    /// let info = store.get_cert_info("ABCD1234...").unwrap();
+    /// let info = store.get_key_info("ABCD1234...").unwrap();
     /// println!("Fingerprint: {}", info.fingerprint);
     /// println!("User IDs: {:?}", info.user_ids);
     /// println!("Has secret key: {}", info.is_secret);
     /// ```
-    pub fn get_cert_info(&self, fingerprint: &str) -> Result<CertificateInfo> {
-        let data = self.export_cert(fingerprint)?;
-        parse_cert_bytes(&data, true)
+    pub fn get_key_info(&self, fingerprint: &str) -> Result<KeyInfo> {
+        let data = self.export_key(fingerprint)?;
+        parse_key_bytes(&data, true)
     }
 
-    /// Get certificate data and info by fingerprint.
+    /// Get key data and info by fingerprint.
     ///
-    /// Returns both the raw certificate bytes and parsed certificate
+    /// Returns both the raw key bytes and parsed key
     /// information in a single call. This is more efficient than calling
-    /// `export_cert()` and `get_cert_info()` separately when you need both.
+    /// `export_key()` and `get_key_info()` separately when you need both.
     ///
     /// # Arguments
-    /// * `fingerprint` - The certificate fingerprint (hex string)
+    /// * `fingerprint` - The key fingerprint (hex string)
     ///
     /// # Returns
-    /// A tuple of `(Vec<u8>, CertificateInfo)` containing:
-    /// - The raw certificate data (as originally imported)
-    /// - Parsed certificate information (fingerprint, user IDs, subkeys, etc.)
+    /// A tuple of `(Vec<u8>, KeyInfo)` containing:
+    /// - The raw key data (as originally imported)
+    /// - Parsed key information (fingerprint, user IDs, subkeys, etc.)
     ///
     /// # Errors
-    /// Returns `Error::KeyNotFound` if no certificate with the given
+    /// Returns `Error::KeyNotFound` if no key with the given
     /// fingerprint exists.
     ///
     /// # Example
@@ -354,28 +354,28 @@ impl KeyStore {
     ///
     /// let store = KeyStore::open("keys.db").unwrap();
     ///
-    /// // Get both cert data and info in one call
-    /// let (cert_data, info) = store.get_cert("ABCD1234...").unwrap();
+    /// // Get both key data and info in one call
+    /// let (key_data, info) = store.get_key("ABCD1234...").unwrap();
     ///
     /// println!("Key: {} ({:?})", info.fingerprint, info.user_ids);
     /// println!("Has secret key: {}", info.is_secret);
     ///
-    /// // Use cert_data for crypto operations
-    /// let ciphertext = encrypt_bytes(&cert_data, b"Hello!", true).unwrap();
+    /// // Use key_data for crypto operations
+    /// let ciphertext = encrypt_bytes(&key_data, b"Hello!", true).unwrap();
     /// ```
-    pub fn get_cert(&self, fingerprint: &str) -> Result<(Vec<u8>, CertificateInfo)> {
-        let data = self.export_cert(fingerprint)?;
-        let info = parse_cert_bytes(&data, true)?;
+    pub fn get_key(&self, fingerprint: &str) -> Result<(Vec<u8>, KeyInfo)> {
+        let data = self.export_key(fingerprint)?;
+        let info = parse_key_bytes(&data, true)?;
         Ok((data, info))
     }
 
     /// Check if a key exists by fingerprint.
     ///
     /// # Arguments
-    /// * `fingerprint` - The certificate fingerprint (hex string)
+    /// * `fingerprint` - The key fingerprint (hex string)
     ///
     /// # Returns
-    /// `true` if the certificate exists, `false` otherwise.
+    /// `true` if the key exists, `false` otherwise.
     ///
     /// # Example
     ///
@@ -392,23 +392,23 @@ impl KeyStore {
     /// ```
     pub fn contains(&self, fingerprint: &str) -> Result<bool> {
         let count: i32 = self.conn.query_row(
-            "SELECT COUNT(*) FROM certificates WHERE fingerprint = ?1",
+            "SELECT COUNT(*) FROM keys WHERE fingerprint = ?1",
             [fingerprint],
             |row| row.get(0),
         )?;
         Ok(count > 0)
     }
 
-    /// Delete a certificate by fingerprint.
+    /// Delete a key by fingerprint.
     ///
-    /// Removes the certificate and all associated index entries (user IDs,
+    /// Removes the key and all associated index entries (user IDs,
     /// subkeys) from the database.
     ///
     /// # Arguments
-    /// * `fingerprint` - The certificate fingerprint (hex string)
+    /// * `fingerprint` - The key fingerprint (hex string)
     ///
     /// # Errors
-    /// Returns `Error::KeyNotFound` if no certificate with the given
+    /// Returns `Error::KeyNotFound` if no key with the given
     /// fingerprint exists.
     ///
     /// # Example
@@ -419,14 +419,13 @@ impl KeyStore {
     /// let store = KeyStore::open("keys.db").unwrap();
     ///
     /// // Delete a key
-    /// store.delete_cert("ABCD1234...").unwrap();
+    /// store.delete_key("ABCD1234...").unwrap();
     /// assert!(!store.contains("ABCD1234...").unwrap());
     /// ```
-    pub fn delete_cert(&self, fingerprint: &str) -> Result<()> {
-        let rows = self.conn.execute(
-            "DELETE FROM certificates WHERE fingerprint = ?1",
-            [fingerprint],
-        )?;
+    pub fn delete_key(&self, fingerprint: &str) -> Result<()> {
+        let rows = self
+            .conn
+            .execute("DELETE FROM keys WHERE fingerprint = ?1", [fingerprint])?;
 
         if rows == 0 {
             return Err(Error::KeyNotFound(fingerprint.to_string()));
@@ -435,13 +434,13 @@ impl KeyStore {
         Ok(())
     }
 
-    /// List all certificates in the store.
+    /// List all keys in the store.
     ///
-    /// Returns information about all stored certificates, ordered by
+    /// Returns information about all stored keys, ordered by
     /// most recently updated first.
     ///
     /// # Returns
-    /// A vector of `CertificateInfo` structs for all certificates.
+    /// A vector of `KeyInfo` structs for all keys.
     ///
     /// # Example
     ///
@@ -450,35 +449,35 @@ impl KeyStore {
     ///
     /// let store = KeyStore::open("keys.db").unwrap();
     ///
-    /// for cert in store.list_certs().unwrap() {
-    ///     println!("{} - {:?}", cert.fingerprint, cert.user_ids);
+    /// for key in store.list_keys().unwrap() {
+    ///     println!("{} - {:?}", key.fingerprint, key.user_ids);
     /// }
     /// ```
-    pub fn list_certs(&self) -> Result<Vec<CertificateInfo>> {
+    pub fn list_keys(&self) -> Result<Vec<KeyInfo>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT cert_data FROM certificates ORDER BY updated_at DESC")?;
+            .prepare("SELECT key_data FROM keys ORDER BY updated_at DESC")?;
 
         let rows = stmt.query_map([], |row| {
             let data: Vec<u8> = row.get(0)?;
             Ok(data)
         })?;
 
-        let mut certs = Vec::new();
+        let mut keys = Vec::new();
         for row in rows {
             let data = row?;
-            if let Ok(info) = parse_cert_bytes(&data, true) {
-                certs.push(info);
+            if let Ok(info) = parse_key_bytes(&data, true) {
+                keys.push(info);
             }
         }
 
-        Ok(certs)
+        Ok(keys)
     }
 
     /// List all fingerprints in the store.
     ///
-    /// Returns just the fingerprints without parsing the full certificates.
-    /// More efficient than `list_certs()` when you only need fingerprints.
+    /// Returns just the fingerprints without parsing the full keys.
+    /// More efficient than `list_keys()` when you only need fingerprints.
     ///
     /// # Returns
     /// A vector of fingerprint strings.
@@ -498,7 +497,7 @@ impl KeyStore {
     pub fn list_fingerprints(&self) -> Result<Vec<String>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT fingerprint FROM certificates ORDER BY updated_at DESC")?;
+            .prepare("SELECT fingerprint FROM keys ORDER BY updated_at DESC")?;
 
         let rows = stmt.query_map([], |row| row.get(0))?;
 
@@ -510,16 +509,16 @@ impl KeyStore {
         Ok(fingerprints)
     }
 
-    /// Search certificates by User ID (substring match).
+    /// Search keys by User ID (substring match).
     ///
-    /// Finds all certificates with a user ID containing the search string.
+    /// Finds all keys with a user ID containing the search string.
     /// The search is case-sensitive.
     ///
     /// # Arguments
     /// * `query` - Substring to search for in user IDs
     ///
     /// # Returns
-    /// Certificates with matching user IDs.
+    /// Keys with matching user IDs.
     ///
     /// # Example
     ///
@@ -530,14 +529,14 @@ impl KeyStore {
     ///
     /// // Find all keys with "Alice" in the user ID
     /// let results = store.search_by_uid("Alice").unwrap();
-    /// for cert in results {
-    ///     println!("{}: {:?}", cert.fingerprint, cert.user_ids);
+    /// for key in results {
+    ///     println!("{}: {:?}", key.fingerprint, key.user_ids);
     /// }
     /// ```
-    pub fn search_by_uid(&self, query: &str) -> Result<Vec<CertificateInfo>> {
+    pub fn search_by_uid(&self, query: &str) -> Result<Vec<KeyInfo>> {
         let pattern = format!("%{}%", query);
         let mut stmt = self.conn.prepare(
-            "SELECT DISTINCT c.cert_data FROM certificates c
+            "SELECT DISTINCT c.key_data FROM keys c
              JOIN user_ids u ON c.fingerprint = u.fingerprint
              WHERE u.uid LIKE ?1
              ORDER BY c.updated_at DESC",
@@ -548,27 +547,27 @@ impl KeyStore {
             Ok(data)
         })?;
 
-        let mut certs = Vec::new();
+        let mut keys = Vec::new();
         for row in rows {
             let data = row?;
-            if let Ok(info) = parse_cert_bytes(&data, true) {
-                certs.push(info);
+            if let Ok(info) = parse_key_bytes(&data, true) {
+                keys.push(info);
             }
         }
 
-        Ok(certs)
+        Ok(keys)
     }
 
-    /// Search certificates by email address.
+    /// Search keys by email address.
     ///
-    /// Finds all certificates with the exact email address (case-insensitive).
+    /// Finds all keys with the exact email address (case-insensitive).
     /// The email is extracted from user IDs in the format "Name <email@example.com>".
     ///
     /// # Arguments
     /// * `email` - Email address to search for
     ///
     /// # Returns
-    /// Certificates with matching email addresses.
+    /// Keys with matching email addresses.
     ///
     /// # Example
     ///
@@ -579,14 +578,14 @@ impl KeyStore {
     ///
     /// // Find key by email
     /// let results = store.search_by_email("alice@example.com").unwrap();
-    /// if let Some(cert) = results.first() {
-    ///     println!("Found: {}", cert.fingerprint);
+    /// if let Some(key) = results.first() {
+    ///     println!("Found: {}", key.fingerprint);
     /// }
     /// ```
-    pub fn search_by_email(&self, email: &str) -> Result<Vec<CertificateInfo>> {
+    pub fn search_by_email(&self, email: &str) -> Result<Vec<KeyInfo>> {
         let email_lower = email.to_lowercase();
         let mut stmt = self.conn.prepare(
-            "SELECT DISTINCT c.cert_data FROM certificates c
+            "SELECT DISTINCT c.key_data FROM keys c
              JOIN user_ids u ON c.fingerprint = u.fingerprint
              WHERE LOWER(u.email) = ?1
              ORDER BY c.updated_at DESC",
@@ -597,24 +596,24 @@ impl KeyStore {
             Ok(data)
         })?;
 
-        let mut certs = Vec::new();
+        let mut keys = Vec::new();
         for row in rows {
             let data = row?;
-            if let Ok(info) = parse_cert_bytes(&data, true) {
-                certs.push(info);
+            if let Ok(info) = parse_key_bytes(&data, true) {
+                keys.push(info);
             }
         }
 
-        Ok(certs)
+        Ok(keys)
     }
 
     /// Get all secret keys.
     ///
-    /// Returns only certificates that contain secret key material
+    /// Returns only keys that contain secret key material
     /// (i.e., keys you own and can use for signing/decryption).
     ///
     /// # Returns
-    /// Certificates with secret key material.
+    /// Keys with secret key material.
     ///
     /// # Example
     ///
@@ -624,38 +623,38 @@ impl KeyStore {
     /// let store = KeyStore::open("keys.db").unwrap();
     ///
     /// println!("Your keys:");
-    /// for cert in store.list_secret_keys().unwrap() {
-    ///     println!("  {} - {:?}", cert.fingerprint, cert.user_ids);
+    /// for key in store.list_secret_keys().unwrap() {
+    ///     println!("  {} - {:?}", key.fingerprint, key.user_ids);
     /// }
     /// ```
-    pub fn list_secret_keys(&self) -> Result<Vec<CertificateInfo>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT cert_data FROM certificates WHERE is_secret = 1 ORDER BY updated_at DESC",
-        )?;
+    pub fn list_secret_keys(&self) -> Result<Vec<KeyInfo>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT key_data FROM keys WHERE is_secret = 1 ORDER BY updated_at DESC")?;
 
         let rows = stmt.query_map([], |row| {
             let data: Vec<u8> = row.get(0)?;
             Ok(data)
         })?;
 
-        let mut certs = Vec::new();
+        let mut keys = Vec::new();
         for row in rows {
             let data = row?;
-            if let Ok(info) = parse_cert_bytes(&data, true) {
-                certs.push(info);
+            if let Ok(info) = parse_key_bytes(&data, true) {
+                keys.push(info);
             }
         }
 
-        Ok(certs)
+        Ok(keys)
     }
 
     /// Get all public-only keys.
     ///
-    /// Returns only certificates that contain only public key material
+    /// Returns only keys that contain only public key material
     /// (i.e., other people's keys that you can use for encryption/verification).
     ///
     /// # Returns
-    /// Certificates with only public key material.
+    /// Keys with only public key material.
     ///
     /// # Example
     ///
@@ -665,43 +664,43 @@ impl KeyStore {
     /// let store = KeyStore::open("keys.db").unwrap();
     ///
     /// println!("Contacts:");
-    /// for cert in store.list_public_keys().unwrap() {
-    ///     println!("  {} - {:?}", cert.fingerprint, cert.user_ids);
+    /// for key in store.list_public_keys().unwrap() {
+    ///     println!("  {} - {:?}", key.fingerprint, key.user_ids);
     /// }
     /// ```
-    pub fn list_public_keys(&self) -> Result<Vec<CertificateInfo>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT cert_data FROM certificates WHERE is_secret = 0 ORDER BY updated_at DESC",
-        )?;
+    pub fn list_public_keys(&self) -> Result<Vec<KeyInfo>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT key_data FROM keys WHERE is_secret = 0 ORDER BY updated_at DESC")?;
 
         let rows = stmt.query_map([], |row| {
             let data: Vec<u8> = row.get(0)?;
             Ok(data)
         })?;
 
-        let mut certs = Vec::new();
+        let mut keys = Vec::new();
         for row in rows {
             let data = row?;
-            if let Ok(info) = parse_cert_bytes(&data, true) {
-                certs.push(info);
+            if let Ok(info) = parse_key_bytes(&data, true) {
+                keys.push(info);
             }
         }
 
-        Ok(certs)
+        Ok(keys)
     }
 
-    /// Update a certificate.
+    /// Update a key.
     ///
-    /// Replaces an existing certificate with new data. The fingerprint must
-    /// match the existing certificate. Use this when you've modified a
-    /// certificate (added user IDs, updated expiry, etc.).
+    /// Replaces an existing key with new data. The fingerprint must
+    /// match the existing key. Use this when you've modified a
+    /// key (added user IDs, updated expiry, etc.).
     ///
     /// # Arguments
-    /// * `fingerprint` - The certificate fingerprint (must match existing)
-    /// * `cert_data` - The updated certificate data
+    /// * `fingerprint` - The key fingerprint (must match existing)
+    /// * `key_data` - The updated key data
     ///
     /// # Errors
-    /// - `Error::KeyNotFound` if no certificate exists with the fingerprint
+    /// - `Error::KeyNotFound` if no key exists with the fingerprint
     /// - `Error::InvalidInput` if the new data has a different fingerprint
     ///
     /// # Example
@@ -712,25 +711,25 @@ impl KeyStore {
     /// let store = KeyStore::open("keys.db").unwrap();
     ///
     /// // Get existing key
-    /// let cert_data = store.export_cert("ABCD1234...").unwrap();
+    /// let key_data = store.export_key("ABCD1234...").unwrap();
     ///
     /// // Add a new user ID
-    /// let updated = add_uid(&cert_data, "New Name <new@example.com>", "password").unwrap();
+    /// let updated = add_uid(&key_data, "New Name <new@example.com>", "password").unwrap();
     ///
-    /// // Update the stored certificate
-    /// store.update_cert("ABCD1234...", &updated).unwrap();
+    /// // Update the stored key
+    /// store.update_key("ABCD1234...", &updated).unwrap();
     /// ```
-    pub fn update_cert(&self, fingerprint: &str, cert_data: &[u8]) -> Result<()> {
+    pub fn update_key(&self, fingerprint: &str, key_data: &[u8]) -> Result<()> {
         if !self.contains(fingerprint)? {
             return Err(Error::KeyNotFound(fingerprint.to_string()));
         }
 
         // Re-import (which will update)
-        let new_fp = self.import_cert(cert_data)?;
+        let new_fp = self.import_key(key_data)?;
 
         if new_fp != fingerprint {
             return Err(Error::InvalidInput(format!(
-                "Certificate fingerprint mismatch: expected {}, got {}",
+                "Key fingerprint mismatch: expected {}, got {}",
                 fingerprint, new_fp
             )));
         }
@@ -738,9 +737,9 @@ impl KeyStore {
         Ok(())
     }
 
-    /// Get certificate count.
+    /// Get key count.
     ///
-    /// Returns the total number of certificates in the store.
+    /// Returns the total number of keys in the store.
     ///
     /// # Example
     ///
@@ -753,7 +752,7 @@ impl KeyStore {
     pub fn count(&self) -> Result<usize> {
         let count: i64 = self
             .conn
-            .query_row("SELECT COUNT(*) FROM certificates", [], |row| row.get(0))?;
+            .query_row("SELECT COUNT(*) FROM keys", [], |row| row.get(0))?;
         Ok(count as usize)
     }
 
@@ -777,16 +776,16 @@ impl KeyStore {
         self.path.as_deref()
     }
 
-    /// Find certificate by key ID.
+    /// Find key by key ID.
     ///
-    /// Searches for a certificate by the key ID of its primary key or any
+    /// Searches for a key by the key ID of its primary key or any
     /// subkey. Key IDs are the last 16 hex characters of a fingerprint.
     ///
     /// # Arguments
     /// * `key_id` - The key ID to search for (hex string)
     ///
     /// # Returns
-    /// The certificate data if found, or `None` if not found.
+    /// The key data if found, or `None` if not found.
     ///
     /// # Example
     ///
@@ -796,8 +795,8 @@ impl KeyStore {
     /// let store = KeyStore::open("keys.db").unwrap();
     ///
     /// // Find by key ID (last 16 chars of fingerprint)
-    /// if let Some(cert) = store.find_by_key_id("ABCD1234EFGH5678").unwrap() {
-    ///     println!("Found certificate");
+    /// if let Some(key) = store.find_by_key_id("ABCD1234EFGH5678").unwrap() {
+    ///     println!("Found key");
     /// }
     /// ```
     pub fn find_by_key_id(&self, key_id: &str) -> Result<Option<Vec<u8>>> {
@@ -809,7 +808,7 @@ impl KeyStore {
 
         match result {
             Ok(fp) => {
-                let data = self.export_cert(&fp)?;
+                let data = self.export_key(&fp)?;
                 Ok(Some(data))
             }
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
@@ -817,9 +816,9 @@ impl KeyStore {
         }
     }
 
-    /// Find certificate by subkey fingerprint.
+    /// Find key by subkey fingerprint.
     ///
-    /// Searches for a certificate that contains a subkey with the given
+    /// Searches for a key that contains a subkey with the given
     /// fingerprint. This is useful when a signature's issuer is a subkey
     /// rather than the primary key.
     ///
@@ -827,7 +826,7 @@ impl KeyStore {
     /// * `subkey_fp` - The subkey fingerprint to search for (hex string)
     ///
     /// # Returns
-    /// The certificate data if found, or `None` if not found.
+    /// The key data if found, or `None` if not found.
     ///
     /// # Example
     ///
@@ -837,8 +836,8 @@ impl KeyStore {
     /// let store = KeyStore::open("keys.db").unwrap();
     ///
     /// // Find by subkey fingerprint
-    /// if let Some(cert) = store.find_by_subkey_fingerprint("ABCD1234...").unwrap() {
-    ///     println!("Found parent certificate");
+    /// if let Some(key) = store.find_by_subkey_fingerprint("ABCD1234...").unwrap() {
+    ///     println!("Found parent key");
     /// }
     /// ```
     pub fn find_by_subkey_fingerprint(&self, subkey_fp: &str) -> Result<Option<Vec<u8>>> {
@@ -850,7 +849,7 @@ impl KeyStore {
 
         match result {
             Ok(fp) => {
-                let data = self.export_cert(&fp)?;
+                let data = self.export_key(&fp)?;
                 Ok(Some(data))
             }
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
@@ -860,13 +859,13 @@ impl KeyStore {
 
     /// Save a card-key association.
     ///
-    /// Records that a specific card slot holds a key belonging to a certificate.
+    /// Records that a specific card slot holds a key belonging to a key.
     /// Uses INSERT OR REPLACE on (card_ident, slot) so repeated calls update
     /// the `last_seen` timestamp.
     ///
     /// # Arguments
     ///
-    /// * `cert_fingerprint` - Fingerprint of the certificate (must exist in the store)
+    /// * `key_fingerprint` - Fingerprint of the key (must exist in the store)
     /// * `card_ident` - Card identifier ("MANUFACTURER:SERIAL")
     /// * `card_serial` - Card serial number (hex)
     /// * `card_manufacturer` - Human-readable manufacturer name
@@ -874,7 +873,7 @@ impl KeyStore {
     /// * `slot_fingerprint` - Fingerprint of the key in this card slot
     pub fn save_card_key(
         &self,
-        cert_fingerprint: &str,
+        key_fingerprint: &str,
         card_ident: &str,
         card_serial: &str,
         card_manufacturer: Option<&str>,
@@ -885,27 +884,27 @@ impl KeyStore {
             "INSERT OR REPLACE INTO card_keys
                 (fingerprint, card_ident, card_serial, card_manufacturer, slot, slot_fingerprint, last_seen)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, CURRENT_TIMESTAMP)",
-            params![cert_fingerprint, card_ident, card_serial, card_manufacturer, slot, slot_fingerprint],
+            params![key_fingerprint, card_ident, card_serial, card_manufacturer, slot, slot_fingerprint],
         )?;
         Ok(())
     }
 
-    /// Get all card associations for a certificate.
+    /// Get all card associations for a key.
     ///
     /// Returns information about which smart card slots hold keys belonging
-    /// to the given certificate.
+    /// to the given key.
     ///
     /// # Arguments
     ///
-    /// * `cert_fingerprint` - Fingerprint of the certificate
-    pub fn get_card_keys(&self, cert_fingerprint: &str) -> Result<Vec<StoredCardKey>> {
+    /// * `key_fingerprint` - Fingerprint of the key
+    pub fn get_card_keys(&self, key_fingerprint: &str) -> Result<Vec<StoredCardKey>> {
         let mut stmt = self.conn.prepare(
             "SELECT card_ident, card_serial, card_manufacturer, slot, slot_fingerprint, last_seen
              FROM card_keys WHERE fingerprint = ?1
              ORDER BY card_ident, slot",
         )?;
 
-        let rows = stmt.query_map([cert_fingerprint], |row| {
+        let rows = stmt.query_map([key_fingerprint], |row| {
             Ok(StoredCardKey {
                 card_ident: row.get(0)?,
                 card_serial: row.get(1)?,
@@ -1001,8 +1000,8 @@ pub fn encrypt_bytes_from_store(
     plaintext: &[u8],
     armor: bool,
 ) -> Result<Vec<u8>> {
-    let cert_data = store.export_cert(recipient_fingerprint)?;
-    crate::encrypt::encrypt_bytes(&cert_data, plaintext, armor)
+    let key_data = store.export_key(recipient_fingerprint)?;
+    crate::encrypt::encrypt_bytes(&key_data, plaintext, armor)
 }
 
 /// Encrypt to multiple recipients from the store.
@@ -1036,13 +1035,13 @@ pub fn encrypt_bytes_to_multiple_from_store(
     plaintext: &[u8],
     armor: bool,
 ) -> Result<Vec<u8>> {
-    let certs: Vec<Vec<u8>> = recipient_fingerprints
+    let keys: Vec<Vec<u8>> = recipient_fingerprints
         .iter()
-        .map(|fp| store.export_cert(fp))
+        .map(|fp| store.export_key(fp))
         .collect::<Result<Vec<_>>>()?;
 
-    let cert_refs: Vec<&[u8]> = certs.iter().map(|c| c.as_slice()).collect();
-    crate::encrypt::encrypt_bytes_to_multiple(&cert_refs, plaintext, armor)
+    let key_refs: Vec<&[u8]> = keys.iter().map(|c| c.as_slice()).collect();
+    crate::encrypt::encrypt_bytes_to_multiple(&key_refs, plaintext, armor)
 }
 
 /// Decrypt bytes using a secret key from the store.
@@ -1077,8 +1076,8 @@ pub fn decrypt_bytes_from_store(
     ciphertext: &[u8],
     password: &str,
 ) -> Result<Vec<u8>> {
-    let cert_data = store.export_cert(secret_key_fingerprint)?;
-    crate::decrypt::decrypt_bytes(&cert_data, ciphertext, password)
+    let key_data = store.export_key(secret_key_fingerprint)?;
+    crate::decrypt::decrypt_bytes(&key_data, ciphertext, password)
 }
 
 /// Sign bytes using a secret key from the store.
@@ -1115,8 +1114,8 @@ pub fn sign_bytes_from_store(
     data: &[u8],
     password: &str,
 ) -> Result<Vec<u8>> {
-    let cert_data = store.export_cert(signer_fingerprint)?;
-    crate::sign::sign_bytes(&cert_data, data, password)
+    let key_data = store.export_key(signer_fingerprint)?;
+    crate::sign::sign_bytes(&key_data, data, password)
 }
 
 /// Sign bytes detached using a secret key from the store.
@@ -1156,8 +1155,8 @@ pub fn sign_bytes_detached_from_store(
     data: &[u8],
     password: &str,
 ) -> Result<String> {
-    let cert_data = store.export_cert(signer_fingerprint)?;
-    crate::sign::sign_bytes_detached(&cert_data, data, password)
+    let key_data = store.export_key(signer_fingerprint)?;
+    crate::sign::sign_bytes_detached(&key_data, data, password)
 }
 
 /// Verify bytes using a key from the store.
@@ -1196,8 +1195,8 @@ pub fn verify_bytes_from_store(
     signer_fingerprint: &str,
     signed_message: &[u8],
 ) -> Result<bool> {
-    let cert_data = store.export_cert(signer_fingerprint)?;
-    crate::verify::verify_bytes(&cert_data, signed_message)
+    let key_data = store.export_key(signer_fingerprint)?;
+    crate::verify::verify_bytes(&key_data, signed_message)
 }
 
 /// Verify detached signature using a key from the store.
@@ -1240,8 +1239,8 @@ pub fn verify_bytes_detached_from_store(
     data: &[u8],
     signature: &[u8],
 ) -> Result<bool> {
-    let cert_data = store.export_cert(signer_fingerprint)?;
-    crate::verify::verify_bytes_detached(&cert_data, data, signature)
+    let key_data = store.export_key(signer_fingerprint)?;
+    crate::verify::verify_bytes_detached(&key_data, data, signature)
 }
 
 // File-based store operations
@@ -1279,8 +1278,8 @@ pub fn encrypt_file_from_store(
     output: impl AsRef<std::path::Path>,
     armor: bool,
 ) -> Result<()> {
-    let cert_data = store.export_cert(recipient_fingerprint)?;
-    crate::encrypt::encrypt_file(&cert_data, input, output, armor)
+    let key_data = store.export_key(recipient_fingerprint)?;
+    crate::encrypt::encrypt_file(&key_data, input, output, armor)
 }
 
 /// Encrypt a file to multiple recipients from the store.
@@ -1316,13 +1315,13 @@ pub fn encrypt_file_to_multiple_from_store(
     output: impl AsRef<std::path::Path>,
     armor: bool,
 ) -> Result<()> {
-    let certs: Vec<Vec<u8>> = recipient_fingerprints
+    let keys: Vec<Vec<u8>> = recipient_fingerprints
         .iter()
-        .map(|fp| store.export_cert(fp))
+        .map(|fp| store.export_key(fp))
         .collect::<Result<Vec<_>>>()?;
 
-    let cert_refs: Vec<&[u8]> = certs.iter().map(|c| c.as_slice()).collect();
-    crate::encrypt::encrypt_file_to_multiple(&cert_refs, input, output, armor)
+    let key_refs: Vec<&[u8]> = keys.iter().map(|c| c.as_slice()).collect();
+    crate::encrypt::encrypt_file_to_multiple(&key_refs, input, output, armor)
 }
 
 /// Decrypt a file using a secret key from the store.
@@ -1358,8 +1357,8 @@ pub fn decrypt_file_from_store(
     output: impl AsRef<std::path::Path>,
     password: &str,
 ) -> Result<()> {
-    let cert_data = store.export_cert(secret_key_fingerprint)?;
-    crate::decrypt::decrypt_file(&cert_data, input, output, password)
+    let key_data = store.export_key(secret_key_fingerprint)?;
+    crate::decrypt::decrypt_file(&key_data, input, output, password)
 }
 
 /// Sign a file using a secret key from the store.
@@ -1395,8 +1394,8 @@ pub fn sign_file_from_store(
     output: impl AsRef<std::path::Path>,
     password: &str,
 ) -> Result<()> {
-    let cert_data = store.export_cert(signer_fingerprint)?;
-    crate::sign::sign_file(&cert_data, input, output, password)
+    let key_data = store.export_key(signer_fingerprint)?;
+    crate::sign::sign_file(&key_data, input, output, password)
 }
 
 /// Sign a file with detached signature using a secret key from the store.
@@ -1434,8 +1433,8 @@ pub fn sign_file_detached_from_store(
     input: impl AsRef<std::path::Path>,
     password: &str,
 ) -> Result<String> {
-    let cert_data = store.export_cert(signer_fingerprint)?;
-    crate::sign::sign_file_detached(&cert_data, input, password)
+    let key_data = store.export_key(signer_fingerprint)?;
+    crate::sign::sign_file_detached(&key_data, input, password)
 }
 
 /// Verify a signed file using a key from the store.
@@ -1472,8 +1471,8 @@ pub fn verify_file_from_store(
     signer_fingerprint: &str,
     input: impl AsRef<std::path::Path>,
 ) -> Result<bool> {
-    let cert_data = store.export_cert(signer_fingerprint)?;
-    crate::verify::verify_file(&cert_data, input)
+    let key_data = store.export_key(signer_fingerprint)?;
+    crate::verify::verify_file(&key_data, input)
 }
 
 /// Verify a file with detached signature using a key from the store.
@@ -1513,9 +1512,9 @@ pub fn verify_file_detached_from_store(
     data_file: impl AsRef<std::path::Path>,
     sig_file: impl AsRef<std::path::Path>,
 ) -> Result<bool> {
-    let cert_data = store.export_cert(signer_fingerprint)?;
+    let key_data = store.export_key(signer_fingerprint)?;
     let sig_data = std::fs::read(sig_file.as_ref())?;
-    crate::verify::verify_file_detached(&cert_data, data_file, &sig_data)
+    crate::verify::verify_file_detached(&key_data, data_file, &sig_data)
 }
 
 #[cfg(test)]
@@ -1543,17 +1542,17 @@ mod tests {
     }
 
     #[test]
-    fn test_keystore_get_cert() {
+    fn test_keystore_get_key() {
         use crate::create_key_simple;
 
         let store = KeyStore::open_in_memory().unwrap();
 
         // Generate and import a key
         let key = create_key_simple("testpass", &["Test User <test@example.com>"]).unwrap();
-        let fp = store.import_cert(&key.secret_key).unwrap();
+        let fp = store.import_key(&key.secret_key).unwrap();
 
-        // Get cert returns both data and info
-        let (cert_data, info) = store.get_cert(&fp).unwrap();
+        // Get key returns both data and info
+        let (key_data, info) = store.get_key(&fp).unwrap();
 
         // Verify the info is correct
         assert_eq!(info.fingerprint, fp);
@@ -1561,23 +1560,23 @@ mod tests {
         assert_eq!(info.user_ids.len(), 1);
         assert!(info.user_ids[0].value.contains("Test User"));
 
-        // Verify the cert_data matches what was imported
-        let exported = store.export_cert(&fp).unwrap();
-        assert_eq!(cert_data, exported);
+        // Verify the key_data matches what was imported
+        let exported = store.export_key(&fp).unwrap();
+        assert_eq!(key_data, exported);
 
-        // Verify get_cert_info returns same info
-        let info2 = store.get_cert_info(&fp).unwrap();
+        // Verify get_key_info returns same info
+        let info2 = store.get_key_info(&fp).unwrap();
         assert_eq!(info.fingerprint, info2.fingerprint);
         assert_eq!(info.is_secret, info2.is_secret);
         assert_eq!(info.user_ids, info2.user_ids);
     }
 
     #[test]
-    fn test_keystore_get_cert_not_found() {
+    fn test_keystore_get_key_not_found() {
         let store = KeyStore::open_in_memory().unwrap();
 
-        // Try to get a non-existent cert
-        let result = store.get_cert("NONEXISTENT1234567890");
+        // Try to get a non-existent key
+        let result = store.get_key("NONEXISTENT1234567890");
         assert!(result.is_err());
     }
 }

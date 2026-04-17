@@ -22,7 +22,7 @@ use crate::internal::{
 /// still verify old signatures — expiry only prevents new signatures.
 ///
 /// # Arguments
-/// * `signer_cert` - The signer's public key (armored or binary)
+/// * `signer_key` - The signer's public key (armored or binary)
 /// * `signed_message` - The signed message data
 ///
 /// # Returns
@@ -35,8 +35,8 @@ use crate::internal::{
 /// let signed_msg = std::fs::read("message.asc")?;
 /// let valid = verify_bytes(&public_key, &signed_msg)?;
 /// ```
-pub fn verify_bytes(signer_cert: &[u8], signed_message: &[u8]) -> Result<bool> {
-    let public_key = parse_public_key(signer_cert)?;
+pub fn verify_bytes(signer_key: &[u8], signed_message: &[u8]) -> Result<bool> {
+    let public_key = parse_public_key(signer_key)?;
 
     // Try cleartext signature first
     if let Ok(result) = verify_cleartext(&public_key, signed_message) {
@@ -52,13 +52,13 @@ pub fn verify_bytes(signer_cert: &[u8], signed_message: &[u8]) -> Result<bool> {
 /// Checks key revocation before verifying the signature.
 ///
 /// # Arguments
-/// * `signer_cert` - The signer's public key
+/// * `signer_key` - The signer's public key
 /// * `signed_message` - The signed message data
 ///
 /// # Returns
 /// The original message content if the signature is valid.
-pub fn verify_and_extract_bytes(signer_cert: &[u8], signed_message: &[u8]) -> Result<Vec<u8>> {
-    let public_key = parse_public_key(signer_cert)?;
+pub fn verify_and_extract_bytes(signer_key: &[u8], signed_message: &[u8]) -> Result<Vec<u8>> {
+    let public_key = parse_public_key(signer_key)?;
 
     // Try cleartext signature first
     if let Some(content) = extract_cleartext(&public_key, signed_message)? {
@@ -76,14 +76,14 @@ pub fn verify_and_extract_bytes(signer_cert: &[u8], signed_message: &[u8]) -> Re
 /// still verify old signatures.
 ///
 /// # Arguments
-/// * `signer_cert` - The signer's public key
+/// * `signer_key` - The signer's public key
 /// * `data` - The original data that was signed
 /// * `signature` - The detached signature (armored or binary)
 ///
 /// # Returns
 /// `true` if the signature is valid.
-pub fn verify_bytes_detached(signer_cert: &[u8], data: &[u8], signature: &[u8]) -> Result<bool> {
-    let public_key = parse_public_key(signer_cert)?;
+pub fn verify_bytes_detached(signer_key: &[u8], data: &[u8], signature: &[u8]) -> Result<bool> {
+    let public_key = parse_public_key(signer_key)?;
 
     // Parse the detached signature
     let sig = match DetachedSignature::from_armor_single(Cursor::new(signature)) {
@@ -120,29 +120,29 @@ pub fn verify_bytes_detached(signer_cert: &[u8], data: &[u8], signature: &[u8]) 
 /// Verify a signed file.
 ///
 /// # Arguments
-/// * `signer_cert` - The signer's public key
+/// * `signer_key` - The signer's public key
 /// * `signed_file` - Path to the signed file
 ///
 /// # Returns
 /// `true` if the signature is valid.
-pub fn verify_file(signer_cert: &[u8], signed_file: impl AsRef<Path>) -> Result<bool> {
+pub fn verify_file(signer_key: &[u8], signed_file: impl AsRef<Path>) -> Result<bool> {
     let signed_message = std::fs::read(signed_file.as_ref())?;
-    verify_bytes(signer_cert, &signed_message)
+    verify_bytes(signer_key, &signed_message)
 }
 
 /// Verify and extract a signed file to an output path.
 ///
 /// # Arguments
-/// * `signer_cert` - The signer's public key
+/// * `signer_key` - The signer's public key
 /// * `signed_file` - Path to the signed file
 /// * `output` - Path to write the extracted content
 pub fn verify_and_extract_file(
-    signer_cert: &[u8],
+    signer_key: &[u8],
     signed_file: impl AsRef<Path>,
     output: impl AsRef<Path>,
 ) -> Result<()> {
     let signed_message = std::fs::read(signed_file.as_ref())?;
-    let content = verify_and_extract_bytes(signer_cert, &signed_message)?;
+    let content = verify_and_extract_bytes(signer_key, &signed_message)?;
     std::fs::write(output.as_ref(), content)?;
     Ok(())
 }
@@ -150,19 +150,19 @@ pub fn verify_and_extract_file(
 /// Verify a detached signature on a file.
 ///
 /// # Arguments
-/// * `signer_cert` - The signer's public key
+/// * `signer_key` - The signer's public key
 /// * `file` - Path to the original file
 /// * `signature` - The detached signature (armored or binary)
 ///
 /// # Returns
 /// `true` if the signature is valid.
 pub fn verify_file_detached(
-    signer_cert: &[u8],
+    signer_key: &[u8],
     file: impl AsRef<Path>,
     signature: &[u8],
 ) -> Result<bool> {
     let data = std::fs::read(file.as_ref())?;
-    verify_bytes_detached(signer_cert, &data, signature)
+    verify_bytes_detached(signer_key, &data, signature)
 }
 
 /// Verify a cleartext signed message.
