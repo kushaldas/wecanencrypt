@@ -160,23 +160,72 @@ fn migrate_v2(conn: &Connection) -> rusqlite::Result<()> {
 ///
 /// A pre-existing `keys` table may be present from the legacy
 /// johnnycanencrypt schema (carried across the v0→v1 migration as
-/// dead weight — nothing in this codebase ever reads it). Drop it
-/// along with its old helper tables before the rename, or the rename
-/// would fail with "there is already another table or index with
-/// this name: keys".
+/// dead weight — nothing in this codebase ever reads it). That
+/// legacy table, identified by its `keyvalue` column, is dropped
+/// along with its old UID helper tables before the rename.
+///
+/// Idempotency: the migration must be safe to re-run if a prior
+/// attempt died between statements (process crash, I/O error, etc.)
+/// and left `schema_version` un-bumped. We therefore (a) only drop
+/// `keys` when it has the JCE shape, never when it is our own
+/// post-rename table, and (b) only rename `certificates` when it
+/// still exists. Wrapped in a transaction so either all steps land
+/// or none do.
 fn migrate_v3(conn: &Connection) -> rusqlite::Result<()> {
-    conn.execute_batch(
-        "DROP TABLE IF EXISTS uidemails;
-         DROP TABLE IF EXISTS uidnames;
-         DROP TABLE IF EXISTS uiduris;
-         DROP TABLE IF EXISTS uidvalues;
-         DROP TABLE IF EXISTS keys;
-         ALTER TABLE certificates RENAME TO keys;
-         ALTER TABLE keys RENAME COLUMN cert_data TO key_data;
-         DROP INDEX IF EXISTS idx_certificates_is_secret;
-         CREATE INDEX IF NOT EXISTS idx_keys_is_secret ON keys(is_secret);",
-    )?;
+    // Prefer modern ALTER TABLE semantics: rewrite foreign-key
+    // references (from `REFERENCES certificates(fingerprint)`) to
+    // point at `keys(fingerprint)` automatically. No-op on SQLite
+    // < 3.26 (the pragma is silently ignored there).
+    conn.execute("PRAGMA legacy_alter_table = OFF", [])?;
+
+    let keys_exists = table_exists(conn, "keys")?;
+    let keys_is_legacy_jce = keys_exists && column_exists(conn, "keys", "keyvalue")?;
+    let certificates_exists = table_exists(conn, "certificates")?;
+
+    let mut stmts = String::from("BEGIN;\n");
+
+    if keys_is_legacy_jce {
+        stmts.push_str(
+            "DROP TABLE IF EXISTS uidemails;\n\
+             DROP TABLE IF EXISTS uidnames;\n\
+             DROP TABLE IF EXISTS uiduris;\n\
+             DROP TABLE IF EXISTS uidvalues;\n\
+             DROP TABLE keys;\n",
+        );
+    }
+
+    if certificates_exists {
+        stmts.push_str("ALTER TABLE certificates RENAME TO keys;\n");
+        stmts.push_str("ALTER TABLE keys RENAME COLUMN cert_data TO key_data;\n");
+    }
+
+    stmts.push_str(
+        "DROP INDEX IF EXISTS idx_certificates_is_secret;\n\
+         CREATE INDEX IF NOT EXISTS idx_keys_is_secret ON keys(is_secret);\n\
+         COMMIT;\n",
+    );
+
+    conn.execute_batch(&stmts)?;
     Ok(())
+}
+
+fn table_exists(conn: &Connection, name: &str) -> rusqlite::Result<bool> {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
+        [name],
+        |row| row.get(0),
+    )
+}
+
+fn column_exists(conn: &Connection, table: &str, column: &str) -> rusqlite::Result<bool> {
+    // pragma_table_info is a table-valued function; the table name
+    // cannot be bound as a parameter but is safely interpolated here
+    // because callers only pass static identifiers.
+    let sql = format!(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('{}') WHERE name=?1)",
+        table.replace('\'', "''")
+    );
+    conn.query_row(&sql, [column], |row| row.get(0))
 }
 
 #[cfg(test)]
@@ -264,5 +313,157 @@ mod tests {
             .query_row("SELECT version FROM schema_version", [], |row| row.get(0))
             .unwrap();
         assert_eq!(version, SCHEMA_VERSION);
+    }
+
+    /// Regression: before the idempotency fix, `migrate_v3` unconditionally
+    /// ran `DROP TABLE IF EXISTS keys` at the top of the batch. If a prior
+    /// run had completed the `ALTER TABLE certificates RENAME TO keys` but
+    /// died before `schema_version` was bumped, the retry would wipe the
+    /// user's (already-migrated) keys table and then fail on the rename.
+    /// The migration must be safe to re-run at any intermediate point.
+    #[test]
+    fn test_migrate_v3_idempotent_after_partial_retry() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
+
+        // Simulate a v2 DB that successfully ran ALTER TABLE and
+        // RENAME COLUMN but never recorded a bumped schema_version
+        // (e.g., crash between the batch and the version insert).
+        migrate_v1(&conn).unwrap();
+        migrate_v2(&conn).unwrap();
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO schema_version (version) VALUES (?1)",
+            [20260413u32],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO certificates (fingerprint, cert_data, is_secret, primary_uid)
+             VALUES ('ABCD', x'DEADBEEF', 0, 'alice')",
+            [],
+        )
+        .unwrap();
+
+        // Hand-run the table rename + column rename (the part that
+        // would have completed before the hypothetical crash), then
+        // leave schema_version stuck at v2. The dropped legacy index
+        // and new index are intentionally skipped to mimic a mid-batch
+        // failure.
+        conn.execute_batch(
+            "ALTER TABLE certificates RENAME TO keys;\n\
+             ALTER TABLE keys RENAME COLUMN cert_data TO key_data;",
+        )
+        .unwrap();
+        assert_eq!(
+            conn.query_row(
+                "SELECT version FROM schema_version",
+                [],
+                |row| row.get::<_, u32>(0)
+            )
+            .unwrap(),
+            20260413u32,
+        );
+
+        // Now init_schema runs again. The buggy pre-fix code would
+        // DROP the `keys` table and fail on `ALTER TABLE certificates
+        // RENAME TO keys` because `certificates` is gone. The fixed
+        // code should no-op the drop (not a JCE legacy table), skip
+        // the rename (`certificates` doesn't exist), create the
+        // index, and bump the version.
+        init_schema(&conn).unwrap();
+
+        // Data must still be there.
+        let data: Vec<u8> = conn
+            .query_row(
+                "SELECT key_data FROM keys WHERE fingerprint = 'ABCD'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(data, vec![0xDE, 0xAD, 0xBE, 0xEF]);
+
+        // Schema version bumped.
+        let version: u32 = conn
+            .query_row("SELECT version FROM schema_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+
+        // Index exists.
+        let idx_count: i32 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_keys_is_secret'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(idx_count, 1);
+
+        // A third init_schema call must also be a no-op (fully idempotent).
+        init_schema(&conn).unwrap();
+        let data_again: Vec<u8> = conn
+            .query_row(
+                "SELECT key_data FROM keys WHERE fingerprint = 'ABCD'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(data_again, vec![0xDE, 0xAD, 0xBE, 0xEF]);
+    }
+
+    /// Companion check: after v2→v3 upgrade, foreign-key references in
+    /// `user_ids` / `subkeys` / `card_keys` must point at the renamed
+    /// `keys` table so ON DELETE CASCADE still fires. With
+    /// `legacy_alter_table = ON` (SQLite default on some older builds)
+    /// the FK refs would still name `certificates` and INSERTs against
+    /// the new table would fail with obscure errors.
+    #[test]
+    fn test_migrate_v3_rewrites_foreign_keys() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
+
+        init_schema(&conn).unwrap();
+
+        // INSERT into the renamed `keys` table, then into child tables
+        // — the FKs must resolve to `keys(fingerprint)`.
+        conn.execute(
+            "INSERT INTO keys (fingerprint, key_data, is_secret, primary_uid)
+             VALUES ('FEED', x'BEEF', 0, 'bob')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO user_ids (fingerprint, uid, email) VALUES ('FEED', 'bob', 'b@e.x')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO subkeys (fingerprint, subkey_fingerprint, key_id, key_type)
+             VALUES ('FEED', 'SUBFEED', 'ID', 'signing')",
+            [],
+        )
+        .unwrap();
+
+        // And a FK-violating insert must be rejected.
+        let bad = conn.execute(
+            "INSERT INTO user_ids (fingerprint, uid, email)
+             VALUES ('NOPE', 'x', 'x@x.x')",
+            [],
+        );
+        assert!(
+            bad.is_err(),
+            "FK reference to keys(fingerprint) must reject unknown fingerprints"
+        );
+
+        // ON DELETE CASCADE still fires after the rename.
+        conn.execute("DELETE FROM keys WHERE fingerprint = 'FEED'", [])
+            .unwrap();
+        let uid_count: i32 = conn
+            .query_row("SELECT COUNT(*) FROM user_ids", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(uid_count, 0);
     }
 }
