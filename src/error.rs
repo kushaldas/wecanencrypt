@@ -3,6 +3,7 @@
 //! This module provides a comprehensive error type that covers all possible
 //! failure modes in OpenPGP operations.
 
+use pgp::types::KeyVersion;
 use thiserror::Error;
 
 /// The main error type for wecanencrypt operations.
@@ -75,6 +76,15 @@ pub enum Error {
     /// User ID not found in key
     #[error("User ID not found: {0}")]
     UidNotFound(String),
+
+    /// Operation would mix keys or key material of different OpenPGP versions
+    #[error("Key version mismatch: existing {existing:?}, incoming {incoming:?}")]
+    KeyVersionMismatch {
+        /// The key version already present / expected.
+        existing: KeyVersion,
+        /// The key version that was supplied and conflicts.
+        incoming: KeyVersion,
+    },
 
     /// Database error (keystore feature)
     #[cfg(feature = "keystore")]

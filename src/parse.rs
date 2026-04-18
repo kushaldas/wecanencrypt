@@ -193,6 +193,8 @@ fn extract_key_info(
     // Get subkey info
     let subkeys = extract_subkey_info(public_key, allow_expired);
 
+    let key_version = public_key.primary_key.version();
+
     Ok(KeyInfo {
         user_ids,
         fingerprint,
@@ -204,6 +206,7 @@ fn extract_key_info(
         is_revoked,
         revocation_time,
         subkeys,
+        key_version,
     })
 }
 
@@ -231,6 +234,8 @@ fn extract_subkey_info(public_key: &SignedPublicKey, allow_expired: bool) -> Vec
         // Determine key type based on key flags
         let key_type = determine_key_type(subkey);
 
+        let key_version = subkey.key.version();
+
         // Only include if valid or allowing expired
         if allow_expired || is_subkey_valid(subkey, false) {
             subkeys.push(SubkeyInfo {
@@ -242,6 +247,7 @@ fn extract_subkey_info(public_key: &SignedPublicKey, allow_expired: bool) -> Vec
                 is_revoked,
                 algorithm,
                 bit_length,
+                key_version,
             });
         }
     }

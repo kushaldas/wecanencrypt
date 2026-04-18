@@ -11,7 +11,7 @@ use pgp::composed::{MessageBuilder, SignedPublicKey};
 use pgp::crypto::aead::{AeadAlgorithm, ChunkSize};
 use pgp::crypto::sym::SymmetricKeyAlgorithm;
 use pgp::packet::{Packet, PacketParser, PublicKeyEncryptedSessionKey};
-use pgp::types::KeyDetails;
+use pgp::types::{KeyDetails, KeyVersion};
 use rand::thread_rng;
 
 use crate::error::{Error, Result};
@@ -68,10 +68,12 @@ pub fn encrypt_bytes_v2(recipient_key: &[u8], plaintext: &[u8], armor: bool) -> 
 
 /// Encrypt bytes to multiple recipients.
 ///
-/// Uses SEIPD v1 (RFC 4880, integrity-protected with MDC). For AEAD encryption
-/// with V6 keys, use [`encrypt_bytes_to_multiple_v2`].
+/// Automatically selects SEIPD v1 (RFC 4880, MDC) for V4-recipient lists and
+/// SEIPD v2 (RFC 9580, AEAD with AES-256-OCB) for V6-recipient lists. All
+/// recipients must share the same key version; a mixed list returns
+/// [`Error::KeyVersionMismatch`] to prevent accidentally producing a message
+/// whose ESK/SEIPD framing is disallowed by RFC 9580 §5.1.2 / §5.3.2.
 ///
-/// Encrypts the plaintext so that any of the recipients can decrypt it.
 /// Each recipient only needs their own secret key to decrypt.
 ///
 /// # Arguments
@@ -170,9 +172,16 @@ pub fn encrypt_bytes_to_multiple_with_algo(
         return Err(Error::InvalidInput("No recipients specified".to_string()));
     }
 
-    let mut rng = thread_rng();
+    let (encryption_keys, recipients_version) = collect_encryption_keys(recipient_keys)?;
 
-    let encryption_keys = collect_encryption_keys(recipient_keys)?;
+    // RFC 9580 §5.1.2 / §5.3.2: V6 PKESKs must precede a V2 SEIPD. Route V6
+    // recipient lists to the AEAD path automatically so callers using the
+    // plain `encrypt_*` entry points still get a compliant message.
+    if recipients_version == KeyVersion::V6 {
+        return encrypt_with_seipd_v2(&encryption_keys, plaintext, armor, sym_algo);
+    }
+
+    let mut rng = thread_rng();
 
     // Build the encrypted message using SEIPD v1 (MDC)
     let mut builder =
@@ -224,36 +233,8 @@ pub fn encrypt_bytes_to_multiple_seipd_v2(
         return Err(Error::InvalidInput("No recipients specified".to_string()));
     }
 
-    let mut rng = thread_rng();
-
-    let encryption_keys = collect_encryption_keys(recipient_keys)?;
-
-    // Build the encrypted message using SEIPD v2 (AEAD with OCB)
-    let mut builder = MessageBuilder::from_bytes("", plaintext.to_vec()).seipd_v2(
-        &mut rng,
-        sym_algo,
-        AeadAlgorithm::Ocb,
-        ChunkSize::default(),
-    );
-
-    // Add all encryption keys as recipients
-    for key in &encryption_keys {
-        builder
-            .encrypt_to_key(&mut rng, key)
-            .map_err(|e| Error::Crypto(e.to_string()))?;
-    }
-
-    // Produce the output
-    if armor {
-        let armored = builder
-            .to_armored_string(&mut rng, None.into())
-            .map_err(|e| Error::Crypto(e.to_string()))?;
-        Ok(armored.into_bytes())
-    } else {
-        builder
-            .to_vec(&mut rng)
-            .map_err(|e| Error::Crypto(e.to_string()))
-    }
+    let (encryption_keys, _version) = collect_encryption_keys(recipient_keys)?;
+    encrypt_with_seipd_v2(&encryption_keys, plaintext, armor, sym_algo)
 }
 
 /// Reject deprecated/insecure symmetric algorithms per RFC 9580 §9.3.
@@ -273,14 +254,53 @@ fn validate_sym_algo(sym_algo: SymmetricKeyAlgorithm) -> Result<()> {
     }
 }
 
-/// Parse recipient keys and collect valid encryption subkeys.
+/// Parse recipient keys, verify all share a single key version, and collect
+/// valid encryption subkeys.
+///
+/// Returns `(subkeys, version)` where `version` is the key version shared by
+/// every recipient's primary key. A mixed V4/V6 recipient list is rejected
+/// with [`Error::KeyVersionMismatch`] since RFC 9580 forbids V6 ESK packets
+/// preceding a V1 SEIPD and vice versa.
 fn collect_encryption_keys(
     recipient_keys: &[&[u8]],
-) -> Result<Vec<pgp::composed::SignedPublicSubKey>> {
+) -> Result<(Vec<pgp::composed::SignedPublicSubKey>, KeyVersion)> {
     let mut encryption_keys = Vec::new();
+    let mut recipients_version: Option<KeyVersion> = None;
+
     for key_data in recipient_keys {
         let public_key = parse_public_key(key_data)?;
+        let primary_version = public_key.primary_key.version();
+        match recipients_version {
+            None => recipients_version = Some(primary_version),
+            Some(existing) if existing != primary_version => {
+                return Err(Error::KeyVersionMismatch {
+                    existing,
+                    incoming: primary_version,
+                });
+            }
+            Some(_) => {}
+        }
+
         let subkeys = find_valid_encryption_subkeys(&public_key)?;
+
+        // RFC 9580 §10.1.1: every subkey of a V6 primary must be V6, and a V4
+        // primary must not carry V6 subkeys. rpgp 0.19 already rejects
+        // mismatched keys at parse (`SignedPublicKey::from_bytes` errors with
+        // "Illegal public subkey V4 in v6 key"), so in practice this guard is
+        // defense-in-depth: it covers in-memory-constructed keys that bypass
+        // parse, and protects against any future relaxation of rpgp's parser.
+        // If it ever fires we still want a precise `KeyVersionMismatch`
+        // instead of dispatching down the wrong SEIPD path.
+        for subkey in &subkeys {
+            let subkey_version = subkey.key.version();
+            if subkey_version != primary_version {
+                return Err(Error::KeyVersionMismatch {
+                    existing: primary_version,
+                    incoming: subkey_version,
+                });
+            }
+        }
+
         encryption_keys.extend(subkeys);
     }
 
@@ -288,7 +308,46 @@ fn collect_encryption_keys(
         return Err(Error::NoEncryptionSubkey);
     }
 
-    Ok(encryption_keys)
+    // `recipients_version` is Some here because `recipient_keys` was non-empty
+    // at the call site and the loop would have set it on the first iteration.
+    let version = recipients_version.expect("non-empty recipient list sets the version");
+    Ok((encryption_keys, version))
+}
+
+/// Shared SEIPDv2 message-assembly used by both the explicit `*_seipd_v2`
+/// public entry points and the auto-dispatch path in
+/// [`encrypt_bytes_to_multiple_with_algo`] for V6 recipients.
+fn encrypt_with_seipd_v2(
+    encryption_keys: &[pgp::composed::SignedPublicSubKey],
+    plaintext: &[u8],
+    armor: bool,
+    sym_algo: SymmetricKeyAlgorithm,
+) -> Result<Vec<u8>> {
+    let mut rng = thread_rng();
+
+    let mut builder = MessageBuilder::from_bytes("", plaintext.to_vec()).seipd_v2(
+        &mut rng,
+        sym_algo,
+        AeadAlgorithm::Ocb,
+        ChunkSize::default(),
+    );
+
+    for key in encryption_keys {
+        builder
+            .encrypt_to_key(&mut rng, key)
+            .map_err(|e| Error::Crypto(e.to_string()))?;
+    }
+
+    if armor {
+        let armored = builder
+            .to_armored_string(&mut rng, None.into())
+            .map_err(|e| Error::Crypto(e.to_string()))?;
+        Ok(armored.into_bytes())
+    } else {
+        builder
+            .to_vec(&mut rng)
+            .map_err(|e| Error::Crypto(e.to_string()))
+    }
 }
 
 /// Encrypt a file to a single recipient.

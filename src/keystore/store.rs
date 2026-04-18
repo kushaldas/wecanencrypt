@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{params, Connection};
 
+use pgp::types::KeyDetails;
+
 use crate::error::{Error, Result};
 use crate::internal::{fingerprint_to_hex, keyid_to_hex, parse_key, public_key_to_armored};
 use crate::parse::parse_key_bytes;
@@ -124,6 +126,28 @@ impl KeyStore {
     pub fn import_key(&self, key_data: &[u8]) -> Result<String> {
         let (public_key, is_secret) = parse_key(key_data)?;
         let fingerprint = fingerprint_to_hex(&public_key.primary_key);
+        let incoming_version = public_key.primary_key.version();
+
+        // Defense-in-depth: if a row already exists for this fingerprint,
+        // ensure its primary-key version matches the incoming one. V4 and V6
+        // primaries hash over different structures so a collision is
+        // cryptographically infeasible, but this guard turns any edge-case
+        // attempt at a cross-version overwrite into a precise
+        // `KeyVersionMismatch` rather than a silent `INSERT OR REPLACE`.
+        if let Ok(stored_data) = self.conn.query_row(
+            "SELECT key_data FROM keys WHERE fingerprint = ?1",
+            [&fingerprint],
+            |row| row.get::<_, Vec<u8>>(0),
+        ) {
+            let (stored_public, _stored_is_secret) = parse_key(&stored_data)?;
+            let stored_version = stored_public.primary_key.version();
+            if stored_version != incoming_version {
+                return Err(Error::KeyVersionMismatch {
+                    existing: stored_version,
+                    incoming: incoming_version,
+                });
+            }
+        }
 
         // Get primary UID
         let primary_uid = public_key

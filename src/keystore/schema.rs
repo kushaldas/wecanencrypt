@@ -359,12 +359,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            conn.query_row(
-                "SELECT version FROM schema_version",
-                [],
-                |row| row.get::<_, u32>(0)
-            )
-            .unwrap(),
+            conn.query_row("SELECT version FROM schema_version", [], |row| row
+                .get::<_, u32>(0))
+                .unwrap(),
             20260413u32,
         );
 

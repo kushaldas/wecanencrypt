@@ -130,6 +130,10 @@ pub use encrypt::{
 // Re-export symmetric algorithm type for use with encrypt_bytes_to_multiple_with_algo
 pub use pgp::crypto::sym::SymmetricKeyAlgorithm;
 
+// Re-export the OpenPGP key packet version so callers can pick V4 (default) or
+// V6 (RFC 9580) without importing from the underlying `pgp` crate directly.
+pub use pgp::types::KeyVersion;
+
 // Re-export decryption functions
 pub use decrypt::{decrypt_bytes, decrypt_bytes_legacy, decrypt_file, decrypt_reader_to_file};
 
@@ -148,8 +152,9 @@ pub use verify::{
 
 // Re-export key generation and management functions
 pub use key::{
-    add_uid, certify_key, create_key, create_key_simple, get_pub_key, revoke_key, revoke_uid,
-    update_password, update_primary_expiry, update_subkeys_expiry,
+    add_uid, certify_key, create_key, create_key_simple, create_key_v6, create_key_v6_simple,
+    get_pub_key, revoke_key, revoke_uid, update_password, update_primary_expiry,
+    update_subkeys_expiry,
 };
 
 // Re-export keyring functions

@@ -1,0 +1,1 @@
+This is a committed V6 fixture plaintext.

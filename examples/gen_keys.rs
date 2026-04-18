@@ -27,7 +27,7 @@ fn main() {
             false,
             true,
         )
-        .expect(&format!("Failed to generate {} key", name));
+        .unwrap_or_else(|_| panic!("Failed to generate {} key", name));
 
         // Write public key
         fs::write(

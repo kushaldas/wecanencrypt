@@ -4,6 +4,7 @@
 //! for representing OpenPGP keys and their properties.
 
 use chrono::{DateTime, Utc};
+use pgp::types::KeyVersion;
 use zeroize::Zeroizing;
 
 /// Cipher suite options for key generation.
@@ -51,6 +52,16 @@ impl std::str::FromStr for CipherSuite {
 }
 
 impl CipherSuite {
+    /// Whether this cipher suite is permitted for use with V6 (RFC 9580) keys.
+    ///
+    /// RFC 9580 §9.2 forbids `Ed25519Legacy` and `ECDH(Curve25519)` under V6, so
+    /// the legacy [`CipherSuite::Cv25519`] variant (which maps to those types) is
+    /// rejected. All other suites — RSA, NIST curves, `Cv25519Modern`, and
+    /// `Cv448Modern` — are allowed under V6.
+    pub fn is_allowed_for_v6(&self) -> bool {
+        !matches!(self, CipherSuite::Cv25519)
+    }
+
     /// Get a human-readable name for the cipher suite.
     pub fn name(&self) -> &'static str {
         match self {
@@ -182,6 +193,8 @@ pub struct SubkeyInfo {
     pub algorithm: String,
     /// Key size in bits (e.g., 4096 for RSA, 256 for Curve25519)
     pub bit_length: usize,
+    /// OpenPGP key packet version (V4 per RFC 4880, V6 per RFC 9580).
+    pub key_version: KeyVersion,
 }
 
 /// Parsed OpenPGP key information.
@@ -207,6 +220,8 @@ pub struct KeyInfo {
     pub revocation_time: Option<DateTime<Utc>>,
     /// Information about all subkeys
     pub subkeys: Vec<SubkeyInfo>,
+    /// OpenPGP key packet version of the primary key (V4 per RFC 4880, V6 per RFC 9580).
+    pub key_version: KeyVersion,
 }
 
 /// Detailed cipher information for a key component.

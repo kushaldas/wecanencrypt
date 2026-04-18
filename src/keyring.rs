@@ -11,7 +11,7 @@ use pgp::composed::{
 };
 use pgp::packet::Signature;
 use pgp::ser::Serialize;
-use pgp::types::KeyDetails;
+use pgp::types::{KeyDetails, KeyVersion};
 use zeroize::Zeroizing;
 
 use crate::error::{Error, Result};
@@ -148,6 +148,19 @@ pub fn export_keyring_armored(keys: &[&[u8]]) -> Result<String> {
 pub fn merge_keys(key_data: &[u8], update_data: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
     let (orig_public, orig_is_secret) = parse_key(key_data)?;
     let (update_public, update_is_secret) = parse_key(update_data)?;
+
+    // RFC 9580 §10.1.1: every subkey of a V6 primary must be V6 and vice versa.
+    // A V4 and V6 pair can never represent the same logical certificate, so
+    // reject the mismatch before the fingerprint compare to give the caller a
+    // precise error instead of a vague "fingerprints differ".
+    let orig_version: KeyVersion = orig_public.primary_key.version();
+    let update_version: KeyVersion = update_public.primary_key.version();
+    if orig_version != update_version {
+        return Err(Error::KeyVersionMismatch {
+            existing: orig_version,
+            incoming: update_version,
+        });
+    }
 
     let fp1 = fingerprint_to_hex(&orig_public.primary_key);
     let fp2 = fingerprint_to_hex(&update_public.primary_key);
