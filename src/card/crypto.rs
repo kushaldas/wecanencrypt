@@ -234,9 +234,23 @@ fn create_card_signature(data: &[u8], key_info: &SigningKeyInfo, pin: &[u8]) -> 
             .map_err(|e| Error::Crypto(e.to_string()))?,
     );
 
+    // Diagnostic: dump sha256 of the data buffer + hash bytes the card will sign.
+    // Captures the stdin-vs-hasher divergence reported on tumpa-cli BAD-sig
+    // incidents. Enable with `RUST_LOG=wecanencrypt=debug`.
+    log_card_sign_diag("create_card_signature", data, &config, key_info);
+
     // Compute the hash for the signature
     let hash_data = compute_signature_hash(data, &config, key_info.hash_alg)?;
     let signed_hash_value = [hash_data[0], hash_data[1]];
+
+    log::debug!(
+        target: "wecanencrypt::card::sign",
+        "hash_data ({} bytes) = {}; signed_hash_value left16 = {:02x}{:02x}",
+        hash_data.len(),
+        hex::encode(&hash_data),
+        hash_data[0],
+        hash_data[1],
+    );
 
     // Sign on the card
     let raw_signature = sign_on_card(&hash_data, key_info.hash_alg, &key_info.public_params, pin)?;
@@ -247,6 +261,44 @@ fn create_card_signature(data: &[u8], key_info: &SigningKeyInfo, pin: &[u8]) -> 
     // Build the signature
     Signature::from_config(config, signed_hash_value, signature_bytes)
         .map_err(|e| Error::Crypto(e.to_string()))
+}
+
+/// Log the inputs the card-sign path is about to hash.
+///
+/// Cheap, non-secret diagnostic. Output appears at `debug` level under the
+/// `wecanencrypt::card::sign` target — enable with
+/// `RUST_LOG=wecanencrypt::card::sign=debug` (or just `wecanencrypt=debug`).
+fn log_card_sign_diag(
+    site: &str,
+    data: &[u8],
+    config: &SignatureConfig,
+    key_info: &SigningKeyInfo,
+) {
+    if !log::log_enabled!(target: "wecanencrypt::card::sign", log::Level::Debug) {
+        return;
+    }
+    use sha2::{Digest, Sha256};
+    let data_sha256 = Sha256::digest(data);
+    let head = &data[..data.len().min(48)];
+    let tail = if data.len() > 48 {
+        &data[data.len().saturating_sub(48)..]
+    } else {
+        &[][..]
+    };
+    log::debug!(
+        target: "wecanencrypt::card::sign",
+        "{site}: fp={fp} hash_alg={ha:?} data_len={dl} data_sha256={ds} \
+         data_head_hex={head} data_tail_hex={tail} \
+         hashed_subpackets={hsubs} unhashed_subpackets={usubs}",
+        fp = hex::encode(key_info.fingerprint.as_bytes()),
+        ha = key_info.hash_alg,
+        dl = data.len(),
+        ds = hex::encode(data_sha256),
+        head = hex::encode(head),
+        tail = hex::encode(tail),
+        hsubs = config.hashed_subpackets.len(),
+        usubs = config.unhashed_subpackets.len(),
+    );
 }
 
 /// Compute the hash for the signature packet.

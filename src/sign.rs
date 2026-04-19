@@ -237,6 +237,33 @@ pub fn sign_bytes_detached_with_primary_key(
     sign_bytes_detached_impl(secret_key, data, password, true)
 }
 
+/// Log the data buffer the software-sign path is about to hash. Mirror of
+/// the card-path diagnostic; enable with
+/// `RUST_LOG=wecanencrypt::sign=debug`.
+fn log_software_sign_diag(site: &str, data: &[u8], use_primary: bool) {
+    if !log::log_enabled!(target: "wecanencrypt::sign", log::Level::Debug) {
+        return;
+    }
+    use sha2::{Digest, Sha256};
+    let data_sha256 = Sha256::digest(data);
+    let head = &data[..data.len().min(48)];
+    let tail = if data.len() > 48 {
+        &data[data.len().saturating_sub(48)..]
+    } else {
+        &[][..]
+    };
+    log::debug!(
+        target: "wecanencrypt::sign",
+        "{site}: use_primary={up} data_len={dl} data_sha256={ds} \
+         data_head_hex={head} data_tail_hex={tail}",
+        up = use_primary,
+        dl = data.len(),
+        ds = hex::encode(data_sha256),
+        head = hex::encode(head),
+        tail = hex::encode(tail),
+    );
+}
+
 /// Internal implementation for detached signatures.
 fn sign_bytes_detached_impl(
     secret_key: &[u8],
@@ -244,6 +271,7 @@ fn sign_bytes_detached_impl(
     password: &str,
     use_primary: bool,
 ) -> Result<String> {
+    log_software_sign_diag("sign_bytes_detached_impl", data, use_primary);
     let secret_key = parse_secret_key(secret_key)?;
     validate_signing_usage(
         secret_key.primary_key.created_at().into(),
