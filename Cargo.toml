@@ -58,6 +58,9 @@ sha2 = "0.10"
 ed25519-dalek = { version = "2", features = ["zeroize"] }
 zeroize = "1.8"
 
+# Structured logging at debug level (consumers opt in via env_logger / RUST_LOG)
+log = "0.4"
+
 # SQLite key storage (optional)
 rusqlite = { version = "0.39", features = ["bundled"], optional = true }
 

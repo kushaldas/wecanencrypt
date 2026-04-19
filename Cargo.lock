@@ -3302,6 +3302,7 @@ dependencies = [
  "hex-literal",
  "hickory-proto",
  "hkdf",
+ "log",
  "openpgp-card",
  "p256",
  "p384",
