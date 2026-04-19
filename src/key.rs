@@ -38,61 +38,13 @@ fn ensure_secret_primary_usable_for_external_certification(
     )
 }
 
-/// Generate a new OpenPGP key pair.
+/// Shared key-generation implementation used by every public `create_key*`
+/// entry point. Accepts the OpenPGP key packet version explicitly so the
+/// public V4 and V6 variants remain slim, single-purpose wrappers.
 ///
-/// # Arguments
-/// * `password` - Password to protect the secret key
-/// * `user_ids` - List of user IDs (e.g., "Name <email@example.com>")
-/// * `cipher` - Cipher suite to use (see [`CipherSuite`] for options)
-/// * `creation_time` - Optional creation time (defaults to now)
-/// * `expiration_time` - Optional expiration time for the primary key
-/// * `subkeys_expiration` - Optional expiration time for subkeys
-/// * `which_keys` - Which subkeys to generate (see [`SubkeyFlags`])
-/// * `can_primary_sign` - Whether the primary key can sign
-/// * `can_primary_expire` - Whether the primary key can expire
-///
-/// # Returns
-/// The generated key with public key (armored), secret key (binary), and fingerprint.
-///
-/// # Example
-///
-/// Generate a Curve25519 key (fast):
-///
-/// ```no_run
-/// use wecanencrypt::{create_key, CipherSuite, SubkeyFlags};
-///
-/// let key = create_key(
-///     "my_password",
-///     &["Alice <alice@example.com>"],
-///     CipherSuite::Cv25519,
-///     None, None, None,
-///     SubkeyFlags::all(),
-///     false,
-///     true,
-/// ).unwrap();
-///
-/// println!("Fingerprint: {}", key.fingerprint);
-/// println!("Public key:\n{}", key.public_key);
-/// ```
-///
-/// Generate an RSA-4096 key (slow, ~10s in release mode):
-///
-/// ```ignore
-/// // Ignored: RSA-4096 key generation is slow (~10s release, ~600s debug)
-/// use wecanencrypt::{create_key, CipherSuite, SubkeyFlags};
-///
-/// let key = create_key(
-///     "my_password",
-///     &["Bob <bob@example.com>"],
-///     CipherSuite::Rsa4k,
-///     None, None, None,
-///     SubkeyFlags::all(),
-///     false,
-///     true,
-/// ).unwrap();
-/// ```
+/// Kept private: callers pick the versioned wrapper that matches their intent.
 #[allow(clippy::too_many_arguments)]
-pub fn create_key(
+fn create_key_internal(
     password: &str,
     user_ids: &[&str],
     cipher: CipherSuite,
@@ -102,11 +54,21 @@ pub fn create_key(
     which_keys: SubkeyFlags,
     can_primary_sign: bool,
     can_primary_expire: bool,
+    key_version: KeyVersion,
 ) -> Result<GeneratedKey> {
     if user_ids.is_empty() {
         return Err(Error::InvalidInput(
             "At least one user ID is required".to_string(),
         ));
+    }
+
+    // RFC 9580 §9.2 forbids Ed25519Legacy + ECDH(Curve25519) under V6. Reject
+    // the combo up front so the error message points at the mistake.
+    if key_version == KeyVersion::V6 && !cipher.is_allowed_for_v6() {
+        return Err(Error::InvalidInput(format!(
+            "Cipher suite {} is not permitted for V6 keys — use Cv25519Modern or Cv448Modern",
+            cipher.name()
+        )));
     }
 
     let mut rng = thread_rng();
@@ -135,6 +97,7 @@ pub fn create_key(
     if which_keys.encryption {
         let mut enc_builder = SubkeyParamsBuilder::default();
         enc_builder
+            .version(key_version)
             .key_type(encryption_key_type)
             .can_encrypt(EncryptionCaps::All)
             .can_sign(false)
@@ -158,6 +121,7 @@ pub fn create_key(
     if which_keys.signing {
         let mut sign_builder = SubkeyParamsBuilder::default();
         sign_builder
+            .version(key_version)
             .key_type(primary_key_type.clone())
             .can_encrypt(EncryptionCaps::None)
             .can_sign(true)
@@ -181,6 +145,7 @@ pub fn create_key(
     if which_keys.authentication {
         let mut auth_builder = SubkeyParamsBuilder::default();
         auth_builder
+            .version(key_version)
             .key_type(primary_key_type.clone())
             .can_encrypt(EncryptionCaps::None)
             .can_sign(false)
@@ -204,6 +169,7 @@ pub fn create_key(
     // Build primary key params
     let mut key_params = SecretKeyParamsBuilder::default();
     key_params
+        .version(key_version)
         .key_type(primary_key_type)
         .can_certify(true)
         .can_sign(can_primary_sign)
@@ -284,19 +250,121 @@ pub fn create_key(
     })
 }
 
-/// Generate a key with default settings (Cv25519, all subkeys).
+/// Generate a V4 (RFC 4880) OpenPGP key pair.
 ///
-/// This is a convenience wrapper around [`create_key`] with sensible defaults:
-/// - Cipher suite: Curve25519 (fast, modern)
-/// - Subkeys: encryption, signing, and authentication
-/// - No expiration
+/// This is the compatibility-first entry point: it produces the key format
+/// that every existing OpenPGP implementation understands. For V6 (RFC 9580)
+/// use [`create_key_v6`]; both share the same parameter list so call sites
+/// can switch versions by changing one function name.
 ///
 /// # Arguments
 /// * `password` - Password to protect the secret key
 /// * `user_ids` - List of user IDs (e.g., "Name <email@example.com>")
+/// * `cipher` - Cipher suite to use (see [`CipherSuite`] for options)
+/// * `creation_time` - Optional creation time (defaults to now)
+/// * `expiration_time` - Optional expiration time for the primary key
+/// * `subkeys_expiration` - Optional expiration time for subkeys
+/// * `which_keys` - Which subkeys to generate (see [`SubkeyFlags`])
+/// * `can_primary_sign` - Whether the primary key can sign
+/// * `can_primary_expire` - Whether the primary key can expire
 ///
-/// # Returns
-/// The generated key with public key, secret key, and fingerprint.
+/// # Example
+///
+/// ```no_run
+/// use wecanencrypt::{create_key, CipherSuite, SubkeyFlags};
+///
+/// let key = create_key(
+///     "my_password",
+///     &["Alice <alice@example.com>"],
+///     CipherSuite::Cv25519,
+///     None, None, None,
+///     SubkeyFlags::all(),
+///     false,
+///     true,
+/// ).unwrap();
+/// ```
+#[allow(clippy::too_many_arguments)]
+pub fn create_key(
+    password: &str,
+    user_ids: &[&str],
+    cipher: CipherSuite,
+    creation_time: Option<DateTime<Utc>>,
+    expiration_time: Option<DateTime<Utc>>,
+    subkeys_expiration: Option<DateTime<Utc>>,
+    which_keys: SubkeyFlags,
+    can_primary_sign: bool,
+    can_primary_expire: bool,
+) -> Result<GeneratedKey> {
+    create_key_internal(
+        password,
+        user_ids,
+        cipher,
+        creation_time,
+        expiration_time,
+        subkeys_expiration,
+        which_keys,
+        can_primary_sign,
+        can_primary_expire,
+        KeyVersion::V4,
+    )
+}
+
+/// Generate a V6 (RFC 9580) OpenPGP key pair.
+///
+/// Parameter list mirrors [`create_key`] exactly; the only difference is the
+/// packet version produced. The legacy [`CipherSuite::Cv25519`] is forbidden
+/// under V6 (RFC 9580 §9.2) and returns `Error::InvalidInput`; use
+/// [`CipherSuite::Cv25519Modern`] or [`CipherSuite::Cv448Modern`] instead.
+/// All subkeys are V6 to satisfy the primary/subkey version-parity rule in
+/// RFC 9580 §10.1.1.
+///
+/// Password-protected V6 secret keys use rpgp's V6 defaults (Argon2id S2K +
+/// AES-256 + OCB) per RFC 9580 §3.7.2.
+///
+/// # Example
+///
+/// ```no_run
+/// use wecanencrypt::{create_key_v6, CipherSuite, SubkeyFlags};
+///
+/// let key = create_key_v6(
+///     "my_password",
+///     &["Alice <alice@example.com>"],
+///     CipherSuite::Cv25519Modern,
+///     None, None, None,
+///     SubkeyFlags::all(),
+///     false,
+///     true,
+/// ).unwrap();
+/// ```
+#[allow(clippy::too_many_arguments)]
+pub fn create_key_v6(
+    password: &str,
+    user_ids: &[&str],
+    cipher: CipherSuite,
+    creation_time: Option<DateTime<Utc>>,
+    expiration_time: Option<DateTime<Utc>>,
+    subkeys_expiration: Option<DateTime<Utc>>,
+    which_keys: SubkeyFlags,
+    can_primary_sign: bool,
+    can_primary_expire: bool,
+) -> Result<GeneratedKey> {
+    create_key_internal(
+        password,
+        user_ids,
+        cipher,
+        creation_time,
+        expiration_time,
+        subkeys_expiration,
+        which_keys,
+        can_primary_sign,
+        can_primary_expire,
+        KeyVersion::V6,
+    )
+}
+
+/// Generate a V4 key with default settings (Cv25519, all subkeys).
+///
+/// Convenience wrapper around [`create_key`] for the common case.
 ///
 /// # Example
 ///
@@ -311,6 +379,48 @@ pub fn create_key_simple(password: &str, user_ids: &[&str]) -> Result<GeneratedK
         password,
         user_ids,
         CipherSuite::Cv25519,
+        None,
+        None,
+        None,
+        SubkeyFlags::all(),
+        false,
+        true,
+    )
+}
+
+/// Generate a V6 (RFC 9580) key with default settings.
+///
+/// Convenience wrapper around [`create_key`] that produces a V6 key with all
+/// subkeys and no expiration. Unlike [`create_key_simple`], V6 cannot use the
+/// legacy [`CipherSuite::Cv25519`] suite — callers must pick one of the modern
+/// suites. The default here is [`CipherSuite::Cv25519Modern`] (Ed25519 + X25519).
+///
+/// # Arguments
+/// * `password` - Password to protect the secret key
+/// * `user_ids` - List of user IDs (e.g., "Name <email@example.com>")
+/// * `cipher` - Cipher suite to use. Must satisfy [`CipherSuite::is_allowed_for_v6`];
+///   `Cv25519` is rejected.
+///
+/// # Example
+///
+/// ```no_run
+/// use wecanencrypt::{create_key_v6_simple, CipherSuite};
+///
+/// let key = create_key_v6_simple(
+///     "my_password",
+///     &["Alice <alice@example.com>"],
+///     CipherSuite::Cv25519Modern,
+/// ).unwrap();
+/// ```
+pub fn create_key_v6_simple(
+    password: &str,
+    user_ids: &[&str],
+    cipher: CipherSuite,
+) -> Result<GeneratedKey> {
+    create_key_v6(
+        password,
+        user_ids,
+        cipher,
         None,
         None,
         None,

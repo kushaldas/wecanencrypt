@@ -1669,3 +1669,208 @@ mod merge_secret_dispatch {
         hex::encode_upper(fp.as_bytes())
     }
 }
+
+// =============================================================================
+// V6 (RFC 9580) key tests
+// =============================================================================
+
+mod v6_keys {
+    use super::*;
+    use wecanencrypt::{create_key_v6, create_key_v6_simple, Error, KeyVersion};
+
+    #[test]
+    fn v6_cv25519_modern_round_trip() {
+        let key =
+            create_key_v6_simple(TEST_PASSWORD, &[TEST_UID], CipherSuite::Cv25519Modern).unwrap();
+
+        // V6 fingerprints are SHA-256 → 32 bytes → 64 hex chars.
+        assert_eq!(
+            key.fingerprint.len(),
+            64,
+            "V6 primary fingerprint must be SHA-256 (64 hex chars), got {}",
+            key.fingerprint
+        );
+
+        let info = parse_key_bytes(&key.secret_key, false).unwrap();
+        assert_eq!(info.key_version, KeyVersion::V6);
+        for sk in &info.subkeys {
+            assert_eq!(
+                sk.key_version,
+                KeyVersion::V6,
+                "every subkey of a V6 primary must also be V6"
+            );
+            assert_eq!(sk.fingerprint.len(), 64);
+        }
+
+        // Round-trip encryption — auto-dispatch should pick SEIPDv2 for V6.
+        let pub_key = get_pub_key(&key.secret_key).unwrap();
+        let ciphertext = encrypt_bytes(pub_key.as_bytes(), b"v6 secret", true).unwrap();
+        let plaintext = decrypt_bytes(&key.secret_key, &ciphertext, TEST_PASSWORD).unwrap();
+        assert_eq!(plaintext, b"v6 secret");
+
+        // Sign / verify round-trip.
+        let signed = sign_bytes(&key.secret_key, b"v6 payload", TEST_PASSWORD).unwrap();
+        let extracted = verify_and_extract_bytes(pub_key.as_bytes(), &signed).unwrap();
+        assert_eq!(extracted, b"v6 payload");
+    }
+
+    #[test]
+    fn v6_cv448_modern_round_trip() {
+        let key =
+            create_key_v6_simple(TEST_PASSWORD, &[TEST_UID], CipherSuite::Cv448Modern).unwrap();
+        assert_eq!(key.fingerprint.len(), 64);
+
+        let info = parse_key_bytes(&key.secret_key, false).unwrap();
+        assert_eq!(info.key_version, KeyVersion::V6);
+
+        let pub_key = get_pub_key(&key.secret_key).unwrap();
+        let ciphertext = encrypt_bytes(pub_key.as_bytes(), b"ed448 works", true).unwrap();
+        let plaintext = decrypt_bytes(&key.secret_key, &ciphertext, TEST_PASSWORD).unwrap();
+        assert_eq!(plaintext, b"ed448 works");
+    }
+
+    #[test]
+    fn v6_rejects_legacy_cv25519() {
+        let result = create_key_v6(
+            TEST_PASSWORD,
+            &[TEST_UID],
+            CipherSuite::Cv25519,
+            None,
+            None,
+            None,
+            SubkeyFlags::all(),
+            false,
+            true,
+        );
+
+        match result {
+            Err(Error::InvalidInput(msg)) => {
+                assert!(msg.contains("V6"), "error should mention V6; got: {}", msg);
+            }
+            other => panic!("expected InvalidInput for V6 + Cv25519, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn v6_sign_detached_and_verify() {
+        let key =
+            create_key_v6_simple(TEST_PASSWORD, &[TEST_UID], CipherSuite::Cv25519Modern).unwrap();
+        let pub_key = get_pub_key(&key.secret_key).unwrap();
+
+        let sig = sign_bytes_detached(&key.secret_key, b"detach me", TEST_PASSWORD).unwrap();
+        assert!(verify_bytes_detached(pub_key.as_bytes(), b"detach me", sig.as_bytes()).unwrap());
+    }
+
+    #[test]
+    fn v6_cleartext_sign_and_verify() {
+        let key =
+            create_key_v6_simple(TEST_PASSWORD, &[TEST_UID], CipherSuite::Cv25519Modern).unwrap();
+        let pub_key = get_pub_key(&key.secret_key).unwrap();
+
+        let clear = sign_bytes_cleartext(&key.secret_key, b"hello v6", TEST_PASSWORD).unwrap();
+        assert!(verify_bytes(pub_key.as_bytes(), &clear).unwrap());
+    }
+
+    #[test]
+    fn v6_mixed_recipient_list_rejected() {
+        let v4 = create_key_simple(TEST_PASSWORD, &[TEST_UID]).unwrap();
+        let v6 = create_key_v6_simple(
+            TEST_PASSWORD,
+            &["V6 User <v6@example.com>"],
+            CipherSuite::Cv25519Modern,
+        )
+        .unwrap();
+
+        let v4_pub = get_pub_key(&v4.secret_key).unwrap();
+        let v6_pub = get_pub_key(&v6.secret_key).unwrap();
+
+        let err =
+            encrypt_bytes_to_multiple(&[v4_pub.as_bytes(), v6_pub.as_bytes()], b"mixed", true)
+                .unwrap_err();
+        match err {
+            Error::KeyVersionMismatch { .. } => {}
+            other => panic!("expected KeyVersionMismatch, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn v6_parse_reports_v6_on_all_subkeys() {
+        let key =
+            create_key_v6_simple(TEST_PASSWORD, &[TEST_UID], CipherSuite::Cv25519Modern).unwrap();
+
+        let info = parse_key_bytes(&key.secret_key, false).unwrap();
+        assert_eq!(info.key_version, KeyVersion::V6);
+        assert!(!info.subkeys.is_empty());
+        for sk in &info.subkeys {
+            assert_eq!(sk.key_version, KeyVersion::V6);
+        }
+
+        let details = get_key_cipher_details(&key.secret_key).unwrap();
+        assert!(!details.is_empty());
+    }
+
+    #[test]
+    fn v6_update_password_preserves_version() {
+        let key =
+            create_key_v6_simple(TEST_PASSWORD, &[TEST_UID], CipherSuite::Cv25519Modern).unwrap();
+
+        let new_secret =
+            update_password(&key.secret_key, TEST_PASSWORD, "a-brand-new-password").unwrap();
+        let info = parse_key_bytes(&new_secret, false).unwrap();
+        assert_eq!(
+            info.key_version,
+            KeyVersion::V6,
+            "password rotation must not downgrade the key version"
+        );
+
+        let pub_key = get_pub_key(&new_secret).unwrap();
+        let ct = encrypt_bytes(pub_key.as_bytes(), b"post-rotate", true).unwrap();
+        let pt = decrypt_bytes(&new_secret, &ct, "a-brand-new-password").unwrap();
+        assert_eq!(pt, b"post-rotate");
+    }
+
+    #[test]
+    fn v6_add_uid_keeps_v6() {
+        let key =
+            create_key_v6_simple(TEST_PASSWORD, &[TEST_UID], CipherSuite::Cv25519Modern).unwrap();
+
+        let with_extra = add_uid(
+            &key.secret_key,
+            "Another V6 <more@example.com>",
+            TEST_PASSWORD,
+        )
+        .unwrap();
+
+        let info = parse_key_bytes(&with_extra, false).unwrap();
+        assert_eq!(info.key_version, KeyVersion::V6);
+        assert!(info
+            .user_ids
+            .iter()
+            .any(|u| u.value.contains("more@example.com")));
+    }
+
+    #[test]
+    fn v6_revoke_uid_keeps_v6() {
+        let key = create_key_v6_simple(
+            TEST_PASSWORD,
+            &[TEST_UID, "Secondary <second@example.com>"],
+            CipherSuite::Cv25519Modern,
+        )
+        .unwrap();
+
+        let revoked = revoke_uid(
+            &key.secret_key,
+            "Secondary <second@example.com>",
+            TEST_PASSWORD,
+        )
+        .unwrap();
+        let info = parse_key_bytes(&revoked, false).unwrap();
+        assert_eq!(info.key_version, KeyVersion::V6);
+        let secondary = info
+            .user_ids
+            .iter()
+            .find(|u| u.value.contains("second@example.com"))
+            .expect("secondary UID still listed");
+        assert!(secondary.revoked);
+    }
+}
