@@ -66,15 +66,22 @@
 
 mod connection;
 mod crypto;
+#[cfg(feature = "card-external")]
+pub mod external;
 mod types;
 pub mod upload;
 
 pub use connection::{
-    change_admin_pin, change_user_pin, find_cards_for_key, get_card_details, get_card_serial,
-    get_card_version, get_pin_retry_counters, get_touch_modes, is_card_connected, list_all_cards,
-    reset_card, set_cardholder_name, set_public_key_url, set_touch_mode, verify_admin_pin,
-    verify_user_pin,
+    change_admin_pin, change_user_pin, get_card_details, get_card_serial, get_card_version,
+    get_pin_retry_counters, get_touch_modes, reset_card, set_cardholder_name, set_public_key_url,
+    set_touch_mode, verify_admin_pin, verify_user_pin,
 };
+
+// PCSC-only enumeration APIs. Mobile (`card-external`) builds omit these —
+// the UI drives sessions explicitly through the backend provider.
+#[cfg(feature = "card-pcsc")]
+pub use connection::{find_cards_for_key, is_card_connected, list_all_cards};
+
 pub use types::{CardError, CardInfo, CardKeyMatch, CardSummary, KeySlot, SlotMatch, TouchMode};
 // Re-export get_card_backend for use by crypto module
 pub(crate) use connection::get_card_backend;
