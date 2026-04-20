@@ -35,9 +35,8 @@ use crate::error::{Error, Result};
 /// (`"MANUFACTURER:SERIAL"`, uppercase). On mobile, the provider is
 /// typically free to ignore it when only one card can be connected at a
 /// time.
-pub type BackendProvider = Box<
-    dyn Fn(Option<&str>) -> Result<Box<dyn CardBackend + Send + Sync>> + Send + Sync + 'static,
->;
+pub type BackendProvider =
+    Box<dyn Fn(Option<&str>) -> Result<Box<dyn CardBackend + Send + Sync>> + Send + Sync + 'static>;
 
 static PROVIDER: OnceLock<BackendProvider> = OnceLock::new();
 
@@ -93,8 +92,6 @@ impl std::error::Error for AlreadyRegistered {}
 /// `dead_code` suppression when both features are active.
 #[cfg_attr(feature = "card-pcsc", allow(dead_code))]
 pub(crate) fn invoke_provider(ident: Option<&str>) -> Result<Box<dyn CardBackend + Send + Sync>> {
-    let provider = PROVIDER
-        .get()
-        .ok_or(Error::Card(CardError::NotConnected))?;
+    let provider = PROVIDER.get().ok_or(Error::Card(CardError::NotConnected))?;
     provider(ident)
 }

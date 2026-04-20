@@ -115,14 +115,11 @@ pub fn list_all_cards() -> Result<Vec<CardSummary>> {
 ///   [`super::external::set_backend_provider`].
 ///
 /// If both features are enabled, `card-pcsc` wins (desktop behavior).
-pub(crate) fn get_card_backend(
-    ident: Option<&str>,
-) -> Result<Box<dyn CardBackend + Send + Sync>> {
+pub(crate) fn get_card_backend(ident: Option<&str>) -> Result<Box<dyn CardBackend + Send + Sync>> {
     #[cfg(feature = "card-pcsc")]
     {
-        return get_card_backend_pcsc(ident).map(|b| -> Box<dyn CardBackend + Send + Sync> {
-            Box::new(b)
-        });
+        return get_card_backend_pcsc(ident)
+            .map(|b| -> Box<dyn CardBackend + Send + Sync> { Box::new(b) });
     }
     #[cfg(all(feature = "card-external", not(feature = "card-pcsc")))]
     {
