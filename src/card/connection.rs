@@ -5,15 +5,22 @@
 //! when multiple cards are connected. The ident format is `"MANUFACTURER:SERIAL"`
 //! (e.g. `"0006:00000001"` for a Yubico card). If `None`, the first available card is used.
 
+use card_backend::CardBackend;
+#[cfg(feature = "card-pcsc")]
 use card_backend_pcsc::PcscBackend;
 use openpgp_card::ocard::{data::UserInteractionFlag, OpenPGP};
 use openpgp_card::Card;
 use secrecy::{SecretBox, SecretString};
 
+#[allow(unused_imports)]
 use super::types::{CardError, CardInfo, CardKeyMatch, CardSummary, KeySlot, SlotMatch, TouchMode};
 use crate::error::{Error, Result};
 
 /// Check if an OpenPGP smart card is connected.
+///
+/// **PCSC-only.** Enumeration is a desktop / PC/SC concept; mobile
+/// (`card-external`) builds don't expose this function — they establish
+/// card sessions explicitly via their registered backend provider.
 ///
 /// # Returns
 ///
@@ -28,6 +35,7 @@ use crate::error::{Error, Result};
 ///     println!("Smart card detected!");
 /// }
 /// ```
+#[cfg(feature = "card-pcsc")]
 pub fn is_card_connected() -> bool {
     match PcscBackend::cards(None) {
         Ok(mut cards) => cards.next().is_some(),
@@ -36,6 +44,8 @@ pub fn is_card_connected() -> bool {
 }
 
 /// List all connected OpenPGP smart cards.
+///
+/// **PCSC-only.** See [`is_card_connected`] for the rationale.
 ///
 /// Returns a summary for each connected card including the ident
 /// (manufacturer:serial), manufacturer name, and serial number.
@@ -50,6 +60,7 @@ pub fn is_card_connected() -> bool {
 ///     println!("{} ({})", card.manufacturer_name, card.ident);
 /// }
 /// ```
+#[cfg(feature = "card-pcsc")]
 pub fn list_all_cards() -> Result<Vec<CardSummary>> {
     let cards = PcscBackend::cards(None)
         .map_err(|e| Error::Card(CardError::CommunicationError(e.to_string())))?;
@@ -92,9 +103,43 @@ pub fn list_all_cards() -> Result<Vec<CardSummary>> {
 
 /// Get a card backend, optionally selecting by ident.
 ///
-/// If `ident` is `None`, returns the first available card.
-/// If `ident` is `Some`, finds the card matching the given ident string.
-pub(crate) fn get_card_backend(ident: Option<&str>) -> Result<PcscBackend> {
+/// If `ident` is `None`, returns the first available card. If `ident` is
+/// `Some`, finds the card matching the given ident string.
+///
+/// The implementation dispatches on Cargo features:
+///
+/// - With `card-pcsc` — enumerate via PC/SC and box the selected
+///   [`PcscBackend`] as [`Box<dyn CardBackend + Send + Sync>`].
+/// - With `card-external` (and without `card-pcsc`) — call the provider
+///   callback registered via
+///   [`super::external::set_backend_provider`].
+///
+/// If both features are enabled, `card-pcsc` wins (desktop behavior).
+pub(crate) fn get_card_backend(ident: Option<&str>) -> Result<Box<dyn CardBackend + Send + Sync>> {
+    #[cfg(feature = "card-pcsc")]
+    {
+        return get_card_backend_pcsc(ident)
+            .map(|b| -> Box<dyn CardBackend + Send + Sync> { Box::new(b) });
+    }
+    #[cfg(all(feature = "card-external", not(feature = "card-pcsc")))]
+    {
+        return super::external::invoke_provider(ident);
+    }
+    #[cfg(not(any(feature = "card-pcsc", feature = "card-external")))]
+    {
+        let _ = ident;
+        Err(Error::Card(CardError::CommunicationError(
+            "no card transport enabled — build wecanencrypt with either \
+             `card-pcsc` (desktop) or `card-external` (mobile) feature"
+                .to_string(),
+        )))
+    }
+}
+
+/// PC/SC-backed card selection. Returns a concrete `PcscBackend` so the
+/// caller can decide whether to box it or use it directly.
+#[cfg(feature = "card-pcsc")]
+fn get_card_backend_pcsc(ident: Option<&str>) -> Result<PcscBackend> {
     match ident {
         None => {
             let mut cards = PcscBackend::cards(None)
@@ -770,6 +815,8 @@ pub fn set_public_key_url(url: &str, admin_pin: &[u8], ident: Option<&str>) -> R
 
 /// Find all connected smart cards that hold subkeys belonging to a given OpenPGP key.
 ///
+/// **PCSC-only.** See [`is_card_connected`] for the rationale.
+///
 /// Parses the key, enumerates all connected cards, and checks each card's
 /// three key slots (signature, encryption, authentication) against the key's
 /// primary key fingerprint and all subkey fingerprints.
@@ -798,6 +845,7 @@ pub fn set_public_key_url(url: &str, admin_pin: &[u8], ident: Option<&str>) -> R
 ///     }
 /// }
 /// ```
+#[cfg(feature = "card-pcsc")]
 pub fn find_cards_for_key(key_data: &[u8]) -> Result<Vec<CardKeyMatch>> {
     // Parse the key to extract all fingerprints
     let cert_info = crate::parse_key_bytes(key_data, true)?;
