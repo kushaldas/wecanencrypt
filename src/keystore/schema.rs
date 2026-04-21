@@ -1,9 +1,21 @@
 //! Database schema and migrations for the keystore.
 
-use rusqlite::Connection;
+use pgp::types::KeyDetails;
+use rusqlite::{params, Connection};
+
+use crate::internal::{
+    get_algorithm_name, get_key_bit_size, get_key_expiration, parse_key, system_time_to_datetime,
+    verified_primary_revocation,
+};
 
 /// Current schema version.
-pub const SCHEMA_VERSION: u32 = 20260416;
+///
+/// - `20260421` (v4, 2026-04-21): cache summary-view fields on `keys`
+///   (`is_revoked`, `revocation_time`, `expiration_time`,
+///   `cert_created_at`) and on `subkeys` (`algorithm`, `bit_length`),
+///   so callers that only need the list view can avoid re-parsing the
+///   OpenPGP blob on every row.
+pub const SCHEMA_VERSION: u32 = 20260421;
 
 /// Initialize the database schema.
 pub fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
@@ -41,6 +53,9 @@ fn migrate(conn: &Connection, from_version: u32) -> rusqlite::Result<()> {
     }
     if from_version < 20260416 {
         migrate_v3(conn)?;
+    }
+    if from_version < 20260421 {
+        migrate_v4(conn)?;
     }
 
     // Update version
@@ -206,6 +221,165 @@ fn migrate_v3(conn: &Connection) -> rusqlite::Result<()> {
     );
 
     conn.execute_batch(&stmts)?;
+    Ok(())
+}
+
+/// Migration to version 4 (2026-04-21) — cache summary-view fields so
+/// callers that only need the list view can avoid re-parsing the
+/// OpenPGP blob for every key.
+///
+/// Adds to `keys`:
+/// - `is_revoked INTEGER NOT NULL DEFAULT 0`
+/// - `revocation_time TEXT` (ISO-8601 UTC, nullable)
+/// - `expiration_time TEXT` (ISO-8601 UTC, nullable)
+/// - `cert_created_at TEXT` (the cert's primary-key creation
+///   timestamp; distinct from `created_at`, which is the SQLite row
+///   insert time)
+///
+/// Adds to `subkeys`:
+/// - `algorithm TEXT` (e.g. `RSA`, `EdDSA`, `ECDH`)
+/// - `bit_length INTEGER`
+///
+/// Backfill: for each existing row, parse the blob once and populate
+/// the new columns. If a row fails to parse (corrupt blob, unknown
+/// algorithm, etc.) we skip it — the columns stay NULL/default, and
+/// downstream summary readers should treat NULL as "unknown" rather
+/// than bailing. This keeps the migration from turning a cold app
+/// start into a hard failure because of one bad key.
+///
+/// Idempotency: `ALTER TABLE … ADD COLUMN` errors if the column
+/// already exists, so we gate each add on `column_exists`. The
+/// backfill is rerun regardless; populating already-populated columns
+/// is a no-op.
+///
+/// Atomicity: wrapped in a single transaction (matching `migrate_v3`)
+/// so a crash mid-migration leaves the database either fully upgraded
+/// or fully untouched, not in a partial state where some rows are
+/// backfilled and others aren't.
+fn migrate_v4(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute("BEGIN", [])?;
+    if let Err(e) = migrate_v4_body(conn) {
+        // Best-effort rollback; if ROLLBACK itself fails there's
+        // nothing useful we can do, so return the original error.
+        let _ = conn.execute("ROLLBACK", []);
+        return Err(e);
+    }
+    conn.execute("COMMIT", [])?;
+    Ok(())
+}
+
+fn migrate_v4_body(conn: &Connection) -> rusqlite::Result<()> {
+    // Keys-table columns.
+    if !column_exists(conn, "keys", "is_revoked")? {
+        conn.execute(
+            "ALTER TABLE keys ADD COLUMN is_revoked INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+    if !column_exists(conn, "keys", "revocation_time")? {
+        conn.execute("ALTER TABLE keys ADD COLUMN revocation_time TEXT", [])?;
+    }
+    if !column_exists(conn, "keys", "expiration_time")? {
+        conn.execute("ALTER TABLE keys ADD COLUMN expiration_time TEXT", [])?;
+    }
+    if !column_exists(conn, "keys", "cert_created_at")? {
+        conn.execute("ALTER TABLE keys ADD COLUMN cert_created_at TEXT", [])?;
+    }
+
+    // Subkeys-table columns.
+    if !column_exists(conn, "subkeys", "algorithm")? {
+        conn.execute("ALTER TABLE subkeys ADD COLUMN algorithm TEXT", [])?;
+    }
+    if !column_exists(conn, "subkeys", "bit_length")? {
+        conn.execute("ALTER TABLE subkeys ADD COLUMN bit_length INTEGER", [])?;
+    }
+
+    backfill_v4(conn)?;
+    Ok(())
+}
+
+/// Backfill the v4 columns by parsing each stored blob once. Unparseable
+/// rows are skipped (a log line is the only side-effect) so a single
+/// corrupt key can't block the migration.
+fn backfill_v4(conn: &Connection) -> rusqlite::Result<()> {
+    let mut stmt = conn.prepare("SELECT fingerprint, key_data FROM keys")?;
+    let rows: Vec<(String, Vec<u8>)> = stmt
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .filter_map(|r| r.ok())
+        .collect();
+    drop(stmt);
+
+    for (fingerprint, key_data) in rows {
+        let (public_key, _is_secret) = match parse_key(&key_data) {
+            Ok(pk) => pk,
+            Err(e) => {
+                log::warn!(
+                    "v4 backfill: skipping unparseable key {}: {}",
+                    fingerprint,
+                    e
+                );
+                continue;
+            }
+        };
+
+        // Primary key: creation + expiration + revocation.
+        let cert_created_at =
+            system_time_to_datetime(public_key.primary_key.created_at().into()).to_rfc3339();
+
+        let expiration_time = get_key_expiration(&public_key)
+            .map(system_time_to_datetime)
+            .map(|dt| dt.to_rfc3339());
+
+        // Verify the revocation signature cryptographically — rpgp parses
+        // KeyRevocation packets into `revocation_signatures` without
+        // verifying them, so a forged packet in a stored blob would
+        // otherwise flip `is_revoked` to 1 on backfill.
+        let revocation_sig = verified_primary_revocation(&public_key);
+        let is_revoked = revocation_sig.is_some();
+        let revocation_time = revocation_sig.and_then(|sig| sig.created()).map(|ts| {
+            let st: std::time::SystemTime = ts.into();
+            system_time_to_datetime(st).to_rfc3339()
+        });
+
+        conn.execute(
+            "UPDATE keys
+               SET is_revoked       = ?1,
+                   revocation_time  = ?2,
+                   expiration_time  = ?3,
+                   cert_created_at  = ?4
+             WHERE fingerprint = ?5",
+            params![
+                is_revoked as i32,
+                revocation_time,
+                expiration_time,
+                cert_created_at,
+                &fingerprint,
+            ],
+        )?;
+
+        // Subkeys: algorithm + bit_length. Primary is also stored in
+        // `subkeys` (with key_type = 'certification' per import_key),
+        // so patch that row too.
+        let primary_algorithm = get_algorithm_name(&public_key.primary_key);
+        let primary_bit_length = get_key_bit_size(&public_key.primary_key) as i64;
+        conn.execute(
+            "UPDATE subkeys SET algorithm = ?1, bit_length = ?2
+              WHERE fingerprint = ?3 AND subkey_fingerprint = ?3",
+            params![&primary_algorithm, primary_bit_length, &fingerprint],
+        )?;
+
+        for subkey in &public_key.public_subkeys {
+            let subkey_fp = crate::internal::fingerprint_to_hex(&subkey.key);
+            let algorithm = get_algorithm_name(&subkey.key);
+            let bit_length = get_key_bit_size(&subkey.key) as i64;
+            conn.execute(
+                "UPDATE subkeys SET algorithm = ?1, bit_length = ?2
+                  WHERE subkey_fingerprint = ?3",
+                params![&algorithm, bit_length, &subkey_fp],
+            )?;
+        }
+    }
+
     Ok(())
 }
 
@@ -409,6 +583,167 @@ mod tests {
             )
             .unwrap();
         assert_eq!(data_again, vec![0xDE, 0xAD, 0xBE, 0xEF]);
+    }
+
+    /// v4 adds summary-view columns (`is_revoked`, `revocation_time`,
+    /// `expiration_time`, `cert_created_at` on `keys`; `algorithm`,
+    /// `bit_length` on `subkeys`). The migration must add the columns
+    /// on top of a pre-existing v3 database AND backfill every row
+    /// that was imported before v4 existed — otherwise the summary
+    /// reader would see NULL columns for legacy rows.
+    #[test]
+    fn test_migrate_v4_adds_columns_and_backfills() {
+        use crate::create_key_simple;
+
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
+
+        // Stand up a v1→v2→v3 database by hand so the test controls
+        // exactly where the pre-v4 starting point is, then mark it at
+        // v3 so v4 (and only v4) runs on the next init.
+        migrate_v1(&conn).unwrap();
+        migrate_v2(&conn).unwrap();
+        migrate_v3(&conn).unwrap();
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY)",
+            [],
+        )
+        .unwrap();
+        conn.execute("DELETE FROM schema_version", []).unwrap();
+        conn.execute(
+            "INSERT INTO schema_version (version) VALUES (?1)",
+            [20260416u32],
+        )
+        .unwrap();
+
+        // Insert a legacy key via the raw SQL path — mimicking a row
+        // that was written by an older binary before v4 existed, so
+        // the new columns are NULL/default.
+        let generated = create_key_simple("testpass", &["Alice <alice@example.com>"]).unwrap();
+        let (public_key, _) = parse_key(&generated.secret_key).unwrap();
+        let fingerprint = crate::internal::fingerprint_to_hex(&public_key.primary_key);
+        let secret_bytes: Vec<u8> = generated.secret_key.to_vec();
+        conn.execute(
+            "INSERT INTO keys (fingerprint, key_data, is_secret, primary_uid)
+             VALUES (?1, ?2, 1, ?3)",
+            params![&fingerprint, &secret_bytes, "Alice <alice@example.com>"],
+        )
+        .unwrap();
+        // Minimal subkeys row so we can check the algorithm backfill.
+        let primary_key_id = crate::internal::keyid_to_hex(&public_key.primary_key);
+        conn.execute(
+            "INSERT INTO subkeys (fingerprint, subkey_fingerprint, key_id, key_type)
+             VALUES (?1, ?1, ?2, 'certification')",
+            params![&fingerprint, &primary_key_id],
+        )
+        .unwrap();
+        for subkey in &public_key.public_subkeys {
+            let subkey_fp = crate::internal::fingerprint_to_hex(&subkey.key);
+            let key_id = crate::internal::keyid_to_hex(&subkey.key);
+            conn.execute(
+                "INSERT INTO subkeys (fingerprint, subkey_fingerprint, key_id, key_type)
+                 VALUES (?1, ?2, ?3, 'encryption')",
+                params![&fingerprint, &subkey_fp, &key_id],
+            )
+            .unwrap();
+        }
+
+        // Run the full migration machinery — it should see v3 and run
+        // v4 forward without re-running v1/v2/v3.
+        init_schema(&conn).unwrap();
+
+        // New columns exist.
+        assert!(column_exists(&conn, "keys", "is_revoked").unwrap());
+        assert!(column_exists(&conn, "keys", "revocation_time").unwrap());
+        assert!(column_exists(&conn, "keys", "expiration_time").unwrap());
+        assert!(column_exists(&conn, "keys", "cert_created_at").unwrap());
+        assert!(column_exists(&conn, "subkeys", "algorithm").unwrap());
+        assert!(column_exists(&conn, "subkeys", "bit_length").unwrap());
+
+        // Legacy row was backfilled.
+        let (is_revoked, cert_created_at): (i32, Option<String>) = conn
+            .query_row(
+                "SELECT is_revoked, cert_created_at FROM keys WHERE fingerprint = ?1",
+                [&fingerprint],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(is_revoked, 0);
+        assert!(
+            cert_created_at.is_some(),
+            "v4 backfill must populate cert_created_at for legacy rows"
+        );
+
+        // And the subkey rows got algorithm/bit_length too.
+        let populated: i32 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM subkeys
+                 WHERE fingerprint = ?1 AND algorithm IS NOT NULL AND bit_length IS NOT NULL",
+                [&fingerprint],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let total: i32 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM subkeys WHERE fingerprint = ?1",
+                [&fingerprint],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(populated, total, "all subkey rows must be backfilled");
+
+        // Schema version bumped.
+        let v: u32 = conn
+            .query_row("SELECT version FROM schema_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(v, SCHEMA_VERSION);
+    }
+
+    /// After v4, a fresh `import_key` must populate the summary
+    /// columns inline so the summary reader never encounters NULLs on
+    /// new rows.
+    #[test]
+    fn test_import_key_populates_v4_columns() {
+        use crate::create_key_simple;
+        use crate::KeyStore;
+
+        let store = KeyStore::open_in_memory().unwrap();
+        let key = create_key_simple("pw", &["Bob <bob@example.com>"]).unwrap();
+        let fp = store.import_key(&key.secret_key).unwrap();
+
+        // Primary-key summary columns on `keys`.
+        let conn = Connection::open_in_memory().unwrap(); // for type hints only
+        let _ = conn; // suppress unused warning
+        let (is_revoked, cert_created_at, expiration_time): (i32, Option<String>, Option<String>) =
+            store
+                .raw_conn_for_test()
+                .query_row(
+                    "SELECT is_revoked, cert_created_at, expiration_time FROM keys
+                     WHERE fingerprint = ?1",
+                    [&fp],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .unwrap();
+        assert_eq!(is_revoked, 0);
+        assert!(cert_created_at.is_some());
+        // `create_key_simple` produces a non-expiring key, so this
+        // should be None — but the column just needs to exist.
+        let _ = expiration_time;
+
+        // Subkey rows.
+        let missing: i32 = store
+            .raw_conn_for_test()
+            .query_row(
+                "SELECT COUNT(*) FROM subkeys
+                 WHERE fingerprint = ?1 AND (algorithm IS NULL OR bit_length IS NULL)",
+                [&fp],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            missing, 0,
+            "all subkey rows from a fresh import_key must have algorithm + bit_length set"
+        );
     }
 
     /// Companion check: after v2→v3 upgrade, foreign-key references in

@@ -7,9 +7,12 @@ use rusqlite::{params, Connection};
 use pgp::types::KeyDetails;
 
 use crate::error::{Error, Result};
-use crate::internal::{fingerprint_to_hex, keyid_to_hex, parse_key, public_key_to_armored};
+use crate::internal::{
+    fingerprint_to_hex, get_algorithm_name, get_key_bit_size, get_key_expiration, keyid_to_hex,
+    parse_key, public_key_to_armored, system_time_to_datetime, verified_primary_revocation,
+};
 use crate::parse::parse_key_bytes;
-use crate::types::KeyInfo;
+use crate::types::{KeyInfo, KeySummary, SubkeySummary, UserIdSummary};
 
 use super::schema::init_schema;
 
@@ -93,6 +96,14 @@ impl KeyStore {
         Ok(Self { conn, path: None })
     }
 
+    /// Test-only: expose the raw SQLite connection so in-crate tests
+    /// can assert on column contents without going through the public
+    /// parse-heavy APIs. Not part of the stable API.
+    #[cfg(test)]
+    pub(crate) fn raw_conn_for_test(&self) -> &Connection {
+        &self.conn
+    }
+
     /// Import a key into the keystore.
     ///
     /// Stores the key and indexes it by fingerprint, key ID, user IDs,
@@ -156,11 +167,41 @@ impl KeyStore {
             .first()
             .map(|u| String::from_utf8_lossy(u.id.id()).to_string());
 
+        // Summary-view fields (schema v4). Computing these at insert
+        // time means `list_keys_summary` / `get_key_summary` never have
+        // to re-parse the blob.
+        let cert_created_at =
+            system_time_to_datetime(public_key.primary_key.created_at().into()).to_rfc3339();
+        let expiration_time = get_key_expiration(&public_key)
+            .map(system_time_to_datetime)
+            .map(|dt| dt.to_rfc3339());
+        // Only count a revocation if it cryptographically verifies against
+        // the primary key. rpgp parses KeyRevocation packets unverified, so
+        // treating their presence as revocation would accept forged packets.
+        let revocation_sig = verified_primary_revocation(&public_key);
+        let is_revoked = revocation_sig.is_some();
+        let revocation_time = revocation_sig.and_then(|sig| sig.created()).map(|ts| {
+            let st: std::time::SystemTime = ts.into();
+            system_time_to_datetime(st).to_rfc3339()
+        });
+
         // Store the key
         self.conn.execute(
-            "INSERT OR REPLACE INTO keys (fingerprint, key_data, is_secret, primary_uid, updated_at)
-             VALUES (?1, ?2, ?3, ?4, CURRENT_TIMESTAMP)",
-            params![&fingerprint, key_data, is_secret as i32, primary_uid,],
+            "INSERT OR REPLACE INTO keys (
+                fingerprint, key_data, is_secret, primary_uid,
+                is_revoked, revocation_time, expiration_time, cert_created_at,
+                updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, CURRENT_TIMESTAMP)",
+            params![
+                &fingerprint,
+                key_data,
+                is_secret as i32,
+                primary_uid,
+                is_revoked as i32,
+                revocation_time,
+                expiration_time,
+                cert_created_at,
+            ],
         )?;
 
         // Update user IDs
@@ -183,12 +224,23 @@ impl KeyStore {
         self.conn
             .execute("DELETE FROM subkeys WHERE fingerprint = ?1", [&fingerprint])?;
 
-        // Add primary key
+        // Add primary key (cached algorithm + bit_length enable the
+        // summary-view query to avoid re-parsing the blob).
         let primary_key_id = keyid_to_hex(&public_key.primary_key);
+        let primary_algorithm = get_algorithm_name(&public_key.primary_key);
+        let primary_bit_length = get_key_bit_size(&public_key.primary_key) as i64;
         self.conn.execute(
-            "INSERT OR REPLACE INTO subkeys (fingerprint, subkey_fingerprint, key_id, key_type)
-             VALUES (?1, ?2, ?3, ?4)",
-            params![&fingerprint, &fingerprint, &primary_key_id, "certification"],
+            "INSERT OR REPLACE INTO subkeys
+                (fingerprint, subkey_fingerprint, key_id, key_type, algorithm, bit_length)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                &fingerprint,
+                &fingerprint,
+                &primary_key_id,
+                "certification",
+                &primary_algorithm,
+                primary_bit_length,
+            ],
         )?;
 
         // Add subkeys
@@ -214,10 +266,21 @@ impl KeyStore {
                 })
                 .unwrap_or("unknown");
 
+            let algorithm = get_algorithm_name(&subkey.key);
+            let bit_length = get_key_bit_size(&subkey.key) as i64;
+
             self.conn.execute(
-                "INSERT OR REPLACE INTO subkeys (fingerprint, subkey_fingerprint, key_id, key_type)
-                 VALUES (?1, ?2, ?3, ?4)",
-                params![&fingerprint, &subkey_fp, &key_id, key_type],
+                "INSERT OR REPLACE INTO subkeys
+                    (fingerprint, subkey_fingerprint, key_id, key_type, algorithm, bit_length)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    &fingerprint,
+                    &subkey_fp,
+                    &key_id,
+                    key_type,
+                    &algorithm,
+                    bit_length,
+                ],
             )?;
         }
 
@@ -956,6 +1019,256 @@ impl KeyStore {
             .execute("DELETE FROM card_keys WHERE card_ident = ?1", [card_ident])?;
         Ok(())
     }
+
+    /// Return every row in the `card_keys` table in a single query.
+    ///
+    /// Equivalent to calling [`KeyStore::get_card_keys`] for every key in
+    /// the store, but uses one SQL round-trip instead of N. Intended
+    /// for callers that need a fingerprint→cards map — e.g. the
+    /// desktop key-list view — so they avoid the N+1 pattern that
+    /// otherwise falls out of per-key lookups.
+    pub fn list_all_card_keys(&self) -> Result<Vec<(String, StoredCardKey)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT fingerprint, card_ident, card_serial, card_manufacturer,
+                    slot, slot_fingerprint, last_seen
+             FROM card_keys
+             ORDER BY fingerprint, card_ident, slot",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                StoredCardKey {
+                    card_ident: row.get(1)?,
+                    card_serial: row.get(2)?,
+                    card_manufacturer: row.get(3)?,
+                    slot: row.get(4)?,
+                    slot_fingerprint: row.get(5)?,
+                    last_seen: row.get(6)?,
+                },
+            ))
+        })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(results)
+    }
+
+    /// List every key in the store as a lightweight [`KeySummary`].
+    ///
+    /// Unlike [`KeyStore::list_keys`], this does **not** re-parse the
+    /// OpenPGP blob on every row. All fields are read directly from
+    /// normalized SQL columns populated at import time (or by the
+    /// schema v4 backfill for rows predating that migration). Use
+    /// this for list / gallery views where the caller does not need
+    /// the full signature graph; call [`KeyStore::get_key_info`] only
+    /// when the user drills into a specific key.
+    pub fn list_keys_summary(&self) -> Result<Vec<KeySummary>> {
+        // 1) Primary-row columns.
+        let mut stmt = self.conn.prepare(
+            "SELECT fingerprint, is_secret, primary_uid,
+                    cert_created_at, expiration_time, is_revoked, revocation_time
+             FROM keys
+             ORDER BY updated_at DESC",
+        )?;
+        #[allow(clippy::type_complexity)]
+        let primaries: Vec<(
+            String,
+            i32,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            i32,
+            Option<String>,
+        )> = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(stmt);
+
+        if primaries.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // 2) All user_ids rows in one sweep, grouped by fingerprint.
+        let mut uids_by_fp: std::collections::HashMap<String, Vec<UserIdSummary>> =
+            std::collections::HashMap::new();
+        let mut stmt = self
+            .conn
+            .prepare("SELECT fingerprint, uid, email FROM user_ids ORDER BY fingerprint, id")?;
+        for row in stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
+        })? {
+            let (fp, uid, email) = row?;
+            uids_by_fp
+                .entry(fp)
+                .or_default()
+                .push(UserIdSummary { uid, email });
+        }
+        drop(stmt);
+
+        // 3) All subkey rows in one sweep, grouped by fingerprint.
+        let mut subkeys_by_fp: std::collections::HashMap<String, Vec<SubkeySummary>> =
+            std::collections::HashMap::new();
+        let mut stmt = self.conn.prepare(
+            "SELECT fingerprint, subkey_fingerprint, key_id, key_type,
+                    algorithm, bit_length
+             FROM subkeys
+             ORDER BY fingerprint, id",
+        )?;
+        for row in stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, Option<i64>>(5)?,
+            ))
+        })? {
+            let (fp, subkey_fp, key_id, key_type, algorithm, bit_length) = row?;
+            subkeys_by_fp.entry(fp).or_default().push(SubkeySummary {
+                fingerprint: subkey_fp,
+                key_id,
+                key_type,
+                algorithm,
+                bit_length: bit_length.map(|n| n as usize),
+            });
+        }
+        drop(stmt);
+
+        // 4) Assemble.
+        let mut out = Vec::with_capacity(primaries.len());
+        for (
+            fingerprint,
+            is_secret,
+            primary_uid,
+            cert_created_at,
+            expiration_time,
+            is_revoked,
+            revocation_time,
+        ) in primaries
+        {
+            let user_ids = uids_by_fp.remove(&fingerprint).unwrap_or_default();
+            let subkeys = subkeys_by_fp.remove(&fingerprint).unwrap_or_default();
+            out.push(KeySummary {
+                fingerprint,
+                is_secret: is_secret != 0,
+                primary_uid,
+                user_ids,
+                subkeys,
+                creation_time: cert_created_at.and_then(parse_rfc3339_utc),
+                expiration_time: expiration_time.and_then(parse_rfc3339_utc),
+                is_revoked: is_revoked != 0,
+                revocation_time: revocation_time.and_then(parse_rfc3339_utc),
+            });
+        }
+        Ok(out)
+    }
+
+    /// Fetch a single [`KeySummary`] by fingerprint. Same payload as
+    /// one entry of [`KeyStore::list_keys_summary`], scoped to a
+    /// single row.
+    pub fn get_key_summary(&self, fingerprint: &str) -> Result<KeySummary> {
+        let primary: (
+            i32,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            i32,
+            Option<String>,
+        ) = self
+            .conn
+            .query_row(
+                "SELECT is_secret, primary_uid,
+                        cert_created_at, expiration_time, is_revoked, revocation_time
+                 FROM keys WHERE fingerprint = ?1",
+                [fingerprint],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                },
+            )
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => Error::KeyNotFound(fingerprint.to_string()),
+                other => other.into(),
+            })?;
+
+        let mut uid_stmt = self
+            .conn
+            .prepare("SELECT uid, email FROM user_ids WHERE fingerprint = ?1 ORDER BY id")?;
+        let user_ids: Vec<UserIdSummary> = uid_stmt
+            .query_map([fingerprint], |row| {
+                Ok(UserIdSummary {
+                    uid: row.get(0)?,
+                    email: row.get(1)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(uid_stmt);
+
+        let mut sk_stmt = self.conn.prepare(
+            "SELECT subkey_fingerprint, key_id, key_type, algorithm, bit_length
+             FROM subkeys WHERE fingerprint = ?1 ORDER BY id",
+        )?;
+        let subkeys: Vec<SubkeySummary> = sk_stmt
+            .query_map([fingerprint], |row| {
+                let bit_length: Option<i64> = row.get(4)?;
+                Ok(SubkeySummary {
+                    fingerprint: row.get(0)?,
+                    key_id: row.get(1)?,
+                    key_type: row.get(2)?,
+                    algorithm: row.get(3)?,
+                    bit_length: bit_length.map(|n| n as usize),
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(sk_stmt);
+
+        let (is_secret, primary_uid, cert_created_at, expiration_time, is_revoked, revocation_time) =
+            primary;
+        Ok(KeySummary {
+            fingerprint: fingerprint.to_string(),
+            is_secret: is_secret != 0,
+            primary_uid,
+            user_ids,
+            subkeys,
+            creation_time: cert_created_at.and_then(parse_rfc3339_utc),
+            expiration_time: expiration_time.and_then(parse_rfc3339_utc),
+            is_revoked: is_revoked != 0,
+            revocation_time: revocation_time.and_then(parse_rfc3339_utc),
+        })
+    }
+}
+
+/// Parse an RFC 3339 timestamp string into a UTC `DateTime`. Returns
+/// `None` on parse failure — v4-backfilled rows should always produce
+/// valid timestamps, but a defensive None keeps one bad cache entry
+/// from corrupting the whole list.
+fn parse_rfc3339_utc(s: String) -> Option<chrono::DateTime<chrono::Utc>> {
+    chrono::DateTime::parse_from_rfc3339(&s)
+        .ok()
+        .map(|dt| dt.with_timezone(&chrono::Utc))
 }
 
 /// A card-key association stored in the keystore.
@@ -1595,6 +1908,92 @@ mod tests {
         assert_eq!(info.user_ids, info2.user_ids);
     }
 
+    /// `list_keys_summary` must return the same set of fingerprints
+    /// as `list_keys`, and for each key carry the creation time, at
+    /// least one UID, and at least one subkey — all without parsing
+    /// the OpenPGP blob.
+    #[test]
+    fn test_list_keys_summary_matches_list_keys() {
+        use crate::create_key_simple;
+
+        let store = KeyStore::open_in_memory().unwrap();
+        let a = create_key_simple("pw1", &["Alice <alice@example.com>"]).unwrap();
+        let b = create_key_simple("pw2", &["Bob <bob@example.com>"]).unwrap();
+        let fp_a = store.import_key(&a.secret_key).unwrap();
+        let fp_b = store.import_key(&b.secret_key).unwrap();
+
+        let summaries = store.list_keys_summary().unwrap();
+        assert_eq!(summaries.len(), 2);
+        let fps: std::collections::HashSet<_> =
+            summaries.iter().map(|s| s.fingerprint.clone()).collect();
+        assert!(fps.contains(&fp_a));
+        assert!(fps.contains(&fp_b));
+
+        for s in &summaries {
+            assert!(s.creation_time.is_some(), "creation_time must be cached");
+            assert!(!s.user_ids.is_empty(), "user_ids must not be empty");
+            assert!(!s.subkeys.is_empty(), "subkeys must not be empty");
+            // Every subkey row should carry cached algorithm+bit_length.
+            for sk in &s.subkeys {
+                assert!(sk.algorithm.is_some(), "algorithm cached");
+                assert!(sk.bit_length.is_some(), "bit_length cached");
+            }
+        }
+
+        // Single-key getter must agree with the list form.
+        let one = store.get_key_summary(&fp_a).unwrap();
+        assert_eq!(one.fingerprint, fp_a);
+        assert!(one.user_ids.iter().any(|u| u.uid.contains("Alice")));
+    }
+
+    /// `list_all_card_keys` must return the same rows as calling
+    /// `get_card_keys` for every fingerprint, in one query instead of
+    /// N. This is what kills the desktop list view's per-key round
+    /// trip.
+    #[test]
+    fn test_list_all_card_keys_matches_per_key_lookup() {
+        use crate::create_key_simple;
+
+        let store = KeyStore::open_in_memory().unwrap();
+        let a = create_key_simple("pw1", &["Alice <a@x.org>"]).unwrap();
+        let b = create_key_simple("pw2", &["Bob <b@x.org>"]).unwrap();
+        let fp_a = store.import_key(&a.secret_key).unwrap();
+        let fp_b = store.import_key(&b.secret_key).unwrap();
+
+        // Link both keys to card slots.
+        store
+            .save_card_key(&fp_a, "FOO:1111", "1111", Some("Foo"), "signature", "SIGA")
+            .unwrap();
+        store
+            .save_card_key(&fp_a, "FOO:1111", "1111", Some("Foo"), "encryption", "ENCA")
+            .unwrap();
+        store
+            .save_card_key(&fp_b, "BAR:2222", "2222", Some("Bar"), "signature", "SIGB")
+            .unwrap();
+
+        // Reference: per-key lookup.
+        let a_rows = store.get_card_keys(&fp_a).unwrap();
+        let b_rows = store.get_card_keys(&fp_b).unwrap();
+        assert_eq!(a_rows.len(), 2);
+        assert_eq!(b_rows.len(), 1);
+
+        // Bulk lookup must agree.
+        let all = store.list_all_card_keys().unwrap();
+        let a_from_all: Vec<&StoredCardKey> = all
+            .iter()
+            .filter(|(fp, _)| fp == &fp_a)
+            .map(|(_, c)| c)
+            .collect();
+        let b_from_all: Vec<&StoredCardKey> = all
+            .iter()
+            .filter(|(fp, _)| fp == &fp_b)
+            .map(|(_, c)| c)
+            .collect();
+        assert_eq!(a_from_all.len(), 2);
+        assert_eq!(b_from_all.len(), 1);
+        assert_eq!(all.len(), 3);
+    }
+
     #[test]
     fn test_keystore_get_key_not_found() {
         let store = KeyStore::open_in_memory().unwrap();
@@ -1602,5 +2001,173 @@ mod tests {
         // Try to get a non-existent key
         let result = store.get_key("NONEXISTENT1234567890");
         assert!(result.is_err());
+    }
+
+    /// Import a key that carries a cryptographically valid self-revocation
+    /// — the cached `is_revoked` flag must be set and `revocation_time`
+    /// populated. This is the positive half of the verified-revocation
+    /// contract: valid revocations still land in the cache.
+    #[test]
+    fn test_import_revoked_key_caches_is_revoked() {
+        use crate::{create_key_simple, revoke_key};
+
+        let store = KeyStore::open_in_memory().unwrap();
+        let key = create_key_simple("pw", &["Rev <rev@example.com>"]).unwrap();
+        let revoked = revoke_key(&key.secret_key, "pw").unwrap();
+        let fp = store.import_key(&revoked).unwrap();
+
+        let summary = store.get_key_summary(&fp).unwrap();
+        assert!(
+            summary.is_revoked,
+            "valid self-revocation must flip the flag"
+        );
+        assert!(
+            summary.revocation_time.is_some(),
+            "revocation_time must be populated for a revoked key"
+        );
+    }
+
+    /// A KeyRevocation packet whose signature was produced by a different
+    /// key is NOT a real revocation. The keystore must ignore it — if it
+    /// trusted the packet-type tag alone, an attacker who slipped a
+    /// forged revocation into a stored or transmitted key could trick
+    /// the UI into refusing to use a valid key.
+    #[test]
+    fn test_import_forged_revocation_rejected() {
+        use crate::create_key_simple;
+        use crate::internal::parse_key;
+        use pgp::composed::{SignedKeyDetails, SignedSecretKey};
+        use pgp::packet::{self, SignatureConfig, SignatureType, Subpacket, SubpacketData};
+        use pgp::ser::Serialize;
+        use pgp::types::{KeyDetails as _, KeyVersion, Password, Timestamp};
+        use rand::thread_rng;
+
+        // Victim key — the one we want to falsely mark as revoked.
+        let victim = create_key_simple("pw_v", &["Victim <v@example.com>"]).unwrap();
+        // Attacker key — signs a bogus revocation over the victim.
+        let attacker = create_key_simple("pw_a", &["Attacker <a@example.com>"]).unwrap();
+
+        // Parse victim as secret key (so we can reserialize it with the
+        // spliced-in bogus signature) and attacker as secret key (to
+        // produce the signature).
+        let victim_secret: SignedSecretKey = {
+            use pgp::composed::Deserializable;
+            let (parsed, _) = SignedSecretKey::from_armor_single(&victim.secret_key[..])
+                .or_else(|_| {
+                    SignedSecretKey::from_bytes(&victim.secret_key[..])
+                        .map(|k| (k, Default::default()))
+                })
+                .expect("parse victim");
+            parsed
+        };
+        let attacker_secret: SignedSecretKey = {
+            use pgp::composed::Deserializable;
+            let (parsed, _) = SignedSecretKey::from_armor_single(&attacker.secret_key[..])
+                .or_else(|_| {
+                    SignedSecretKey::from_bytes(&attacker.secret_key[..])
+                        .map(|k| (k, Default::default()))
+                })
+                .expect("parse attacker");
+            parsed
+        };
+
+        // Forge: attacker signs a KeyRevocation packet. The content of
+        // the signature doesn't matter — what matters is that the
+        // issuer is the *attacker's* primary key, so verifying it
+        // against the *victim's* primary key will fail.
+        let mut rng = thread_rng();
+        let mut config = SignatureConfig::from_key(
+            &mut rng,
+            &attacker_secret.primary_key,
+            SignatureType::KeyRevocation,
+        )
+        .expect("config");
+        config.hashed_subpackets = vec![
+            Subpacket::regular(SubpacketData::SignatureCreationTime(Timestamp::now())).unwrap(),
+            Subpacket::regular(SubpacketData::IssuerFingerprint(
+                attacker_secret.primary_key.fingerprint(),
+            ))
+            .unwrap(),
+        ];
+        if attacker_secret.primary_key.version() <= KeyVersion::V4 {
+            config.unhashed_subpackets = vec![Subpacket::regular(SubpacketData::IssuerKeyId(
+                attacker_secret.primary_key.legacy_key_id(),
+            ))
+            .unwrap()];
+        }
+        let forged: packet::Signature = config
+            .sign_key(
+                &attacker_secret.primary_key,
+                &Password::from("pw_a"),
+                attacker_secret.primary_key.public_key(),
+            )
+            .expect("sign forged revocation");
+
+        // Splice the forged signature into the victim's revocation list
+        // and re-serialize the victim key.
+        let mut sigs = victim_secret.details.revocation_signatures.clone();
+        sigs.push(forged);
+        let new_details = SignedKeyDetails::new(
+            sigs,
+            victim_secret.details.direct_signatures.clone(),
+            victim_secret.details.users.clone(),
+            victim_secret.details.user_attributes.clone(),
+        );
+        let tampered = SignedSecretKey::new(
+            victim_secret.primary_key.clone(),
+            new_details,
+            victim_secret.public_subkeys.clone(),
+            victim_secret.secret_subkeys.clone(),
+        );
+        let tampered_bytes = tampered.to_bytes().expect("serialize tampered");
+
+        // Sanity: rpgp's parser did accept the forged packet into
+        // `revocation_signatures` (this is the vulnerability we're
+        // defending against — the unverified find() would have set
+        // `is_revoked = 1`).
+        let (parsed, _) = parse_key(&tampered_bytes).unwrap();
+        assert!(
+            !parsed.details.revocation_signatures.is_empty(),
+            "forged KeyRevocation packet must be present in revocation_signatures"
+        );
+
+        // Import — the cache must NOT flag this as revoked, because
+        // the forged signature does not verify against the victim's
+        // primary key.
+        let store = KeyStore::open_in_memory().unwrap();
+        let fp = store.import_key(&tampered_bytes).unwrap();
+        let summary = store.get_key_summary(&fp).unwrap();
+        assert!(
+            !summary.is_revoked,
+            "forged revocation (wrong issuer) must not flip is_revoked"
+        );
+        assert!(
+            summary.revocation_time.is_none(),
+            "forged revocation must not populate revocation_time"
+        );
+    }
+
+    /// When a key in the store is later replaced with a revoked version
+    /// via `update_key`, the cached `is_revoked` column must refresh —
+    /// otherwise a user who revokes a key would still see it as live
+    /// in the summary view.
+    #[test]
+    fn test_update_key_refreshes_is_revoked() {
+        use crate::{create_key_simple, revoke_key};
+
+        let store = KeyStore::open_in_memory().unwrap();
+        let key = create_key_simple("pw", &["U <u@example.com>"]).unwrap();
+        let fp = store.import_key(&key.secret_key).unwrap();
+        assert!(!store.get_key_summary(&fp).unwrap().is_revoked);
+
+        let revoked = revoke_key(&key.secret_key, "pw").unwrap();
+        store.update_key(&fp, &revoked).unwrap();
+
+        let summary = store.get_key_summary(&fp).unwrap();
+        assert!(
+            summary.is_revoked,
+            "cached flag must refresh after update_key"
+        );
+        assert!(summary.revocation_time.is_some());
     }
 }
