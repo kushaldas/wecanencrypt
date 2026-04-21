@@ -235,6 +235,64 @@ pub struct KeyCipherDetails {
     pub bit_length: usize,
 }
 
+/// Lightweight view of a key suitable for list rendering. Populated
+/// entirely from normalized SQL columns (schema v4+), with no OpenPGP
+/// parse on the hot path. See [`KeyStore::list_keys_summary`] and
+/// [`KeyStore::get_key_summary`].
+#[derive(Debug, Clone)]
+pub struct KeySummary {
+    /// Primary key fingerprint (hex).
+    pub fingerprint: String,
+    /// Whether this key contains secret key material.
+    pub is_secret: bool,
+    /// Primary UID string, verbatim from the `keys.primary_uid` column.
+    pub primary_uid: Option<String>,
+    /// All UIDs associated with this key, in insertion order.
+    pub user_ids: Vec<UserIdSummary>,
+    /// All subkeys (plus the primary), with cached algorithm info.
+    pub subkeys: Vec<SubkeySummary>,
+    /// Creation time of the cert's primary key.
+    pub creation_time: Option<DateTime<Utc>>,
+    /// Expiry from the primary key's self-signature (None = never).
+    pub expiration_time: Option<DateTime<Utc>>,
+    /// True if a primary-key revocation signature is present.
+    pub is_revoked: bool,
+    /// Time the primary key was revoked (if revoked).
+    pub revocation_time: Option<DateTime<Utc>>,
+}
+
+/// One UID in a [`KeySummary`]. This is deliberately thinner than
+/// [`UserIDInfo`] — it carries only what the SQL `user_ids` table
+/// caches (no revocation status, no third-party certifications),
+/// because callers who need those details already know to call
+/// [`KeyStore::get_key_info`] / [`KeyStore::get_key`].
+#[derive(Debug, Clone)]
+pub struct UserIdSummary {
+    /// Raw UID string (e.g. `"Alice <alice@example.com>"`).
+    pub uid: String,
+    /// Parsed email address if one could be extracted, else None.
+    pub email: Option<String>,
+}
+
+/// One (primary or subkey) entry in a [`KeySummary`].
+#[derive(Debug, Clone)]
+pub struct SubkeySummary {
+    /// Subkey fingerprint (hex). For the primary this equals
+    /// [`KeySummary::fingerprint`].
+    pub fingerprint: String,
+    /// Short key ID (last 16 hex characters).
+    pub key_id: String,
+    /// Role tag: `"encryption" | "signing" | "authentication" |
+    /// "certification" | "unknown"`. Cached on the `subkeys.key_type`
+    /// column.
+    pub key_type: String,
+    /// Algorithm label (e.g. `"RSA"`, `"EdDSA"`, `"ECDH"`). May be
+    /// NULL on pre-v4 rows if the backfill couldn't parse the blob.
+    pub algorithm: Option<String>,
+    /// Bit length. Same NULL caveat as `algorithm`.
+    pub bit_length: Option<usize>,
+}
+
 /// Result of key generation.
 ///
 /// The `secret_key` field is wrapped in `Zeroizing` to ensure the secret

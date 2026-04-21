@@ -109,7 +109,8 @@ pub use error::{Error, Result};
 // Re-export all public types
 pub use types::{
     AvailableSubkey, CertificationType, CipherSuite, GeneratedKey, KeyCipherDetails, KeyInfo,
-    KeyType, RsaPublicKey, SigningPublicKey, SubkeyFlags, SubkeyInfo, UIDCertification, UserIDInfo,
+    KeySummary, KeyType, RsaPublicKey, SigningPublicKey, SubkeyFlags, SubkeyInfo, SubkeySummary,
+    UIDCertification, UserIDInfo, UserIdSummary,
 };
 
 // Re-export parsing functions

@@ -293,3 +293,27 @@ pub(crate) fn validate_primary_key_signing_usage(
 pub(crate) fn get_key_expiration(key: &SignedPublicKey) -> Option<SystemTime> {
     primary_expiration_from_details(key.primary_key.created_at().into(), &key.details)
 }
+
+/// Return the first primary-key revocation signature that cryptographically
+/// verifies against the primary key, or `None` if no such signature exists.
+///
+/// rpgp's parser accepts any packet tagged `KeyRevocation` into
+/// `SignedKeyDetails::revocation_signatures` without verifying it (see
+/// `composed/signed_key/key_parser.rs`). Callers that need a trustworthy
+/// revocation verdict must verify the signature themselves — which is what
+/// this helper does: it filters `revocation_signatures` to `KeyRevocation`
+/// packets, then calls `Signature::verify_key` against the primary key and
+/// returns the first one that passes.
+///
+/// This only covers self-revocations (primary revoking itself). Designated-
+/// revoker signatures are not consulted; supporting them would require
+/// resolving the designated-revoker subpacket against an external keyring.
+pub(crate) fn verified_primary_revocation(
+    key: &SignedPublicKey,
+) -> Option<&pgp::packet::Signature> {
+    key.details
+        .revocation_signatures
+        .iter()
+        .filter(|sig| sig.typ() == Some(SignatureType::KeyRevocation))
+        .find(|sig| sig.verify_key(&key.primary_key).is_ok())
+}
