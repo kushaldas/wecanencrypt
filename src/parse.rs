@@ -11,7 +11,8 @@ use pgp::types::KeyDetails;
 use crate::error::Result;
 use crate::internal::{
     fingerprint_to_hex, get_algorithm_name, get_key_bit_size, is_subkey_revoked, is_subkey_valid,
-    keyid_to_hex, parse_key, system_time_to_datetime,
+    keyid_to_hex, parse_key, system_time_to_datetime, verified_primary_revocation,
+    verified_user_id_revocation,
 };
 use crate::types::{
     AvailableSubkey, KeyCipherDetails, KeyInfo, KeyType, SubkeyInfo, UIDCertification, UserIDInfo,
@@ -97,10 +98,8 @@ fn extract_key_info(
             let value = String::from_utf8_lossy(u.id.id()).to_string();
 
             // Check revocation: any CertRevocation signature on this UID
-            let revocation_sig = u
-                .signatures
-                .iter()
-                .find(|sig| sig.typ() == Some(pgp::packet::SignatureType::CertRevocation));
+            // that cryptographically verifies as signed by the primary key.
+            let revocation_sig = verified_user_id_revocation(&public_key.primary_key, u);
             let revoked = revocation_sig.is_some();
             let revocation_time = revocation_sig.and_then(|sig| sig.created()).map(|ts| {
                 let st: std::time::SystemTime = ts.into();
@@ -178,12 +177,9 @@ fn extract_key_info(
     // Check if primary can sign
     let can_primary_sign = crate::internal::can_primary_sign(public_key);
 
-    // Check key revocation
-    let revocation_sig = public_key
-        .details
-        .revocation_signatures
-        .iter()
-        .find(|sig| sig.typ() == Some(pgp::packet::SignatureType::KeyRevocation));
+    // Check key revocation: any KeyRevocation signature that
+    // cryptographically verifies as signed by the primary key.
+    let revocation_sig = verified_primary_revocation(public_key);
     let is_revoked = revocation_sig.is_some();
     let revocation_time = revocation_sig.and_then(|sig| sig.created()).map(|ts| {
         let st: std::time::SystemTime = ts.into();
@@ -227,7 +223,7 @@ fn extract_subkey_info(public_key: &SignedPublicKey, allow_expired: bool) -> Vec
             })
         });
 
-        let is_revoked = is_subkey_revoked(subkey);
+        let is_revoked = is_subkey_revoked(&public_key.primary_key, subkey);
         let algorithm = get_algorithm_name(&subkey.key);
         let bit_length = get_key_bit_size(&subkey.key);
 
@@ -237,7 +233,7 @@ fn extract_subkey_info(public_key: &SignedPublicKey, allow_expired: bool) -> Vec
         let key_version = subkey.key.version();
 
         // Only include if valid or allowing expired
-        if allow_expired || is_subkey_valid(subkey, false) {
+        if allow_expired || is_subkey_valid(&public_key.primary_key, subkey, false) {
             subkeys.push(SubkeyInfo {
                 key_id,
                 fingerprint,
@@ -328,12 +324,12 @@ where
 
     for subkey in &public_key.public_subkeys {
         // Skip revoked keys
-        if is_subkey_revoked(subkey) {
+        if is_subkey_revoked(&public_key.primary_key, subkey) {
             continue;
         }
 
         // Skip invalid/expired keys
-        if !is_subkey_valid(subkey, false) {
+        if !is_subkey_valid(&public_key.primary_key, subkey, false) {
             continue;
         }
 

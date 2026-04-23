@@ -4,12 +4,27 @@
 //! manual validation of key properties here. This includes:
 //! - Key expiration and revocation checks
 //! - Key flag validation
+//!
+//! # Revocation-signature verification
+//!
+//! rpgp's parser admits any packet tagged `KeyRevocation` (type 0x20),
+//! `SubkeyRevocation` (0x28), or `CertRevocation` (0x30) into the
+//! parsed key without cryptographically verifying the signature on it.
+//! Before this module, wecanencrypt trusted those packet-type tags at
+//! face value, so an attacker who could inject packets into a cert
+//! (keyserver poisoning, MITM on HKP fetch, tampered file) could forge
+//! a revocation that wecanencrypt would honor. See ADR 0004.
+//!
+//! Every revocation check in this module now verifies the signature
+//! against the primary key using rpgp's `Signature::verify_key`,
+//! `verify_subkey_binding`, or `verify_certification` as appropriate.
 
 use std::time::SystemTime;
 
-use pgp::composed::{SignedKeyDetails, SignedPublicKey, SignedPublicSubKey};
-use pgp::packet::SignatureType;
-use pgp::types::KeyDetails;
+use pgp::composed::{SignedPublicKey, SignedPublicSubKey, SignedSecretKey, SignedSecretSubKey};
+use pgp::packet::{Signature, SignatureType};
+use pgp::ser::Serialize;
+use pgp::types::{KeyDetails, SignedUser, Tag, VerifyingKey};
 
 use crate::error::{Error, Result};
 
@@ -36,12 +51,44 @@ pub(crate) fn is_key_expired(creation_time: SystemTime, validity_seconds: Option
     }
 }
 
-/// Check if a subkey is revoked.
-pub(crate) fn is_subkey_revoked(subkey: &SignedPublicSubKey) -> bool {
-    subkey
-        .signatures
+/// Shared core: does any `SubkeyRevocation` packet on `signatures`
+/// cryptographically verify as a binding-revocation signed by `primary`
+/// over `subkey_key`?
+///
+/// Works for both `SignedPublicSubKey` and `SignedSecretSubKey` because
+/// `verify_subkey_binding` only needs the subkey to implement
+/// `KeyDetails + Serialize` — both `PublicSubkey` and `SecretSubkey` do.
+fn any_verified_subkey_revocation<V, K>(
+    primary: &V,
+    signatures: &[Signature],
+    subkey_key: &K,
+) -> bool
+where
+    V: VerifyingKey + Serialize,
+    K: KeyDetails + Serialize,
+{
+    signatures
         .iter()
-        .any(|sig| sig.typ() == Some(SignatureType::SubkeyRevocation))
+        .filter(|sig| sig.typ() == Some(SignatureType::SubkeyRevocation))
+        .any(|sig| sig.verify_subkey_binding(primary, subkey_key).is_ok())
+}
+
+/// Check if a public subkey carries a cryptographically valid
+/// self-revocation from the primary key.
+pub(crate) fn is_subkey_revoked(
+    primary: &pgp::packet::PublicKey,
+    subkey: &SignedPublicSubKey,
+) -> bool {
+    any_verified_subkey_revocation(primary, &subkey.signatures, &subkey.key)
+}
+
+/// Check if a secret subkey carries a cryptographically valid
+/// self-revocation from the primary key.
+pub(crate) fn is_secret_subkey_revoked(
+    primary: &pgp::packet::PublicKey,
+    subkey: &SignedSecretSubKey,
+) -> bool {
+    any_verified_subkey_revocation(primary, &subkey.signatures, &subkey.key)
 }
 
 /// Check if a subkey has the signing capability flag in its most recent
@@ -80,10 +127,14 @@ pub(crate) fn can_subkey_encrypt(subkey: &SignedPublicSubKey) -> bool {
         .unwrap_or(false)
 }
 
-/// Check if a key is valid for use (not expired, not revoked).
-pub(crate) fn is_subkey_valid(subkey: &SignedPublicSubKey, allow_expired: bool) -> bool {
-    // Check revocation
-    if is_subkey_revoked(subkey) {
+/// Check if a subkey is valid for use (not revoked by a verified
+/// self-signature, and optionally not expired).
+pub(crate) fn is_subkey_valid(
+    primary: &pgp::packet::PublicKey,
+    subkey: &SignedPublicSubKey,
+    allow_expired: bool,
+) -> bool {
+    if is_subkey_revoked(primary, subkey) {
         return false;
     }
 
@@ -142,7 +193,7 @@ fn most_recent_self_sig(user: &pgp::types::SignedUser) -> Option<&pgp::packet::S
 /// This is the single source of truth for primary-key signing-capability checks.
 /// Both `SignedPublicKey` and `SignedSecretKey` share `details: SignedKeyDetails`,
 /// so callers can pass `&key.details` regardless of key type.
-pub(crate) fn can_details_sign(details: &SignedKeyDetails) -> bool {
+pub(crate) fn can_details_sign(details: &pgp::composed::SignedKeyDetails) -> bool {
     for user in &details.users {
         if let Some(sig) = most_recent_self_sig(user) {
             if sig.key_flags().sign() {
@@ -177,21 +228,21 @@ pub(crate) fn can_primary_certify(key: &SignedPublicKey) -> bool {
     })
 }
 
-/// Check if key details indicate revocation.
-///
-/// This is the single source of truth for primary-key revocation checks.
-/// Both `SignedPublicKey` and `SignedSecretKey` share `details: SignedKeyDetails`,
-/// so callers can pass `&key.details` regardless of key type.
-pub(crate) fn is_details_revoked(details: &SignedKeyDetails) -> bool {
-    details
-        .revocation_signatures
-        .iter()
-        .any(|sig| sig.typ() == Some(SignatureType::KeyRevocation))
+/// Check if the primary key is revoked by a cryptographically valid
+/// self-signature.
+pub(crate) fn is_primary_key_revoked(key: &SignedPublicKey) -> bool {
+    verified_primary_revocation(key).is_some()
 }
 
-/// Check if the primary key is revoked.
-pub(crate) fn is_primary_key_revoked(key: &SignedPublicKey) -> bool {
-    is_details_revoked(&key.details)
+/// Check if the primary key of a secret key is revoked by a
+/// cryptographically valid self-signature.
+pub(crate) fn is_primary_secret_key_revoked(key: &SignedSecretKey) -> bool {
+    let primary_pub = key.primary_key.public_key();
+    key.details
+        .revocation_signatures
+        .iter()
+        .filter(|sig| sig.typ() == Some(SignatureType::KeyRevocation))
+        .any(|sig| sig.verify_key(primary_pub).is_ok())
 }
 
 /// Check if the primary key is valid for verification (not revoked).
@@ -214,7 +265,7 @@ pub(crate) fn is_primary_key_valid_for_verification(key: &SignedPublicKey) -> bo
 /// a key expiration subpacket.
 pub(crate) fn primary_expiration_from_details(
     creation_time: SystemTime,
-    details: &SignedKeyDetails,
+    details: &pgp::composed::SignedKeyDetails,
 ) -> Option<SystemTime> {
     let mut newest_created: Option<SystemTime> = None;
     let mut newest_expiration = None;
@@ -252,21 +303,20 @@ pub(crate) fn primary_expiration_from_details(
     newest_expiration
 }
 
-/// Validate whether a key may be used for a specific signing purpose.
-///
-/// Works with the shared `SignedKeyDetails` and creation time so it can be
-/// called for both public and secret keys.
-pub(crate) fn validate_signing_usage(
-    creation_time: SystemTime,
-    details: &SignedKeyDetails,
+/// Validate whether the primary of a public key may be used for a
+/// specific signing purpose.
+#[cfg(feature = "card")]
+pub(crate) fn validate_public_signing_usage(
+    key: &SignedPublicKey,
     usage: SigningKeyUsage,
 ) -> Result<()> {
-    if is_details_revoked(details) {
+    if is_primary_key_revoked(key) {
         return Err(Error::KeyRevoked);
     }
 
     if matches!(usage, SigningKeyUsage::DataSignature) {
-        if let Some(exp) = primary_expiration_from_details(creation_time, details) {
+        let creation_time: SystemTime = key.primary_key.created_at().into();
+        if let Some(exp) = primary_expiration_from_details(creation_time, &key.details) {
             if exp < SystemTime::now() {
                 return Err(Error::KeyExpired);
             }
@@ -276,15 +326,36 @@ pub(crate) fn validate_signing_usage(
     Ok(())
 }
 
-/// Validate whether the primary key may be used for a specific signing purpose.
-///
-/// Convenience wrapper over [`validate_signing_usage`] for `SignedPublicKey`.
+/// Validate whether the primary of a secret key may be used for a
+/// specific signing purpose.
+pub(crate) fn validate_secret_signing_usage(
+    key: &SignedSecretKey,
+    usage: SigningKeyUsage,
+) -> Result<()> {
+    if is_primary_secret_key_revoked(key) {
+        return Err(Error::KeyRevoked);
+    }
+
+    if matches!(usage, SigningKeyUsage::DataSignature) {
+        let creation_time: SystemTime = key.primary_key.created_at().into();
+        if let Some(exp) = primary_expiration_from_details(creation_time, &key.details) {
+            if exp < SystemTime::now() {
+                return Err(Error::KeyExpired);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Validate whether the primary key of a public key may be used for a
+/// specific signing purpose.
 #[cfg(feature = "card")]
 pub(crate) fn validate_primary_key_signing_usage(
     key: &SignedPublicKey,
     usage: SigningKeyUsage,
 ) -> Result<()> {
-    validate_signing_usage(key.primary_key.created_at().into(), &key.details, usage)
+    validate_public_signing_usage(key, usage)
 }
 
 /// Get the expiration time for a key from the most recent self-signature.
@@ -316,4 +387,25 @@ pub(crate) fn verified_primary_revocation(
         .iter()
         .filter(|sig| sig.typ() == Some(SignatureType::KeyRevocation))
         .find(|sig| sig.verify_key(&key.primary_key).is_ok())
+}
+
+/// Return the first `CertRevocation` signature on `user` that
+/// cryptographically verifies as a self-revocation of the UID by
+/// `primary`.
+///
+/// Mirrors [`verified_primary_revocation`] for UID certifications. rpgp
+/// parses any `CertRevocation` packet into `SignedUser::signatures`
+/// without verifying it, so trusting the packet-type tag alone lets an
+/// attacker with packet-injection capability forge a UID revocation.
+pub(crate) fn verified_user_id_revocation<'a>(
+    primary: &pgp::packet::PublicKey,
+    user: &'a SignedUser,
+) -> Option<&'a pgp::packet::Signature> {
+    user.signatures
+        .iter()
+        .filter(|sig| sig.typ() == Some(SignatureType::CertRevocation))
+        .find(|sig| {
+            sig.verify_certification(primary, Tag::UserId, &user.id)
+                .is_ok()
+        })
 }

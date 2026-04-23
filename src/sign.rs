@@ -10,13 +10,13 @@ use pgp::composed::{
     CleartextSignedMessage, DetachedSignature, MessageBuilder, SignedSecretKey, SignedSecretSubKey,
 };
 use pgp::crypto::hash::HashAlgorithm;
-use pgp::packet::SignatureType;
 use pgp::types::{KeyDetails, Password, PublicParams};
 use rand::thread_rng;
 
 use crate::error::{Error, Result};
 use crate::internal::{
-    can_details_sign, is_key_expired, parse_secret_key, validate_signing_usage, SigningKeyUsage,
+    can_details_sign, is_key_expired, is_secret_subkey_revoked, parse_secret_key,
+    validate_secret_signing_usage, SigningKeyUsage,
 };
 
 /// Select appropriate hash algorithm based on public key params.
@@ -53,11 +53,7 @@ fn find_signing_subkey(secret_key: &SignedSecretKey) -> Option<&SignedSecretSubK
             continue;
         }
 
-        let is_revoked = subkey
-            .signatures
-            .iter()
-            .any(|sig| sig.typ() == Some(SignatureType::SubkeyRevocation));
-        if is_revoked {
+        if is_secret_subkey_revoked(secret_key.primary_key.public_key(), subkey) {
             continue;
         }
 
@@ -273,11 +269,7 @@ fn sign_bytes_detached_impl(
 ) -> Result<String> {
     log_software_sign_diag("sign_bytes_detached_impl", data, use_primary);
     let secret_key = parse_secret_key(secret_key)?;
-    validate_signing_usage(
-        secret_key.primary_key.created_at().into(),
-        &secret_key.details,
-        SigningKeyUsage::DataSignature,
-    )?;
+    validate_secret_signing_usage(&secret_key, SigningKeyUsage::DataSignature)?;
     let password: Password = password.into();
 
     let mut rng = thread_rng();
@@ -400,11 +392,7 @@ fn sign_bytes_internal(
     use_primary: bool,
 ) -> Result<Vec<u8>> {
     let secret_key = parse_secret_key(secret_key)?;
-    validate_signing_usage(
-        secret_key.primary_key.created_at().into(),
-        &secret_key.details,
-        SigningKeyUsage::DataSignature,
-    )?;
+    validate_secret_signing_usage(&secret_key, SigningKeyUsage::DataSignature)?;
     let password_obj: Password = password.into();
 
     let mut rng = thread_rng();

@@ -523,7 +523,7 @@ fn find_valid_encryption_subkeys(
         }
 
         // Check if subkey is valid (not revoked, not expired)
-        if !is_subkey_valid(subkey, false) {
+        if !is_subkey_valid(&key.primary_key, subkey, false) {
             continue;
         }
 

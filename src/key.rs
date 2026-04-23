@@ -16,13 +16,13 @@ use zeroize::Zeroizing;
 
 use crate::error::{Error, Result};
 use crate::internal::{
-    fingerprint_to_hex, is_details_revoked, parse_public_key, parse_secret_key,
-    public_key_to_armored, secret_key_to_bytes, validate_signing_usage, SigningKeyUsage,
+    fingerprint_to_hex, is_primary_secret_key_revoked, parse_public_key, parse_secret_key,
+    public_key_to_armored, secret_key_to_bytes, validate_secret_signing_usage, SigningKeyUsage,
 };
 use crate::types::{CertificationType, CipherSuite, GeneratedKey, SubkeyFlags};
 
 fn ensure_secret_primary_not_revoked(secret_key: &SignedSecretKey) -> Result<()> {
-    if is_details_revoked(&secret_key.details) {
+    if is_primary_secret_key_revoked(secret_key) {
         return Err(Error::KeyRevoked);
     }
     Ok(())
@@ -31,11 +31,7 @@ fn ensure_secret_primary_not_revoked(secret_key: &SignedSecretKey) -> Result<()>
 fn ensure_secret_primary_usable_for_external_certification(
     secret_key: &SignedSecretKey,
 ) -> Result<()> {
-    validate_signing_usage(
-        secret_key.primary_key.created_at().into(),
-        &secret_key.details,
-        SigningKeyUsage::DataSignature,
-    )
+    validate_secret_signing_usage(secret_key, SigningKeyUsage::DataSignature)
 }
 
 /// Shared key-generation implementation used by every public `create_key*`
