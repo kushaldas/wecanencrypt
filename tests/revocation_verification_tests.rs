@@ -22,7 +22,10 @@ use pgp::ser::Serialize;
 use pgp::types::{KeyDetails, KeyVersion, Password, SignedUser, Tag, Timestamp};
 use rand::thread_rng;
 
-use wecanencrypt::{create_key_simple, parse_key_bytes, revoke_uid, sign_bytes, verify_bytes};
+use pgp::composed::DetachedSignature;
+use wecanencrypt::{
+    create_key_simple, parse_key_bytes, revoke_uid, sign_bytes, sign_bytes_detached, verify_bytes,
+};
 
 fn parse_secret(bytes: &[u8]) -> SignedSecretKey {
     let (parsed, _) = SignedSecretKey::from_armor_single(bytes)
@@ -107,19 +110,24 @@ fn forge_cert_revocation(
         .expect("sign UID revocation")
 }
 
-/// Reassemble `victim` with `extra_sig` appended to the first secret
-/// subkey's signatures. The signature is *not* cryptographically
-/// verified during parse — rpgp stores any packet with matching type.
-fn splice_into_subkey(victim: &SignedSecretKey, extra_sig: packet::Signature) -> Vec<u8> {
-    assert!(
-        !victim.secret_subkeys.is_empty(),
-        "victim must have at least one secret subkey"
-    );
+/// Reassemble `victim` with `extra_sig` appended to the signatures
+/// of the secret subkey whose fingerprint matches `target_fp`.
+/// The signature is *not* cryptographically verified during parse —
+/// rpgp stores any packet with matching type.
+fn splice_into_subkey_fp(
+    victim: &SignedSecretKey,
+    target_fp: &pgp::types::Fingerprint,
+    extra_sig: packet::Signature,
+) -> Vec<u8> {
     let mut new_subkeys = victim.secret_subkeys.clone();
-    let target = &mut new_subkeys[0];
-    let mut sigs = target.signatures.clone();
+    let idx = new_subkeys
+        .iter()
+        .position(|sk| &sk.key.fingerprint() == target_fp)
+        .expect("victim must contain a subkey with the target fingerprint");
+    let subkey = &mut new_subkeys[idx];
+    let mut sigs = subkey.signatures.clone();
     sigs.push(extra_sig);
-    *target = SignedSecretSubKey::new(target.key.clone(), sigs);
+    *subkey = SignedSecretSubKey::new(subkey.key.clone(), sigs);
 
     let rebuilt = SignedSecretKey::new(
         victim.primary_key.clone(),
@@ -128,6 +136,16 @@ fn splice_into_subkey(victim: &SignedSecretKey, extra_sig: packet::Signature) ->
         new_subkeys,
     );
     rebuilt.to_bytes().expect("serialize tampered key")
+}
+
+/// Convenience wrapper that splices onto the first secret subkey.
+fn splice_into_subkey(victim: &SignedSecretKey, extra_sig: packet::Signature) -> Vec<u8> {
+    assert!(
+        !victim.secret_subkeys.is_empty(),
+        "victim must have at least one secret subkey"
+    );
+    let target_fp = victim.secret_subkeys[0].key.fingerprint();
+    splice_into_subkey_fp(victim, &target_fp, extra_sig)
 }
 
 /// Reassemble `victim` with `extra_sig` appended to the first UID's
@@ -335,6 +353,71 @@ fn forged_subkey_revocation_does_not_block_verify() {
         ok,
         "forged SubkeyRevocation must not cause a legitimate signature to fail verification"
     );
+}
+
+/// A genuine self-signed SubkeyRevocation must prevent `sign_bytes`
+/// from producing a signature issued by the revoked subkey. This
+/// exercises `is_secret_subkey_revoked` in `sign.rs::find_signing_subkey`
+/// — a path distinct from the public-key paths the other tests cover.
+///
+/// Regression test for a bug caught in review (PR #18 Copilot
+/// comment): `is_secret_subkey_revoked` originally passed the
+/// secret subkey packet (tag 7) to `verify_subkey_binding`, but
+/// SubkeyRevocation sigs are computed over the public subkey
+/// packet (tag 14). The tag mismatch meant no genuine revocation
+/// would ever verify via the secret path, so `sign_bytes` would
+/// happily sign with a revoked subkey. The fix passes
+/// `subkey.key.public_key()`.
+///
+/// We verify the fix by inspecting the issuer fingerprint of the
+/// produced signature: if the fix is in place, the signature must
+/// NOT come from the revoked subkey. The exact fallback (primary
+/// key vs. error) depends on rpgp's key-flag encoding and is not
+/// what this test is trying to pin down.
+#[test]
+fn genuine_subkey_revocation_blocks_signing_from_that_subkey() {
+    let key = create_key_simple("pw", &["Alice <alice@example.com>"]).unwrap();
+    let sec = parse_secret(&key.secret_key);
+    let target = sec
+        .secret_subkeys
+        .iter()
+        .find(|sk| sk.signatures.iter().any(|s| s.key_flags().sign()))
+        .expect("signing subkey");
+    let target_fp = target.key.fingerprint();
+    let revoked_fp = hex::encode_upper(target_fp.as_bytes());
+    let revocation = forge_subkey_revocation(&sec, "pw", target);
+    let tampered = splice_into_subkey_fp(&sec, &target_fp, revocation);
+
+    // Two acceptable outcomes after a genuine revocation of the only
+    // signing subkey:
+    //   (a) sign_bytes_detached returns NoSigningSubkey — the subkey
+    //       was filtered and no fallback is available
+    //   (b) sign_bytes_detached succeeds via a different key — the
+    //       signature's issuer must not be the revoked subkey
+    // Both prove `is_secret_subkey_revoked` returned true. The old
+    // bug would produce (c): a signature issued BY the revoked subkey.
+    match sign_bytes_detached(&tampered, b"payload", "pw") {
+        Err(wecanencrypt::Error::NoSigningSubkey) => {
+            // Outcome (a): fix worked, no other signing key available.
+        }
+        Ok(sig_armored) => {
+            use std::io::Cursor;
+            let (parsed, _) =
+                DetachedSignature::from_armor_single(Cursor::new(sig_armored.as_bytes())).unwrap();
+            let issuer_fps: Vec<String> = parsed
+                .signature
+                .issuer_fingerprint()
+                .iter()
+                .map(|fp| hex::encode_upper(fp.as_bytes()))
+                .collect();
+            assert!(
+                !issuer_fps.iter().any(|fp| fp == &revoked_fp),
+                "signature must not be issued by the revoked subkey \
+                 (issuer_fps={issuer_fps:?}, revoked_fp={revoked_fp})"
+            );
+        }
+        Err(other) => panic!("unexpected error: {other:?}"),
+    }
 }
 
 // Silence unused-import warnings when features are minimal.
