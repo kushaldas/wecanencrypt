@@ -138,91 +138,76 @@ pub(crate) fn get_card_backend(ident: Option<&str>) -> Result<Box<dyn CardBacken
 
 /// PC/SC-backed card selection. Returns a concrete `PcscBackend` so the
 /// caller can decide whether to box it or use it directly.
+///
+/// Multi-card filtering is implemented in two passes. `PcscBackend` consumes
+/// the backend when `Card::new` is called, so there's no way to keep the
+/// probed backend open and return it — dropping the `Card` releases the
+/// reader, and the next enumeration returns a fresh (different) backend.
+/// We therefore record the **index** of the matching card in pass 1 and
+/// re-enumerate in pass 2 to return the backend at that index. Enumeration
+/// order is stable within a single `PcscBackend::cards` session as long as
+/// no reader is added/removed between the two passes.
 #[cfg(feature = "card-pcsc")]
 fn get_card_backend_pcsc(ident: Option<&str>) -> Result<PcscBackend> {
-    match ident {
+    let target = match ident {
         None => {
             let mut cards = PcscBackend::cards(None)
                 .map_err(|e| Error::Card(CardError::CommunicationError(e.to_string())))?;
-            cards
+            return cards
                 .next()
                 .ok_or(Error::Card(CardError::NotConnected))?
-                .map_err(|e| Error::Card(CardError::CommunicationError(e.to_string())))
+                .map_err(|e| Error::Card(CardError::CommunicationError(e.to_string())));
         }
-        Some(target_ident) => {
-            // Use PcscBackend::cards with ident filter
-            // Iterate all cards, find the one with matching ident
-            let target = target_ident.to_ascii_uppercase();
-            let cards = PcscBackend::cards(None)
-                .map_err(|e| Error::Card(CardError::CommunicationError(e.to_string())))?;
+        Some(t) => t.to_ascii_uppercase(),
+    };
 
-            for backend in cards {
-                let backend = match backend {
-                    Ok(b) => b,
-                    Err(_) => continue,
-                };
-
-                // Probe this backend to check its ident
-                let mut card = match Card::new(backend) {
-                    Ok(c) => c,
-                    Err(_) => continue,
-                };
-
-                let card_ident = {
-                    let tx = match card.transaction() {
-                        Ok(t) => t,
-                        Err(_) => continue,
-                    };
-                    match tx.application_identifier() {
-                        Ok(aid) => aid.ident(),
-                        Err(_) => continue,
-                    }
-                };
-
-                if card_ident == target {
-                    // Found the matching card. Drop and re-open to get a fresh backend.
-                    drop(card);
-                    // Re-enumerate and find the same card
-                    let cards2 = PcscBackend::cards(None)
-                        .map_err(|e| Error::Card(CardError::CommunicationError(e.to_string())))?;
-                    for b2 in cards2 {
-                        let b2 = match b2 {
-                            Ok(b) => b,
-                            Err(_) => continue,
-                        };
-                        // Check this is the right one
-                        let mut c2 = match Card::new(b2) {
-                            Ok(c) => c,
-                            Err(_) => continue,
-                        };
-                        let matches = {
-                            let tx2 = match c2.transaction() {
-                                Ok(t) => t,
-                                Err(_) => continue,
-                            };
-                            tx2.application_identifier()
-                                .map(|aid| aid.ident() == target)
-                                .unwrap_or(false)
-                        };
-                        if matches {
-                            // Drop Card so the backend is free, re-open one more time
-                            drop(c2);
-                            let cards3 = PcscBackend::cards(None).map_err(|e| {
-                                Error::Card(CardError::CommunicationError(e.to_string()))
-                            })?;
-                            if let Some(b3) = cards3.flatten().next() {
-                                return Ok(b3);
-                            }
-                        }
-                    }
-                    return Err(Error::Card(CardError::NotConnected));
-                }
-            }
-            Err(Error::Card(CardError::CommunicationError(format!(
-                "Card with ident '{}' not found",
-                target_ident
-            ))))
+    // Pass 1: find the enumeration index of the card whose ident matches.
+    let cards = PcscBackend::cards(None)
+        .map_err(|e| Error::Card(CardError::CommunicationError(e.to_string())))?;
+    let mut match_idx: Option<usize> = None;
+    for (idx, backend) in cards.enumerate() {
+        let backend = match backend {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+        let mut card = match Card::new(backend) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let is_match = {
+            let tx = match card.transaction() {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+            tx.application_identifier()
+                .map(|aid| aid.ident() == target)
+                .unwrap_or(false)
+        };
+        // Dropping `card` here releases the reader so pass 2 can re-open it.
+        if is_match {
+            match_idx = Some(idx);
+            break;
         }
+    }
+    let idx = match_idx.ok_or_else(|| {
+        Error::Card(CardError::CommunicationError(format!(
+            "Card with ident '{}' not found",
+            ident.unwrap_or("")
+        )))
+    })?;
+
+    // Pass 2: re-enumerate and return the backend at that index. Surface
+    // the underlying PC/SC error if reopening fails — silently swallowing
+    // it would mask real "reader busy" / "permission denied" cases under
+    // a misleading "Card disappeared" message.
+    let mut cards2 = PcscBackend::cards(None)
+        .map_err(|e| Error::Card(CardError::CommunicationError(e.to_string())))?;
+    match cards2.nth(idx) {
+        Some(Ok(backend)) => Ok(backend),
+        Some(Err(e)) => Err(Error::Card(CardError::CommunicationError(e.to_string()))),
+        None => Err(Error::Card(CardError::CommunicationError(
+            "Card disappeared between enumerations".to_string(),
+        ))),
     }
 }
 

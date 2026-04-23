@@ -52,16 +52,22 @@ use pgp::types::{
 ///     b"Important document",
 ///     &public_key,
 ///     b"123456",
+///     None,
 /// ).unwrap();
 /// ```
-pub fn sign_bytes_detached_on_card(data: &[u8], public_key: &[u8], pin: &[u8]) -> Result<String> {
+pub fn sign_bytes_detached_on_card(
+    data: &[u8],
+    public_key: &[u8],
+    pin: &[u8],
+    ident: Option<&str>,
+) -> Result<String> {
     let public_key = parse_public_key(public_key)?;
 
     // Get signing key info from the public key
-    let key_info = get_signing_key_info(&public_key, SigningKeyUsage::DataSignature)?;
+    let key_info = get_signing_key_info(&public_key, SigningKeyUsage::DataSignature, ident)?;
 
     // Create the signature using the card
-    let signature = create_card_signature(data, &key_info, pin)?;
+    let signature = create_card_signature(data, &key_info, pin, ident)?;
 
     // Wrap in DetachedSignature and armor
     let detached = DetachedSignature::new(signature);
@@ -99,11 +105,12 @@ struct SigningKeyInfo {
 fn get_signing_key_info(
     public_key: &SignedPublicKey,
     usage: SigningKeyUsage,
+    ident: Option<&str>,
 ) -> Result<SigningKeyInfo> {
     validate_primary_key_signing_usage(public_key, usage)?;
 
     // First, query the card to get the fingerprint of the key in the signing slot
-    let card_fp = get_card_signing_fingerprint()?;
+    let card_fp = get_card_signing_fingerprint(ident)?;
 
     // Try to match against the primary key
     let primary = &public_key.primary_key;
@@ -154,8 +161,8 @@ fn get_signing_key_info(
 }
 
 /// Get the fingerprint of the key currently in the card's signing slot.
-fn get_card_signing_fingerprint() -> Result<String> {
-    let backend = get_card_backend(None)?;
+fn get_card_signing_fingerprint(ident: Option<&str>) -> Result<String> {
+    let backend = get_card_backend(ident)?;
     let mut card = Card::new(backend).map_err(|e| Error::Card(CardError::from(e)))?;
 
     let mut tx = card
@@ -208,7 +215,12 @@ fn select_hash_for_params(params: &PublicParams) -> HashAlgorithm {
 }
 
 /// Create a signature using the smart card.
-fn create_card_signature(data: &[u8], key_info: &SigningKeyInfo, pin: &[u8]) -> Result<Signature> {
+fn create_card_signature(
+    data: &[u8],
+    key_info: &SigningKeyInfo,
+    pin: &[u8],
+    ident: Option<&str>,
+) -> Result<Signature> {
     // Create signature config
     let mut config =
         SignatureConfig::v4(SignatureType::Binary, key_info.algorithm, key_info.hash_alg);
@@ -253,7 +265,13 @@ fn create_card_signature(data: &[u8], key_info: &SigningKeyInfo, pin: &[u8]) -> 
     );
 
     // Sign on the card
-    let raw_signature = sign_on_card(&hash_data, key_info.hash_alg, &key_info.public_params, pin)?;
+    let raw_signature = sign_on_card(
+        &hash_data,
+        key_info.hash_alg,
+        &key_info.public_params,
+        pin,
+        ident,
+    )?;
 
     // Create the SignatureBytes from raw card output
     let signature_bytes = create_signature_bytes(&raw_signature, &key_info.public_params)?;
@@ -339,8 +357,9 @@ fn sign_on_card(
     hash_alg: HashAlgorithm,
     public_params: &PublicParams,
     pin: &[u8],
+    ident: Option<&str>,
 ) -> Result<Vec<u8>> {
-    let backend = get_card_backend(None)?;
+    let backend = get_card_backend(ident)?;
     let mut card = Card::new(backend).map_err(|e| Error::Card(CardError::from(e)))?;
 
     let mut tx = card
@@ -462,9 +481,15 @@ fn create_signature_bytes(raw_sig: &[u8], public_params: &PublicParams) -> Resul
 ///     &encrypted,
 ///     &public_key,
 ///     b"123456",
+///     None,
 /// ).unwrap();
 /// ```
-pub fn decrypt_bytes_on_card(data: &[u8], public_key: &[u8], pin: &[u8]) -> Result<Vec<u8>> {
+pub fn decrypt_bytes_on_card(
+    data: &[u8],
+    public_key: &[u8],
+    pin: &[u8],
+    ident: Option<&str>,
+) -> Result<Vec<u8>> {
     let public_key = parse_public_key(public_key)?;
 
     // Parse the encrypted message (try armored first, then binary)
@@ -498,7 +523,8 @@ pub fn decrypt_bytes_on_card(data: &[u8], public_key: &[u8], pin: &[u8]) -> Resu
                 };
 
                 // Decrypt the session key on the card
-                let decrypted = decrypt_session_key_on_card(values, &enc_key_info, pin, esk_type)?;
+                let decrypted =
+                    decrypt_session_key_on_card(values, &enc_key_info, pin, esk_type, ident)?;
 
                 session_key = Some(decrypted);
                 break;
@@ -629,8 +655,9 @@ fn decrypt_session_key_on_card(
     key_info: &EncryptionKeyInfo,
     pin: &[u8],
     esk_type: EskType,
+    ident: Option<&str>,
 ) -> Result<PlainSessionKey> {
-    let backend = get_card_backend(None)?;
+    let backend = get_card_backend(ident)?;
     let mut card = Card::new(backend).map_err(|e| Error::Card(CardError::from(e)))?;
 
     let mut tx = card
@@ -886,6 +913,8 @@ struct CardSigningKey<'a> {
     hash_alg: HashAlgorithm,
     /// PIN for card operations
     pin: &'a [u8],
+    /// Optional card ident for multi-card setups
+    ident: Option<&'a str>,
 }
 
 impl std::fmt::Debug for CardSigningKey<'_> {
@@ -935,7 +964,7 @@ impl pgp::types::SigningKey for CardSigningKey<'_> {
         data: &[u8],
     ) -> pgp::errors::Result<pgp::types::SignatureBytes> {
         // Sign on the card instead of using software key
-        let raw_signature = sign_on_card(data, hash, &self.public_params, self.pin)
+        let raw_signature = sign_on_card(data, hash, &self.public_params, self.pin, self.ident)
             .map_err(|e| -> String { e.to_string() })?;
 
         create_signature_bytes(&raw_signature, &self.public_params)
@@ -954,11 +983,12 @@ impl pgp::types::SigningKey for CardSigningKey<'_> {
 fn get_primary_key_for_card_signing<'a>(
     public_key: &'a SignedPublicKey,
     pin: &'a [u8],
+    ident: Option<&'a str>,
 ) -> Result<CardSigningKey<'a>> {
     validate_primary_key_signing_usage(public_key, SigningKeyUsage::KeyMaintenance)?;
 
     // Get the fingerprint of the key in the card's signature slot
-    let card_fp = get_card_signing_fingerprint()?;
+    let card_fp = get_card_signing_fingerprint(ident)?;
 
     let primary = &public_key.primary_key;
     let primary_fp = hex::encode(primary.fingerprint().as_bytes());
@@ -983,6 +1013,7 @@ fn get_primary_key_for_card_signing<'a>(
         created_at: primary.created_at(),
         hash_alg,
         pin,
+        ident,
     })
 }
 
@@ -1034,7 +1065,7 @@ fn get_primary_key_for_card_signing<'a>(
 ///
 /// // Set expiry to 1 year from now (in seconds)
 /// let one_year = 365 * 24 * 60 * 60;
-/// let updated = update_primary_expiry_on_card(&public_key, one_year, b"123456").unwrap();
+/// let updated = update_primary_expiry_on_card(&public_key, one_year, b"123456", None).unwrap();
 ///
 /// std::fs::write("updated_key.pub", &updated).unwrap();
 /// ```
@@ -1042,11 +1073,12 @@ pub fn update_primary_expiry_on_card(
     certdata: &[u8],
     expirytime: u64,
     pin: &[u8],
+    ident: Option<&str>,
 ) -> Result<Vec<u8>> {
     use pgp::types::{Duration as PgpDuration, KeyDetails, Tag};
 
     let public_key = parse_public_key(certdata)?;
-    let card_signer = get_primary_key_for_card_signing(&public_key, pin)?;
+    let card_signer = get_primary_key_for_card_signing(&public_key, pin, ident)?;
 
     // Calculate the expiry duration from key creation
     let key_creation = public_key.primary_key.created_at();
@@ -1267,6 +1299,7 @@ pub fn update_primary_expiry_on_card(
 ///     &subkey_fps,
 ///     six_months,
 ///     b"123456",
+///     None,
 /// ).unwrap();
 /// ```
 pub fn update_subkeys_expiry_on_card(
@@ -1274,11 +1307,12 @@ pub fn update_subkeys_expiry_on_card(
     fingerprints: &[&str],
     expirytime: u64,
     pin: &[u8],
+    ident: Option<&str>,
 ) -> Result<Vec<u8>> {
     use pgp::types::{Duration as PgpDuration, KeyDetails};
 
     let public_key = parse_public_key(certdata)?;
-    let card_signer = get_primary_key_for_card_signing(&public_key, pin)?;
+    let card_signer = get_primary_key_for_card_signing(&public_key, pin, ident)?;
 
     let password = pgp::types::Password::from(""); // Not used for card signing
 

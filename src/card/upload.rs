@@ -68,13 +68,14 @@ pub enum KeySelection {
 /// use wecanencrypt::card::upload::{upload_key_to_card, CardKeySlot};
 ///
 /// let secret_key = std::fs::read("secret.asc").unwrap();
-/// upload_key_to_card(&secret_key, b"password", CardKeySlot::Signing, b"12345678").unwrap();
+/// upload_key_to_card(&secret_key, b"password", CardKeySlot::Signing, b"12345678", None).unwrap();
 /// ```
 pub fn upload_key_to_card(
     secret_key_data: &[u8],
     key_password: &[u8],
     slot: CardKeySlot,
     admin_pin: &[u8],
+    ident: Option<&str>,
 ) -> Result<()> {
     let secret_key = parse_secret_key(secret_key_data)?;
     let password = if key_password.is_empty() {
@@ -87,7 +88,7 @@ pub fn upload_key_to_card(
     };
 
     let key_info = find_key_for_slot(&secret_key, &password, slot)?;
-    upload_via_openpgp_card(key_info, slot, admin_pin)
+    upload_via_openpgp_card(key_info, slot, admin_pin, ident)
 }
 
 /// Upload the PRIMARY key to a specific card slot.
@@ -115,13 +116,14 @@ pub fn upload_key_to_card(
 /// //
 /// // This uploads ONLY the primary key to the signing slot
 /// let secret_key = std::fs::read("secret.asc").unwrap();
-/// upload_primary_key_to_card(&secret_key, b"password", CardKeySlot::Signing, b"12345678").unwrap();
+/// upload_primary_key_to_card(&secret_key, b"password", CardKeySlot::Signing, b"12345678", None).unwrap();
 /// ```
 pub fn upload_primary_key_to_card(
     secret_key_data: &[u8],
     key_password: &[u8],
     slot: CardKeySlot,
     admin_pin: &[u8],
+    ident: Option<&str>,
 ) -> Result<()> {
     let secret_key = parse_secret_key(secret_key_data)?;
     let password = if key_password.is_empty() {
@@ -134,7 +136,7 @@ pub fn upload_primary_key_to_card(
     };
 
     let key_info = extract_primary_key_info(&secret_key, &password)?;
-    upload_via_openpgp_card(key_info, slot, admin_pin)
+    upload_via_openpgp_card(key_info, slot, admin_pin, ident)
 }
 
 /// Upload a specific subkey by fingerprint to a card slot.
@@ -159,7 +161,8 @@ pub fn upload_primary_key_to_card(
 ///     b"password",
 ///     "5286C32E7C71E14C4C82F9AE0B207108925CB162",
 ///     CardKeySlot::Signing,
-///     b"12345678"
+///     b"12345678",
+///     None,
 /// ).unwrap();
 /// ```
 pub fn upload_subkey_by_fingerprint(
@@ -168,6 +171,7 @@ pub fn upload_subkey_by_fingerprint(
     fingerprint: &str,
     slot: CardKeySlot,
     admin_pin: &[u8],
+    ident: Option<&str>,
 ) -> Result<()> {
     let secret_key = parse_secret_key(secret_key_data)?;
     let password = if key_password.is_empty() {
@@ -190,7 +194,7 @@ pub fn upload_subkey_by_fingerprint(
     let primary_fp = hex::encode(secret_key.primary_key.fingerprint().as_bytes());
     if primary_fp == fp_normalized {
         let key_info = extract_primary_key_info(&secret_key, &password)?;
-        return upload_via_openpgp_card(key_info, slot, admin_pin);
+        return upload_via_openpgp_card(key_info, slot, admin_pin, ident);
     }
 
     // Search in subkeys
@@ -207,7 +211,7 @@ pub fn upload_subkey_by_fingerprint(
                 })
                 .map_err(|e| Error::Crypto(e.to_string()))??;
 
-            return upload_via_openpgp_card(key_info, slot, admin_pin);
+            return upload_via_openpgp_card(key_info, slot, admin_pin, ident);
         }
     }
 
@@ -335,6 +339,7 @@ fn upload_via_openpgp_card(
     key_info: KeyUploadInfo,
     slot: CardKeySlot,
     admin_pin: &[u8],
+    ident: Option<&str>,
 ) -> Result<()> {
     let key_type = slot.to_openpgp_key_type();
 
@@ -384,7 +389,7 @@ fn upload_via_openpgp_card(
     };
 
     // Connect to card
-    let backend = super::connection::get_card_backend(None)?;
+    let backend = super::connection::get_card_backend(ident)?;
     let mut card = Card::new(backend)
         .map_err(|e| Error::Card(CardError::CommunicationError(e.to_string())))?;
     let mut tx = card
