@@ -89,9 +89,10 @@ if is_card_connected() {
     let info = get_card_details(None)?;
     println!("Card serial: {}", info.serial_number);
 
-    // Upload a key to the signing slot
+    // Upload a key to the signing slot (last arg selects a specific card;
+    // `None` picks the first enumerated card — see "Multi-card selection").
     let secret_key = std::fs::read("secret.asc")?;
-    upload_key_to_card(&secret_key, b"password", CardKeySlot::Signing, b"12345678")?;
+    upload_key_to_card(&secret_key, b"password", CardKeySlot::Signing, b"12345678", None)?;
 
     // Find which cards hold keys for a given key
     let public_key = std::fs::read("pubkey.asc")?;
@@ -107,6 +108,36 @@ if is_card_connected() {
     set_touch_mode(KeySlot::Authentication, TouchMode::On, b"12345678", None)?;
 }
 ```
+
+### Multi-card selection
+
+Every card function takes a trailing `ident: Option<&str>` parameter. Pass
+`None` for the first enumerated card, or
+`Some("MANUFACTURER:SERIAL")` (e.g. `"000F:CB9A5355"` for a Nitrokey 3) to
+target a specific card when several are attached. List connected cards with
+`list_all_cards()` to discover idents.
+
+### Nitrokey 3 support
+
+Nitrokey 3 runs [opcard-rs](https://github.com/Nitrokey/opcard-rs) rather
+than the YubiKey OpenPGP applet, so its algorithm allowlist differs. As of
+Nitrokey 3 firmware bundling opcard v1.7.0, the supported operations are:
+
+| Slot operation | Default build | SE050 build (3A Mini / 3C NFC) |
+|---|---|---|
+| Import (key loading) | P-256, RSA-2048/3072/4096, X25519, Ed25519 | All default + P-384, P-521, Brainpool P256/384/512, secp256k1 |
+| On-card generation | P-256, RSA-2048, X25519, Ed25519 | Same as import above |
+
+**Not supported on any Nitrokey 3 variant:**
+- Legacy `Cv25519` (EdDSALegacy + ECDH on Curve25519, RFC 4880). Uploading a
+  legacy CV25519 subkey returns APDU `6A80` ("Incorrect parameters in the
+  command data field"). Generate keys with the `Cv25519Modern` suite for
+  native Ed25519 / X25519 (RFC 9580) instead.
+- Ed448 / X448
+- Post-quantum suites (ML-DSA, ML-KEM, SLH-DSA)
+
+The firmware version reported via GET DATA (e.g. `3.4`) is the OpenPGP
+applet version from opcard, not the host firmware version.
 
 ## DNS DANE Key Discovery
 

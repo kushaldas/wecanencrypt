@@ -138,7 +138,7 @@ fn main() {
     // Update primary key expiry
     println!("Updating primary key expiry. Touch the YubiKey when flashing...");
     let updated_with_primary =
-        match update_primary_expiry_on_card(&public_key, expiry_seconds, pin_bytes) {
+        match update_primary_expiry_on_card(&public_key, expiry_seconds, pin_bytes, None) {
             Ok(data) => {
                 println!("Primary key expiry updated.");
                 data
@@ -164,6 +164,7 @@ fn main() {
             &subkey_fps,
             expiry_seconds,
             pin_bytes,
+            None,
         ) {
             Ok(data) => {
                 println!("Subkey expiry updated.");
