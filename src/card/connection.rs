@@ -196,17 +196,19 @@ fn get_card_backend_pcsc(ident: Option<&str>) -> Result<PcscBackend> {
         )))
     })?;
 
-    // Pass 2: re-enumerate and return the backend at that index.
-    let cards2 = PcscBackend::cards(None)
+    // Pass 2: re-enumerate and return the backend at that index. Surface
+    // the underlying PC/SC error if reopening fails — silently swallowing
+    // it would mask real "reader busy" / "permission denied" cases under
+    // a misleading "Card disappeared" message.
+    let mut cards2 = PcscBackend::cards(None)
         .map_err(|e| Error::Card(CardError::CommunicationError(e.to_string())))?;
-    cards2
-        .enumerate()
-        .find_map(|(i, b)| if i == idx { b.ok() } else { None })
-        .ok_or_else(|| {
-            Error::Card(CardError::CommunicationError(
-                "Card disappeared between enumerations".to_string(),
-            ))
-        })
+    match cards2.nth(idx) {
+        Some(Ok(backend)) => Ok(backend),
+        Some(Err(e)) => Err(Error::Card(CardError::CommunicationError(e.to_string()))),
+        None => Err(Error::Card(CardError::CommunicationError(
+            "Card disappeared between enumerations".to_string(),
+        ))),
+    }
 }
 
 /// Convert a PIN byte slice to SecretString, zeroizing the intermediate allocation.

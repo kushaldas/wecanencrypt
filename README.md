@@ -111,11 +111,13 @@ if is_card_connected() {
 
 ### Multi-card selection
 
-Every card function takes a trailing `ident: Option<&str>` parameter. Pass
-`None` for the first enumerated card, or
-`Some("MANUFACTURER:SERIAL")` (e.g. `"000F:CB9A5355"` for a Nitrokey 3) to
-target a specific card when several are attached. List connected cards with
-`list_all_cards()` to discover idents.
+Every card operation that targets a specific card/reader takes a trailing
+`ident: Option<&str>` parameter. Pass `None` for the first enumerated card,
+or `Some("MANUFACTURER:SERIAL")` (e.g. `"000F:CB9A5355"` for a Nitrokey 3)
+to target a specific card when several are attached. The enumeration
+helpers `is_card_connected()`, `list_all_cards()`, and `find_cards_for_key()`
+scan across all readers and don't take an ident. Use `list_all_cards()` to
+discover idents.
 
 ### Nitrokey 3 support
 
