@@ -137,8 +137,12 @@ fn get_signing_key_info(
         let subkey_fp = hex::encode(key.fingerprint().as_bytes());
         let has_sign_flag = subkey.signatures.iter().any(|sig| sig.key_flags().sign());
         let subkey_usable = match usage {
-            SigningKeyUsage::DataSignature => is_subkey_valid(subkey, false),
-            SigningKeyUsage::KeyMaintenance => is_subkey_valid(subkey, true),
+            SigningKeyUsage::DataSignature => {
+                is_subkey_valid(&public_key.primary_key, subkey, false)
+            }
+            SigningKeyUsage::KeyMaintenance => {
+                is_subkey_valid(&public_key.primary_key, subkey, true)
+            }
         };
 
         if subkey_fp == card_fp && can_sign(key.public_params()) && has_sign_flag && subkey_usable {

@@ -10,7 +10,9 @@ use pgp::types::{KeyDetails, Password, PlainSecretParams, PublicParams};
 use zeroize::Zeroizing;
 
 use crate::error::{Error, Result};
-use crate::internal::{is_key_expired, is_subkey_valid, parse_public_key, parse_secret_key};
+use crate::internal::{
+    is_key_expired, is_secret_subkey_revoked, is_subkey_valid, parse_public_key, parse_secret_key,
+};
 use crate::types::{RsaPublicKey, SigningPublicKey};
 
 /// Convert a key's authentication key to SSH public key format.
@@ -35,7 +37,7 @@ pub fn get_ssh_pubkey(key_data: &[u8], comment: Option<&str>) -> Result<String> 
     // Find an authentication-capable subkey
     let auth_subkey = public_key.public_subkeys.iter().find(|sk| {
         // Check if valid and has authentication flag
-        if !is_subkey_valid(sk, false) {
+        if !is_subkey_valid(&public_key.primary_key, sk, false) {
             return false;
         }
         sk.signatures
@@ -232,7 +234,7 @@ pub fn get_signing_pubkey(key_data: &[u8]) -> Result<SigningPublicKey> {
 
     // Find a signing-capable subkey
     let sign_subkey = public_key.public_subkeys.iter().find(|sk| {
-        if !is_subkey_valid(sk, false) {
+        if !is_subkey_valid(&public_key.primary_key, sk, false) {
             return false;
         }
         sk.signatures.iter().any(|sig| sig.key_flags().sign())
@@ -415,12 +417,8 @@ pub fn ssh_sign_raw(
             continue;
         }
 
-        // Check the subkey isn't revoked
-        let is_revoked = subkey
-            .signatures
-            .iter()
-            .any(|sig| sig.typ() == Some(pgp::packet::SignatureType::SubkeyRevocation));
-        if is_revoked {
+        // Check the subkey isn't revoked by a verified self-signature
+        if is_secret_subkey_revoked(secret_key.primary_key.public_key(), subkey) {
             continue;
         }
 
