@@ -355,18 +355,19 @@ fn forged_subkey_revocation_does_not_block_verify() {
     );
 }
 
-/// A genuine self-signed SubkeyRevocation must prevent `sign_bytes`
-/// from producing a signature issued by the revoked subkey. This
-/// exercises `is_secret_subkey_revoked` in `sign.rs::find_signing_subkey`
-/// — a path distinct from the public-key paths the other tests cover.
+/// A genuine self-signed SubkeyRevocation must prevent
+/// `sign_bytes_detached` from producing a signature issued by the
+/// revoked subkey. This exercises `is_secret_subkey_revoked` in
+/// `sign.rs::find_signing_subkey` — a path distinct from the
+/// public-key paths the other tests cover.
 ///
 /// Regression test for a bug caught in review (PR #18 Copilot
 /// comment): `is_secret_subkey_revoked` originally passed the
 /// secret subkey packet (tag 7) to `verify_subkey_binding`, but
 /// SubkeyRevocation sigs are computed over the public subkey
 /// packet (tag 14). The tag mismatch meant no genuine revocation
-/// would ever verify via the secret path, so `sign_bytes` would
-/// happily sign with a revoked subkey. The fix passes
+/// would ever verify via the secret path, so the signing path
+/// would happily sign with a revoked subkey. The fix passes
 /// `subkey.key.public_key()`.
 ///
 /// We verify the fix by inspecting the issuer fingerprint of the
