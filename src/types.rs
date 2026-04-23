@@ -100,6 +100,7 @@ impl CipherSuite {
 /// | `Ecdsa`             | ECDSA over any NIST / secp256k1 / brainpool curve |
 /// | `Unknown`           | Anything wecanencrypt does not classify           |
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum KeyAlgorithm {
     Rsa,
     Dsa,

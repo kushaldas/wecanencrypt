@@ -411,10 +411,28 @@ fn genuine_subkey_revocation_blocks_signing_from_that_subkey() {
                 .iter()
                 .map(|fp| hex::encode_upper(fp.as_bytes()))
                 .collect();
+            let issuer_kids: Vec<String> = parsed
+                .signature
+                .issuer_key_id()
+                .iter()
+                .map(|kid| hex::encode_upper(kid.as_ref()))
+                .collect();
+            // Guard against a false-negative where rpgp emits no
+            // issuer subpacket at all: the "does not match revoked
+            // subkey" assertion would trivially pass even if the
+            // revoked subkey did in fact sign.
             assert!(
-                !issuer_fps.iter().any(|fp| fp == &revoked_fp),
+                !issuer_fps.is_empty() || !issuer_kids.is_empty(),
+                "signature must carry an IssuerFingerprint or Issuer \
+                 keyid subpacket for the regression check to be meaningful"
+            );
+            let revoked_kid = &revoked_fp[revoked_fp.len() - 16..];
+            assert!(
+                !issuer_fps.iter().any(|fp| fp == &revoked_fp)
+                    && !issuer_kids.iter().any(|kid| kid == revoked_kid),
                 "signature must not be issued by the revoked subkey \
-                 (issuer_fps={issuer_fps:?}, revoked_fp={revoked_fp})"
+                 (issuer_fps={issuer_fps:?}, issuer_kids={issuer_kids:?}, \
+                 revoked_fp={revoked_fp})"
             );
         }
         Err(other) => panic!("unexpected error: {other:?}"),
