@@ -113,6 +113,42 @@ pub(crate) fn get_algorithm_name(key: &impl KeyDetails) -> String {
     }
 }
 
+/// Classify an OpenPGP key into a [`crate::types::KeyAlgorithm`], looking
+/// into `PublicParams` so that ECDH/Curve25519 is distinguished from
+/// ECDH/NIST and `EdDSALegacy` from `Ed25519`.
+pub(crate) fn classify_key_algorithm(key: &impl KeyDetails) -> crate::types::KeyAlgorithm {
+    use crate::types::KeyAlgorithm;
+    use pgp::crypto::public_key::PublicKeyAlgorithm;
+    use pgp::types::{EcdhPublicParams, PublicParams};
+
+    match key.algorithm() {
+        PublicKeyAlgorithm::RSA
+        | PublicKeyAlgorithm::RSAEncrypt
+        | PublicKeyAlgorithm::RSASign => KeyAlgorithm::Rsa,
+        PublicKeyAlgorithm::DSA => KeyAlgorithm::Dsa,
+        PublicKeyAlgorithm::Elgamal => KeyAlgorithm::Elgamal,
+        PublicKeyAlgorithm::EdDSALegacy => KeyAlgorithm::EdDsaLegacy,
+        PublicKeyAlgorithm::Ed25519 => KeyAlgorithm::Ed25519,
+        PublicKeyAlgorithm::Ed448 => KeyAlgorithm::Ed448,
+        PublicKeyAlgorithm::X25519 => KeyAlgorithm::X25519,
+        PublicKeyAlgorithm::X448 => KeyAlgorithm::X448,
+        PublicKeyAlgorithm::ECDSA => KeyAlgorithm::Ecdsa,
+        PublicKeyAlgorithm::ECDH => match key.public_params() {
+            PublicParams::ECDH(EcdhPublicParams::Curve25519 { .. }) => KeyAlgorithm::EcdhCurve25519,
+            PublicParams::ECDH(EcdhPublicParams::P256 { .. })
+            | PublicParams::ECDH(EcdhPublicParams::P384 { .. })
+            | PublicParams::ECDH(EcdhPublicParams::P521 { .. }) => KeyAlgorithm::EcdhNist,
+            PublicParams::ECDH(EcdhPublicParams::Brainpool256 { .. })
+            | PublicParams::ECDH(EcdhPublicParams::Brainpool384 { .. })
+            | PublicParams::ECDH(EcdhPublicParams::Brainpool512 { .. }) => {
+                KeyAlgorithm::EcdhBrainpool
+            }
+            _ => KeyAlgorithm::Unknown,
+        },
+        _ => KeyAlgorithm::Unknown,
+    }
+}
+
 /// Get the bit size for a key based on its algorithm and parameters.
 /// Returns 0 if the bit size cannot be determined.
 pub(crate) fn get_key_bit_size(key: &impl KeyDetails) -> usize {
