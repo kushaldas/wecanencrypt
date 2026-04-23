@@ -77,6 +77,73 @@ impl CipherSuite {
     }
 }
 
+/// Structured classification of an OpenPGP public-key algorithm.
+///
+/// The existing `algorithm: String` fields on [`KeyInfo`] / [`SubkeyInfo`]
+/// collapse related algorithms (`EdDSALegacy` and `Ed25519` both render as
+/// `"EdDSA"`; every ECDH flavor renders as `"ECDH"` regardless of curve).
+/// `KeyAlgorithm` disambiguates:
+///
+/// | Variant             | OpenPGP mapping                                   |
+/// |---------------------|---------------------------------------------------|
+/// | `Rsa`               | RSA / RSAEncrypt / RSASign                        |
+/// | `Dsa`               | DSA                                               |
+/// | `Elgamal`           | Elgamal                                           |
+/// | `EdDsaLegacy`       | EdDSALegacy — v4 Ed25519 (`CipherSuite::Cv25519`) |
+/// | `Ed25519`           | Ed25519 — RFC 9580 (`CipherSuite::Cv25519Modern`) |
+/// | `Ed448`             | Ed448 — RFC 9580 (`CipherSuite::Cv448Modern`)     |
+/// | `EcdhCurve25519`    | ECDH over Curve25519 (`CipherSuite::Cv25519`)     |
+/// | `X25519`            | X25519 — RFC 9580 (`CipherSuite::Cv25519Modern`)  |
+/// | `X448`              | X448 — RFC 9580 (`CipherSuite::Cv448Modern`)      |
+/// | `EcdhNist`          | ECDH over NIST P-256 / P-384 / P-521              |
+/// | `EcdhBrainpool`     | ECDH over Brainpool 256 / 384 / 512               |
+/// | `Ecdsa`             | ECDSA over any NIST / secp256k1 / brainpool curve |
+/// | `Unknown`           | Anything wecanencrypt does not classify           |
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum KeyAlgorithm {
+    Rsa,
+    Dsa,
+    Elgamal,
+    EdDsaLegacy,
+    Ed25519,
+    Ed448,
+    EcdhCurve25519,
+    X25519,
+    X448,
+    EcdhNist,
+    EcdhBrainpool,
+    Ecdsa,
+    Unknown,
+}
+
+impl KeyAlgorithm {
+    /// Human-readable label matching wecanencrypt's cipher-suite vocabulary.
+    pub fn name(&self) -> &'static str {
+        match self {
+            KeyAlgorithm::Rsa => "RSA",
+            KeyAlgorithm::Dsa => "DSA",
+            KeyAlgorithm::Elgamal => "Elgamal",
+            KeyAlgorithm::EdDsaLegacy => "EdDSALegacy",
+            KeyAlgorithm::Ed25519 => "Ed25519",
+            KeyAlgorithm::Ed448 => "Ed448",
+            KeyAlgorithm::EcdhCurve25519 => "ECDH/Curve25519",
+            KeyAlgorithm::X25519 => "X25519",
+            KeyAlgorithm::X448 => "X448",
+            KeyAlgorithm::EcdhNist => "ECDH/NIST",
+            KeyAlgorithm::EcdhBrainpool => "ECDH/Brainpool",
+            KeyAlgorithm::Ecdsa => "ECDSA",
+            KeyAlgorithm::Unknown => "Unknown",
+        }
+    }
+}
+
+impl std::fmt::Display for KeyAlgorithm {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
 /// Flags indicating which subkeys to generate or operate on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SubkeyFlags {
@@ -189,8 +256,13 @@ pub struct SubkeyInfo {
     pub key_type: KeyType,
     /// Whether this subkey has been revoked
     pub is_revoked: bool,
-    /// Algorithm name (e.g., "RSA", "EdDSA", "ECDH")
+    /// Algorithm name (e.g., "RSA", "EdDSA", "ECDH"). Prefer
+    /// [`algorithm_detail`](Self::algorithm_detail) for a disambiguated form.
     pub algorithm: String,
+    /// Disambiguated algorithm classification. Unlike `algorithm`, this
+    /// distinguishes `EdDSALegacy` from `Ed25519`, `ECDH/Curve25519` from
+    /// `ECDH/NIST`, and so on.
+    pub algorithm_detail: KeyAlgorithm,
     /// Key size in bits (e.g., 4096 for RSA, 256 for Curve25519)
     pub bit_length: usize,
     /// OpenPGP key packet version (V4 per RFC 4880, V6 per RFC 9580).
@@ -222,6 +294,9 @@ pub struct KeyInfo {
     pub subkeys: Vec<SubkeyInfo>,
     /// OpenPGP key packet version of the primary key (V4 per RFC 4880, V6 per RFC 9580).
     pub key_version: KeyVersion,
+    /// Disambiguated algorithm classification of the **primary key**. See
+    /// [`KeyAlgorithm`] for how this differs from a plain `"EdDSA"` string.
+    pub primary_algorithm_detail: KeyAlgorithm,
 }
 
 /// Detailed cipher information for a key component.

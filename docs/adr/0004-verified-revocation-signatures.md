@@ -133,9 +133,29 @@ A parallel `is_secret_subkey_revoked(primary, &SignedSecretSubKey)` exists
 for `sign.rs` and `ssh.rs`, which iterate `secret_subkeys` rather than
 `public_subkeys`. Both paths funnel through a single
 generic `any_verified_subkey_revocation` core that is parametric over
-`K: KeyDetails + Serialize`, so `PublicSubkey` and `SecretSubkey`
-share code — the hash is always computed over the public form thanks
-to the trait bounds and the verification-time serialization.
+`K: KeyDetails + Serialize`.
+
+The secret-subkey variant explicitly extracts the public form before
+verification by calling `subkey.key.public_key()` (returns a
+`&PublicSubkey`). This is **mandatory, not optional**: rpgp's
+`Serialize` impl for `SecretSubkey` emits a tag-7 secret-subkey
+packet, while `PublicSubkey` emits a tag-14 public-subkey packet.
+Signatures produced by any conforming signer (including rpgp's own
+`sign_subkey_binding`) hash over the tag-14 form. Passing
+`&subkey.key` (the `SecretSubkey` packet) into `verify_subkey_binding`
+would recompute the hash over tag-7 bytes and fail verification
+against every genuine revocation — with the catastrophic result that
+`find_signing_subkey` and the SSH-auth path would happily use
+revoked signing subkeys. The generic core takes
+`K: KeyDetails + Serialize`, so the trait bounds alone do not enforce
+the public form; the caller must pass it explicitly.
+
+An initial draft of this ADR claimed the generic core "always hashes
+the public form thanks to trait bounds," which is incorrect. That
+wording was caught by review and the helper was patched to call
+`subkey.key.public_key()` at the site where a `SignedSecretSubKey` is
+being checked (see the regression test
+`genuine_subkey_revocation_blocks_signing_from_that_subkey`).
 
 The UID family takes a `&pgp::packet::PublicKey` and `&SignedUser`:
 

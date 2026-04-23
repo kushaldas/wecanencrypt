@@ -10,7 +10,8 @@ use pgp::types::KeyDetails;
 
 use crate::error::Result;
 use crate::internal::{
-    fingerprint_to_hex, get_algorithm_name, get_key_bit_size, is_subkey_revoked, is_subkey_valid,
+    classify_key_algorithm, fingerprint_to_hex, get_algorithm_name, get_key_bit_size,
+    is_subkey_revoked, is_subkey_valid,
     keyid_to_hex, parse_key, system_time_to_datetime, verified_primary_revocation,
     verified_user_id_revocation,
 };
@@ -191,6 +192,8 @@ fn extract_key_info(
 
     let key_version = public_key.primary_key.version();
 
+    let primary_algorithm_detail = classify_key_algorithm(&public_key.primary_key);
+
     Ok(KeyInfo {
         user_ids,
         fingerprint,
@@ -203,6 +206,7 @@ fn extract_key_info(
         revocation_time,
         subkeys,
         key_version,
+        primary_algorithm_detail,
     })
 }
 
@@ -225,6 +229,7 @@ fn extract_subkey_info(public_key: &SignedPublicKey, allow_expired: bool) -> Vec
 
         let is_revoked = is_subkey_revoked(&public_key.primary_key, subkey);
         let algorithm = get_algorithm_name(&subkey.key);
+        let algorithm_detail = classify_key_algorithm(&subkey.key);
         let bit_length = get_key_bit_size(&subkey.key);
 
         // Determine key type based on key flags
@@ -242,6 +247,7 @@ fn extract_subkey_info(public_key: &SignedPublicKey, allow_expired: bool) -> Vec
                 key_type,
                 is_revoked,
                 algorithm,
+                algorithm_detail,
                 bit_length,
                 key_version,
             });

@@ -84,11 +84,18 @@ pub(crate) fn is_subkey_revoked(
 
 /// Check if a secret subkey carries a cryptographically valid
 /// self-revocation from the primary key.
+///
+/// The signature hash must be recomputed over the *public* subkey
+/// packet (tag 14), never the secret subkey packet (tag 7). rpgp's
+/// `Serialize` impls for `PublicSubkey` and `SecretSubkey` produce
+/// different byte streams, so passing `&subkey.key` directly would
+/// always fail verification against a signature computed by any
+/// conforming implementation — including rpgp's own signing paths.
 pub(crate) fn is_secret_subkey_revoked(
     primary: &pgp::packet::PublicKey,
     subkey: &SignedSecretSubKey,
 ) -> bool {
-    any_verified_subkey_revocation(primary, &subkey.signatures, &subkey.key)
+    any_verified_subkey_revocation(primary, &subkey.signatures, subkey.key.public_key())
 }
 
 /// Check if a subkey has the signing capability flag in its most recent
