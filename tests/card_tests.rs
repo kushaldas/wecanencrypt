@@ -62,7 +62,9 @@ mod card_tests {
         upload_key_to_card, upload_primary_key_to_card, upload_subkey_by_fingerprint, CardKeySlot,
     };
     use wecanencrypt::card::*;
-    use wecanencrypt::{create_key, encrypt_bytes, CipherSuite, SubkeyFlags, verify_bytes_detached};
+    use wecanencrypt::{
+        create_key, encrypt_bytes, verify_bytes_detached, CipherSuite, SubkeyFlags,
+    };
 
     // ==================== Test Key Paths ====================
 
@@ -87,10 +89,7 @@ mod card_tests {
     const NISTP521_PUBLIC_KEY: &str = "tests/files/store/nistp521_public.asc";
     const NISTP521_SECRET_KEY: &str = "tests/files/store/nistp521_secret.asc";
 
-    const V6_CV25519MODERN_PUBLIC_KEY: &str =
-        "tests/fixtures/v6/alice_v6_cv25519modern_pub.asc";
-    const V6_CV25519MODERN_SECRET_KEY: &str =
-        "tests/fixtures/v6/alice_v6_cv25519modern_sec.asc";
+    const V6_CV25519MODERN_SECRET_KEY: &str = "tests/fixtures/v6/alice_v6_cv25519modern_sec.asc";
 
     // ==================== PINs ====================
 
@@ -863,46 +862,42 @@ mod card_tests {
         println!("\n=== Primary key signing workflow completed successfully! ===");
     }
 
+    /// V6 (RFC 9580) certificates use 32-byte SHA2-256 fingerprints. The
+    /// OpenPGP Smart Card Application Functional Specification v3.4.1
+    /// fingerprint Data Objects (`C7`/`C8`/`C9`/`C4`) are fixed at 20
+    /// bytes (SHA-1 based V4 fingerprints); no current card firmware
+    /// stores a 32-byte fingerprint.
+    ///
+    /// `upload_via_openpgp_card` enforces this constraint before any
+    /// APDU is sent: it rejects a non-20-byte fingerprint with
+    /// `Error::Crypto("Fingerprint must be exactly 20 bytes")`. This
+    /// test locks in that failure mode so the limitation is visible in
+    /// the test suite rather than left as a latent surprise. It runs
+    /// without a physical card — the fingerprint check fails long
+    /// before connection.
+    ///
+    /// When the card spec gains a V6 fingerprint DO and firmware ships
+    /// support, flip this back into a live upload+sign/verify test
+    /// (and gate with `#[ignore = "requires physical smart card"]`).
     #[test]
-    #[ignore = "requires physical smart card"]
-    fn test_v6_cv25519modern_upload_and_sign_verify() {
-        reset_card_to_defaults();
-
+    fn test_v6_cv25519modern_upload_rejected_by_20byte_fingerprint_check() {
         let secret_key =
             fs::read(V6_CV25519MODERN_SECRET_KEY).expect("Failed to read V6 secret key");
-        let public_key =
-            fs::read(V6_CV25519MODERN_PUBLIC_KEY).expect("Failed to read V6 public key");
 
-        println!("Step 1: Uploading V6 Ed25519 primary key to signing slot...");
-        upload_primary_key_to_card(
+        let err = upload_primary_key_to_card(
             &secret_key,
             V6_KEY_PASSWORD,
             CardKeySlot::Signing,
             ADMIN_PIN,
             CARD_IDENT(),
         )
-        .expect("Failed to upload V6 primary signing key");
+        .expect_err("V6 upload unexpectedly succeeded; card spec extended?");
 
-        println!("Step 2: Uploading V6 X25519 encryption subkey to decryption slot...");
-        upload_key_to_card(
-            &secret_key,
-            V6_KEY_PASSWORD,
-            CardKeySlot::Decryption,
-            ADMIN_PIN,
-            CARD_IDENT(),
-        )
-        .expect("Failed to upload V6 X25519 encryption key");
-
-        println!("Step 3: Testing sign/verify with V6 key on card...");
-        let msg = b"OpenPGP on Nitrokey 3 with V6 Ed25519/X25519.";
-        let signature = sign_bytes_detached_on_card(msg, &public_key, USER_PIN, CARD_IDENT())
-            .expect("Failed to sign with V6 key on card");
-
-        let is_valid = verify_bytes_detached(&public_key, msg, signature.as_bytes())
-            .expect("Failed to verify V6 signature");
-        assert!(is_valid, "V6 card signature verification failed");
-
-        println!("✓ V6 upload and sign/verify completed successfully");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Fingerprint must be exactly 20 bytes"),
+            "expected 20-byte-fingerprint rejection, got: {msg}"
+        );
     }
 
     #[test]
@@ -953,7 +948,10 @@ mod card_tests {
 
         let is_valid = verify_bytes_detached(&public_key, msg, signature.as_bytes())
             .expect("Failed to verify generated-key signature");
-        assert!(is_valid, "Generated V4 Cv25519Modern signature verification failed");
+        assert!(
+            is_valid,
+            "Generated V4 Cv25519Modern signature verification failed"
+        );
 
         println!("✓ Generated V4 Cv25519Modern upload and sign/verify completed successfully");
     }
