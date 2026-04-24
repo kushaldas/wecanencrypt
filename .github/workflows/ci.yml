@@ -20,7 +20,8 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y pcscd libpcsclite-dev pcsc-tools
+          sudo apt-get install -y pcscd libpcsclite-dev pcsc-tools \
+            clang llvm pkg-config nettle-dev
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -64,7 +65,12 @@ jobs:
       - name: Clippy
         run: cargo clippy --features card -- -D warnings
 
+      - name: Install pinned sequoia-sop for interop tests
+        run: cargo install sequoia-sop --version 0.37.3 --features cli --root target/sop-bin --locked
+
       - name: Run tests (without card)
+        env:
+          WECANENCRYPT_SQOP: ${{ github.workspace }}/target/sop-bin/bin/sqop
         run: cargo test --features card --test '*'
 
       - name: Run card tests

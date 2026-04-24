@@ -30,3 +30,7 @@ lint:
 # Check without building
 check:
     cargo check --features card
+
+# Install pinned sequoia-sop (`sqop`) binary for interop tests
+install-sqop:
+    cargo install sequoia-sop --version 0.37.3 --features cli --root target/sop-bin --locked
