@@ -577,6 +577,30 @@ const OID_NIST_P256: &[u8] = &[0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x03, 0x01, 0x07];
 const OID_NIST_P384: &[u8] = &[0x2B, 0x81, 0x04, 0x00, 0x22];
 const OID_NIST_P521: &[u8] = &[0x2B, 0x81, 0x04, 0x00, 0x23];
 
+/// Normalize a Curve25519 public key to the 33-byte `0x40 || x` form that
+/// OpenPGP card firmware requires (spec v3.4.1 §B.5).
+///
+/// Accepts either a raw 32-byte point or an already-prefixed 33-byte value.
+/// Any other length (including the empty slice) is rejected with a clear
+/// error instead of silently producing a malformed value that the card
+/// would later reject with an opaque `SW 6A80`.
+fn ensure_curve25519_card_public_key_format(public_key: &[u8]) -> pgp::errors::Result<Vec<u8>> {
+    match public_key {
+        [0x40, rest @ ..] if rest.len() == 32 => Ok(public_key.to_vec()),
+        raw if raw.len() == 32 => {
+            let mut prefixed = Vec::with_capacity(33);
+            prefixed.push(0x40);
+            prefixed.extend_from_slice(raw);
+            Ok(prefixed)
+        }
+        _ => Err(format!(
+            "invalid Curve25519 public key: expected 32 raw bytes or 33 bytes with 0x40 prefix, got {} bytes",
+            public_key.len()
+        )
+        .into()),
+    }
+}
+
 fn extract_key_info(
     pub_params: &PublicParams,
     priv_params: &PlainSecretParams,
@@ -588,7 +612,9 @@ fn extract_key_info(
         (PublicParams::EdDSALegacy(ed_pub), PlainSecretParams::Ed25519Legacy(ed_priv)) => {
             use pgp::types::EddsaLegacyPublicParams;
             let public_key = match ed_pub {
-                EddsaLegacyPublicParams::Ed25519 { key } => key.as_bytes().to_vec(),
+                EddsaLegacyPublicParams::Ed25519 { key } => {
+                    ensure_curve25519_card_public_key_format(key.as_bytes())?
+                }
                 _ => return Err("Unsupported EdDSA curve for card".to_string().into()),
             };
             Ok(KeyUploadInfo {
@@ -607,11 +633,28 @@ fn extract_key_info(
             timestamp,
             key_material: KeyMaterial::Ecc {
                 scalar: Zeroizing::new(ed_priv.to_bytes().to_vec()),
-                public_key: ed_pub.key.as_bytes().to_vec(),
+                public_key: ensure_curve25519_card_public_key_format(ed_pub.key.as_bytes())?,
                 oid: OID_ED25519.to_vec(),
                 ecc_type: EccType::EdDSA,
             },
         }),
+        (PublicParams::X25519(x25519_pub), PlainSecretParams::X25519(x25519_priv)) => {
+            let scalar_le = x25519_priv.as_bytes();
+            let scalar_be: Vec<u8> = scalar_le.iter().rev().copied().collect();
+
+            Ok(KeyUploadInfo {
+                fingerprint,
+                timestamp,
+                key_material: KeyMaterial::Ecc {
+                    scalar: Zeroizing::new(scalar_be),
+                    public_key: ensure_curve25519_card_public_key_format(
+                        x25519_pub.key.as_bytes(),
+                    )?,
+                    oid: OID_CV25519.to_vec(),
+                    ecc_type: EccType::ECDH,
+                },
+            })
+        }
         // ECDH (Cv25519 and NIST curves)
         (PublicParams::ECDH(ecdh_pub), PlainSecretParams::ECDH(ecdh_priv)) => {
             use pgp::types::EcdhPublicParams;
@@ -625,7 +668,7 @@ fn extract_key_info(
                         timestamp,
                         key_material: KeyMaterial::Ecc {
                             scalar: Zeroizing::new(scalar_be),
-                            public_key: p.as_bytes().to_vec(),
+                            public_key: ensure_curve25519_card_public_key_format(p.as_bytes())?,
                             oid: OID_CV25519.to_vec(),
                             ecc_type: EccType::ECDH,
                         },
@@ -758,5 +801,121 @@ fn extract_key_info(
             }
         }
         _ => Err("Unsupported key type for card upload".to_string().into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn v6_fixture_secret_key() -> SignedSecretKey {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/v6/alice_v6_cv25519modern_sec.asc");
+        let secret = std::fs::read(path).expect("read V6 fixture secret key");
+        parse_secret_key(&secret).expect("parse V6 fixture secret key")
+    }
+
+    #[test]
+    fn v6_ed25519_card_upload_uses_prefixed_public_key() {
+        let secret_key = v6_fixture_secret_key();
+        let password = Password::from("v6-fixture-password");
+
+        let key_info = extract_primary_key_info(&secret_key, &password).expect("extract primary");
+
+        match key_info.key_material {
+            KeyMaterial::Ecc {
+                public_key,
+                oid,
+                ecc_type,
+                ..
+            } => {
+                assert_eq!(ecc_type, EccType::EdDSA);
+                assert_eq!(oid, OID_ED25519);
+                assert_eq!(public_key.len(), 33);
+                assert_eq!(public_key[0], 0x40);
+            }
+            KeyMaterial::Rsa { .. } => panic!("expected ECC key material"),
+        }
+    }
+
+    #[test]
+    fn v6_x25519_card_upload_is_supported_and_prefixed() {
+        let secret_key = v6_fixture_secret_key();
+        let password = Password::from("v6-fixture-password");
+
+        let key_info = find_encryption_key(&secret_key, &password).expect("extract encryption key");
+
+        match key_info.key_material {
+            KeyMaterial::Ecc {
+                public_key,
+                oid,
+                ecc_type,
+                ..
+            } => {
+                assert_eq!(ecc_type, EccType::ECDH);
+                assert_eq!(oid, OID_CV25519);
+                assert_eq!(public_key.len(), 33);
+                assert_eq!(public_key[0], 0x40);
+            }
+            KeyMaterial::Rsa { .. } => panic!("expected ECC key material"),
+        }
+    }
+
+    /// Regression test for the legacy `PublicParams::ECDH(EcdhPublicParams::Curve25519)`
+    /// arm. The V6 tests above cover the raw-packet `PublicParams::Ed25519` /
+    /// `PublicParams::X25519` paths; this one drives the older MPI-based
+    /// V4 representation used by `CipherSuite::Cv25519` (as opposed to
+    /// `Cv25519Modern`). The 0x40 prefix fix must apply here too —
+    /// otherwise strict firmware (opcard-rs >= 1.5) rejects the import.
+    #[test]
+    fn v4_cv25519_legacy_encryption_subkey_is_prefixed() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/files/card_keys/5286C32E7C71E14C4C82F9AE0B207108925CB162.sec");
+        let secret = std::fs::read(path).expect("read V4 Cv25519 fixture");
+        let secret_key = parse_secret_key(&secret).expect("parse V4 Cv25519 fixture");
+        let password = Password::from("redhat");
+
+        let key_info = find_encryption_key(&secret_key, &password).expect("extract encryption key");
+
+        match key_info.key_material {
+            KeyMaterial::Ecc {
+                public_key,
+                oid,
+                ecc_type,
+                ..
+            } => {
+                assert_eq!(ecc_type, EccType::ECDH);
+                assert_eq!(oid, OID_CV25519);
+                assert_eq!(public_key.len(), 33);
+                assert_eq!(public_key[0], 0x40);
+            }
+            KeyMaterial::Rsa { .. } => panic!("expected ECC key material"),
+        }
+    }
+
+    /// The validator rejects inputs that are not exactly 32 raw bytes or
+    /// 33 bytes with a `0x40` prefix, instead of silently manufacturing an
+    /// invalid point that would later surface as an opaque `SW 6A80` on
+    /// the card.
+    #[test]
+    fn ensure_curve25519_card_public_key_format_rejects_bad_lengths() {
+        assert!(ensure_curve25519_card_public_key_format(&[]).is_err());
+        assert!(ensure_curve25519_card_public_key_format(&[0x40]).is_err());
+        assert!(ensure_curve25519_card_public_key_format(&[0u8; 31]).is_err());
+        assert!(ensure_curve25519_card_public_key_format(&[0u8; 34]).is_err());
+    }
+
+    #[test]
+    fn ensure_curve25519_card_public_key_format_accepts_raw_and_prefixed() {
+        let raw = [1u8; 32];
+        let out = ensure_curve25519_card_public_key_format(&raw).unwrap();
+        assert_eq!(out.len(), 33);
+        assert_eq!(out[0], 0x40);
+        assert_eq!(&out[1..], &raw[..]);
+
+        let mut prefixed = vec![0x40];
+        prefixed.extend_from_slice(&[2u8; 32]);
+        let out = ensure_curve25519_card_public_key_format(&prefixed).unwrap();
+        assert_eq!(out, prefixed);
     }
 }

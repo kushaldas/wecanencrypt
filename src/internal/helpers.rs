@@ -122,9 +122,9 @@ pub(crate) fn classify_key_algorithm(key: &impl KeyDetails) -> crate::types::Key
     use pgp::types::{EcdhPublicParams, PublicParams};
 
     match key.algorithm() {
-        PublicKeyAlgorithm::RSA
-        | PublicKeyAlgorithm::RSAEncrypt
-        | PublicKeyAlgorithm::RSASign => KeyAlgorithm::Rsa,
+        PublicKeyAlgorithm::RSA | PublicKeyAlgorithm::RSAEncrypt | PublicKeyAlgorithm::RSASign => {
+            KeyAlgorithm::Rsa
+        }
         PublicKeyAlgorithm::DSA => KeyAlgorithm::Dsa,
         PublicKeyAlgorithm::Elgamal => KeyAlgorithm::Elgamal,
         PublicKeyAlgorithm::EdDSALegacy => KeyAlgorithm::EdDsaLegacy,

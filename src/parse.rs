@@ -11,9 +11,8 @@ use pgp::types::KeyDetails;
 use crate::error::Result;
 use crate::internal::{
     classify_key_algorithm, fingerprint_to_hex, get_algorithm_name, get_key_bit_size,
-    is_subkey_revoked, is_subkey_valid,
-    keyid_to_hex, parse_key, system_time_to_datetime, verified_primary_revocation,
-    verified_user_id_revocation,
+    is_subkey_revoked, is_subkey_valid, keyid_to_hex, parse_key, system_time_to_datetime,
+    verified_primary_revocation, verified_user_id_revocation,
 };
 use crate::types::{
     AvailableSubkey, KeyCipherDetails, KeyInfo, KeyType, SubkeyInfo, UIDCertification, UserIDInfo,
