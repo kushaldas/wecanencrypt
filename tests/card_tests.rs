@@ -62,7 +62,7 @@ mod card_tests {
         upload_key_to_card, upload_primary_key_to_card, upload_subkey_by_fingerprint, CardKeySlot,
     };
     use wecanencrypt::card::*;
-    use wecanencrypt::{encrypt_bytes, verify_bytes_detached};
+    use wecanencrypt::{create_key, encrypt_bytes, CipherSuite, SubkeyFlags, verify_bytes_detached};
 
     // ==================== Test Key Paths ====================
 
@@ -87,12 +87,18 @@ mod card_tests {
     const NISTP521_PUBLIC_KEY: &str = "tests/files/store/nistp521_public.asc";
     const NISTP521_SECRET_KEY: &str = "tests/files/store/nistp521_secret.asc";
 
+    const V6_CV25519MODERN_PUBLIC_KEY: &str =
+        "tests/fixtures/v6/alice_v6_cv25519modern_pub.asc";
+    const V6_CV25519MODERN_SECRET_KEY: &str =
+        "tests/fixtures/v6/alice_v6_cv25519modern_sec.asc";
+
     // ==================== PINs ====================
 
     const USER_PIN: &[u8] = b"123456";
     const ADMIN_PIN: &[u8] = b"12345678";
     const KEY_PASSWORD: &[u8] = b"redhat";
     const NIST_KEY_PASSWORD: &[u8] = b"testpassword"; // NIST keys in store/ use different password
+    const V6_KEY_PASSWORD: &[u8] = b"v6-fixture-password";
 
     // ==================== Card Selection ====================
     //
@@ -855,6 +861,101 @@ mod card_tests {
         println!("✓ Primary key signature verified successfully!");
 
         println!("\n=== Primary key signing workflow completed successfully! ===");
+    }
+
+    #[test]
+    #[ignore = "requires physical smart card"]
+    fn test_v6_cv25519modern_upload_and_sign_verify() {
+        reset_card_to_defaults();
+
+        let secret_key =
+            fs::read(V6_CV25519MODERN_SECRET_KEY).expect("Failed to read V6 secret key");
+        let public_key =
+            fs::read(V6_CV25519MODERN_PUBLIC_KEY).expect("Failed to read V6 public key");
+
+        println!("Step 1: Uploading V6 Ed25519 primary key to signing slot...");
+        upload_primary_key_to_card(
+            &secret_key,
+            V6_KEY_PASSWORD,
+            CardKeySlot::Signing,
+            ADMIN_PIN,
+            CARD_IDENT(),
+        )
+        .expect("Failed to upload V6 primary signing key");
+
+        println!("Step 2: Uploading V6 X25519 encryption subkey to decryption slot...");
+        upload_key_to_card(
+            &secret_key,
+            V6_KEY_PASSWORD,
+            CardKeySlot::Decryption,
+            ADMIN_PIN,
+            CARD_IDENT(),
+        )
+        .expect("Failed to upload V6 X25519 encryption key");
+
+        println!("Step 3: Testing sign/verify with V6 key on card...");
+        let msg = b"OpenPGP on Nitrokey 3 with V6 Ed25519/X25519.";
+        let signature = sign_bytes_detached_on_card(msg, &public_key, USER_PIN, CARD_IDENT())
+            .expect("Failed to sign with V6 key on card");
+
+        let is_valid = verify_bytes_detached(&public_key, msg, signature.as_bytes())
+            .expect("Failed to verify V6 signature");
+        assert!(is_valid, "V6 card signature verification failed");
+
+        println!("✓ V6 upload and sign/verify completed successfully");
+    }
+
+    #[test]
+    #[ignore = "requires physical smart card"]
+    fn test_v4_cv25519modern_create_key_upload_and_sign_verify() {
+        reset_card_to_defaults();
+
+        let generated = create_key(
+            "nitrokey-test-password",
+            &["Nitrokey Test <nitrokey@example.com>"],
+            CipherSuite::Cv25519Modern,
+            None,
+            None,
+            None,
+            SubkeyFlags::all(),
+            false,
+            true,
+        )
+        .expect("Failed to generate V4 Cv25519Modern key");
+
+        let secret_key = generated.secret_key.as_slice();
+        let public_key = generated.public_key.into_bytes();
+
+        println!("Step 1: Uploading generated V4 Ed25519 signing subkey...");
+        upload_key_to_card(
+            secret_key,
+            b"nitrokey-test-password",
+            CardKeySlot::Signing,
+            ADMIN_PIN,
+            CARD_IDENT(),
+        )
+        .expect("Failed to upload generated signing key");
+
+        println!("Step 2: Uploading generated V4 X25519 encryption subkey...");
+        upload_key_to_card(
+            secret_key,
+            b"nitrokey-test-password",
+            CardKeySlot::Decryption,
+            ADMIN_PIN,
+            CARD_IDENT(),
+        )
+        .expect("Failed to upload generated encryption key");
+
+        println!("Step 3: Testing detached sign/verify with generated key...");
+        let msg = b"OpenPGP on Nitrokey 3 with generated V4 Ed25519/X25519.";
+        let signature = sign_bytes_detached_on_card(msg, &public_key, USER_PIN, CARD_IDENT())
+            .expect("Failed to sign with generated key on card");
+
+        let is_valid = verify_bytes_detached(&public_key, msg, signature.as_bytes())
+            .expect("Failed to verify generated-key signature");
+        assert!(is_valid, "Generated V4 Cv25519Modern signature verification failed");
+
+        println!("✓ Generated V4 Cv25519Modern upload and sign/verify completed successfully");
     }
 
     // ==================== Basic Signing Tests ====================
