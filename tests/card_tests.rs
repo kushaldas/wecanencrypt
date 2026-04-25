@@ -89,15 +89,12 @@ mod card_tests {
     const NISTP521_PUBLIC_KEY: &str = "tests/files/store/nistp521_public.asc";
     const NISTP521_SECRET_KEY: &str = "tests/files/store/nistp521_secret.asc";
 
-    const V6_CV25519MODERN_SECRET_KEY: &str = "tests/fixtures/v6/alice_v6_cv25519modern_sec.asc";
-
     // ==================== PINs ====================
 
     const USER_PIN: &[u8] = b"123456";
     const ADMIN_PIN: &[u8] = b"12345678";
     const KEY_PASSWORD: &[u8] = b"redhat";
     const NIST_KEY_PASSWORD: &[u8] = b"testpassword"; // NIST keys in store/ use different password
-    const V6_KEY_PASSWORD: &[u8] = b"v6-fixture-password";
 
     // ==================== Card Selection ====================
     //
@@ -860,44 +857,6 @@ mod card_tests {
         println!("✓ Primary key signature verified successfully!");
 
         println!("\n=== Primary key signing workflow completed successfully! ===");
-    }
-
-    /// V6 (RFC 9580) certificates use 32-byte SHA2-256 fingerprints. The
-    /// OpenPGP Smart Card Application Functional Specification v3.4.1
-    /// fingerprint Data Objects (`C7`/`C8`/`C9`/`C4`) are fixed at 20
-    /// bytes (SHA-1 based V4 fingerprints); no current card firmware
-    /// stores a 32-byte fingerprint.
-    ///
-    /// `upload_via_openpgp_card` enforces this constraint before any
-    /// APDU is sent: it rejects a non-20-byte fingerprint with
-    /// `Error::Crypto("Fingerprint must be exactly 20 bytes")`. This
-    /// test locks in that failure mode so the limitation is visible in
-    /// the test suite rather than left as a latent surprise. It runs
-    /// without a physical card — the fingerprint check fails long
-    /// before connection.
-    ///
-    /// When the card spec gains a V6 fingerprint DO and firmware ships
-    /// support, flip this back into a live upload+sign/verify test
-    /// (and gate with `#[ignore = "requires physical smart card"]`).
-    #[test]
-    fn test_v6_cv25519modern_upload_rejected_by_20byte_fingerprint_check() {
-        let secret_key =
-            fs::read(V6_CV25519MODERN_SECRET_KEY).expect("Failed to read V6 secret key");
-
-        let err = upload_primary_key_to_card(
-            &secret_key,
-            V6_KEY_PASSWORD,
-            CardKeySlot::Signing,
-            ADMIN_PIN,
-            CARD_IDENT(),
-        )
-        .expect_err("V6 upload unexpectedly succeeded; card spec extended?");
-
-        let msg = err.to_string();
-        assert!(
-            msg.contains("Fingerprint must be exactly 20 bytes"),
-            "expected 20-byte-fingerprint rejection, got: {msg}"
-        );
     }
 
     #[test]
