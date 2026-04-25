@@ -3,6 +3,22 @@
 //! This module provides functions to upload private keys to an OpenPGP smart card.
 //! Uses openpgp-card's key import API for structured key upload with proper
 //! algorithm attribute negotiation and TLV encoding.
+//!
+//! # V6 (RFC 9580) certificates cannot be uploaded to any current card
+//!
+//! V6 keys use 32-byte SHA2-256 fingerprints. OpenPGP Smart Card
+//! Application Functional Specification v3.4.1 fingerprint Data Objects
+//! (`C4`, `C7`, `C8`, `C9`) are fixed at 20 bytes for SHA-1-based V4
+//! fingerprints, and no current firmware stores a 32-byte fingerprint.
+//! `upload_via_openpgp_card` enforces this with a `TryInto<[u8; 20]>`
+//! on the fingerprint slice, which will reject any V6 cert before any
+//! APDU is sent. This is a card-spec limitation, not a wecanencrypt bug.
+//!
+//! The V6 unit tests in this module's `tests` submodule therefore only
+//! drive `extract_key_info` in isolation — they prove the key-material
+//! extraction side is correct, so that when the card spec eventually
+//! gains a V6 fingerprint DO only the guard and the `[u8; 20]` type
+//! will need revisiting. See `future_todo.md`.
 
 use std::cell::RefCell;
 use std::io::Cursor;
