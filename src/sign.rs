@@ -21,7 +21,7 @@ use crate::internal::{
 
 /// Select appropriate hash algorithm based on public key params.
 /// ECDSA keys require hash algorithms that match or exceed their security level.
-fn select_hash_for_params(params: &PublicParams) -> HashAlgorithm {
+pub(crate) fn select_hash_for_params(params: &PublicParams) -> HashAlgorithm {
     match params {
         PublicParams::ECDSA(ecdsa) => {
             // Match hash size to curve size
@@ -44,7 +44,9 @@ fn select_hash_for_params(params: &PublicParams) -> HashAlgorithm {
 ///
 /// When multiple signing subkeys are valid, the most recently created one is
 /// preferred (e.g. after key rotation the newest subkey should be used).
-fn find_signing_subkey(secret_key: &SignedSecretKey) -> Option<&SignedSecretSubKey> {
+pub(crate) fn find_signing_subkey(
+    secret_key: &SignedSecretKey,
+) -> Option<&SignedSecretSubKey> {
     let mut best: Option<&SignedSecretSubKey> = None;
 
     for subkey in &secret_key.secret_subkeys {
@@ -213,7 +215,7 @@ pub fn sign_bytes_cleartext_with_primary_key(
 /// assert!(valid);
 /// ```
 pub fn sign_bytes_detached(secret_key: &[u8], data: &[u8], password: &str) -> Result<String> {
-    sign_bytes_detached_impl(secret_key, data, password, false)
+    sign_bytes_detached_impl(secret_key, data, password, false, None).map(|out| out.armored)
 }
 
 /// Create a detached signature for bytes, forcing use of the primary key.
@@ -230,7 +232,41 @@ pub fn sign_bytes_detached_with_primary_key(
     data: &[u8],
     password: &str,
 ) -> Result<String> {
-    sign_bytes_detached_impl(secret_key, data, password, true)
+    sign_bytes_detached_impl(secret_key, data, password, true, None).map(|out| out.armored)
+}
+
+/// Output of [`sign_bytes_detached_with_hash`]: the armored signature plus
+/// the hash algorithm that was actually used.
+///
+/// Callers building PGP/MIME `multipart/signed` parts need the hash to fill
+/// the `micalg` parameter (e.g. `pgp-sha256`); rather than re-parsing the
+/// signature packet, we surface it directly here.
+#[derive(Debug, Clone)]
+pub struct DetachedSignOutput {
+    pub armored: String,
+    pub hash_algorithm: HashAlgorithm,
+}
+
+/// Create a detached signature for bytes, optionally pinning the hash
+/// algorithm.
+///
+/// Behaves like [`sign_bytes_detached`] when `hash_algo` is `None` (the
+/// hash is derived from the signing key's public params per
+/// [`select_hash_for_params`]). When `hash_algo` is `Some(algo)`, that
+/// algorithm is used regardless. The chosen algorithm is returned in the
+/// output so the caller can echo it onto a status line or into a
+/// `multipart/signed` `micalg` parameter.
+///
+/// rpgp may reject combinations the underlying public-key algorithm
+/// disallows (e.g. an unsupported hash for an Ed448 key); those surface
+/// as [`Error::Crypto`].
+pub fn sign_bytes_detached_with_hash(
+    secret_key: &[u8],
+    data: &[u8],
+    password: &str,
+    hash_algo: Option<HashAlgorithm>,
+) -> Result<DetachedSignOutput> {
+    sign_bytes_detached_impl(secret_key, data, password, false, hash_algo)
 }
 
 /// Log the data buffer the software-sign path is about to hash. Mirror of
@@ -261,12 +297,17 @@ fn log_software_sign_diag(site: &str, data: &[u8], use_primary: bool) {
 }
 
 /// Internal implementation for detached signatures.
+///
+/// `hash_override`: when `Some`, that hash algorithm is used for the
+/// signature; when `None`, the algorithm is derived from the signing key's
+/// public params via [`select_hash_for_params`].
 fn sign_bytes_detached_impl(
     secret_key: &[u8],
     data: &[u8],
     password: &str,
     use_primary: bool,
-) -> Result<String> {
+    hash_override: Option<HashAlgorithm>,
+) -> Result<DetachedSignOutput> {
     log_software_sign_diag("sign_bytes_detached_impl", data, use_primary);
     let secret_key = parse_secret_key(secret_key)?;
     validate_secret_signing_usage(&secret_key, SigningKeyUsage::DataSignature)?;
@@ -275,45 +316,55 @@ fn sign_bytes_detached_impl(
     let mut rng = thread_rng();
 
     // Prefer a signing subkey if available; fall back to primary key
-    let signature = if !use_primary {
+    let (signature, hash_used) = if !use_primary {
         if let Some(subkey) = find_signing_subkey(&secret_key) {
-            let hash_alg = select_hash_for_params(subkey.key.public_params());
-            DetachedSignature::sign_binary_data(
+            let hash_alg =
+                hash_override.unwrap_or_else(|| select_hash_for_params(subkey.key.public_params()));
+            let sig = DetachedSignature::sign_binary_data(
                 &mut rng,
                 &subkey.key,
                 &password,
                 hash_alg,
                 Cursor::new(data),
             )
-            .map_err(|e| Error::Crypto(e.to_string()))?
+            .map_err(|e| Error::Crypto(e.to_string()))?;
+            (sig, hash_alg)
         } else if can_details_sign(&secret_key.details) {
-            let hash_alg = select_hash_for_params(secret_key.primary_key.public_params());
-            DetachedSignature::sign_binary_data(
+            let hash_alg = hash_override
+                .unwrap_or_else(|| select_hash_for_params(secret_key.primary_key.public_params()));
+            let sig = DetachedSignature::sign_binary_data(
                 &mut rng,
                 &secret_key.primary_key,
                 &password,
                 hash_alg,
                 Cursor::new(data),
             )
-            .map_err(|e| Error::Crypto(e.to_string()))?
+            .map_err(|e| Error::Crypto(e.to_string()))?;
+            (sig, hash_alg)
         } else {
             return Err(Error::NoSigningSubkey);
         }
     } else {
-        let hash_alg = select_hash_for_params(secret_key.primary_key.public_params());
-        DetachedSignature::sign_binary_data(
+        let hash_alg = hash_override
+            .unwrap_or_else(|| select_hash_for_params(secret_key.primary_key.public_params()));
+        let sig = DetachedSignature::sign_binary_data(
             &mut rng,
             &secret_key.primary_key,
             &password,
             hash_alg,
             Cursor::new(data),
         )
-        .map_err(|e| Error::Crypto(e.to_string()))?
+        .map_err(|e| Error::Crypto(e.to_string()))?;
+        (sig, hash_alg)
     };
 
-    signature
+    let armored = signature
         .to_armored_string(None.into())
-        .map_err(|e| Error::Crypto(e.to_string()))
+        .map_err(|e| Error::Crypto(e.to_string()))?;
+    Ok(DetachedSignOutput {
+        armored,
+        hash_algorithm: hash_used,
+    })
 }
 
 /// Sign a file to an output file (binary signature).
@@ -444,5 +495,72 @@ fn sign_bytes_internal(
 
 #[cfg(test)]
 mod tests {
-    // Tests would require key fixtures
+    use super::*;
+    use crate::create_key_simple;
+
+    /// `sign_bytes_detached_with_hash(_, _, _, None)` matches the auto-
+    /// selected algorithm for an Ed25519 key (SHA256).
+    #[test]
+    fn sign_with_hash_default_is_sha256_for_ed25519() {
+        let key = create_key_simple("pw", &["Alice <a@example.com>"]).unwrap();
+        let out = sign_bytes_detached_with_hash(&key.secret_key, b"hello", "pw", None).unwrap();
+        assert_eq!(out.hash_algorithm, HashAlgorithm::Sha256);
+        assert!(out.armored.contains("BEGIN PGP SIGNATURE"));
+    }
+
+    /// Explicit override is honored and reflected in the output struct.
+    #[test]
+    fn sign_with_hash_override_sha512() {
+        let key = create_key_simple("pw", &["Alice <a@example.com>"]).unwrap();
+        let out = sign_bytes_detached_with_hash(
+            &key.secret_key,
+            b"hello",
+            "pw",
+            Some(HashAlgorithm::Sha512),
+        )
+        .unwrap();
+        assert_eq!(out.hash_algorithm, HashAlgorithm::Sha512);
+
+        // Resulting signature must still verify.
+        let valid = crate::verify_bytes_detached(
+            key.public_key.as_bytes(),
+            b"hello",
+            out.armored.as_bytes(),
+        )
+        .unwrap();
+        assert!(valid, "overridden-hash signature must verify");
+    }
+
+    /// CRLF input must be signed verbatim (no normalization). PGP/MIME
+    /// `multipart/signed` requires the signed part to be CRLF-canonical
+    /// before hashing; libtumpa's contract is "we sign exactly the bytes
+    /// you hand us." Regression guard so future refactors don't slip in
+    /// a normalize-to-LF.
+    #[test]
+    fn detached_sign_does_not_normalize_crlf() {
+        let key = create_key_simple("pw", &["Alice <a@example.com>"]).unwrap();
+        let crlf = b"line one\r\nline two\r\n";
+
+        let out =
+            sign_bytes_detached_with_hash(&key.secret_key, crlf, "pw", Some(HashAlgorithm::Sha256))
+                .unwrap();
+
+        // Verify against the EXACT CRLF bytes — succeeds only if the
+        // signer hashed the CRLF form, not an LF-normalized version.
+        let valid =
+            crate::verify_bytes_detached(key.public_key.as_bytes(), crlf, out.armored.as_bytes())
+                .unwrap();
+        assert!(valid, "CRLF-signed signature must verify against CRLF input");
+
+        // Negative side: same signature against the LF-normalized input
+        // must NOT verify. Confirms we're really signing CRLF, not LF.
+        let lf = b"line one\nline two\n";
+        let still_valid =
+            crate::verify_bytes_detached(key.public_key.as_bytes(), lf, out.armored.as_bytes())
+                .unwrap();
+        assert!(
+            !still_valid,
+            "signature over CRLF must NOT verify against LF (would mean signer normalized line endings)"
+        );
+    }
 }

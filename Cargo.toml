@@ -1,6 +1,6 @@
 [package]
 name = "wecanencrypt"
-version = "0.14.1"
+version = "0.14.2"
 edition = "2021"
 license = "MIT"
 description = "Simple Rust OpenPGP library for encryption, signing, and key management."

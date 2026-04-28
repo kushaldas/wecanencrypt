@@ -125,7 +125,7 @@ pub use encrypt::{
     bytes_encrypted_for, encrypt_bytes, encrypt_bytes_to_multiple,
     encrypt_bytes_to_multiple_seipd_v2, encrypt_bytes_to_multiple_v2,
     encrypt_bytes_to_multiple_with_algo, encrypt_bytes_v2, encrypt_file, encrypt_file_to_multiple,
-    encrypt_reader_to_file, file_encrypted_for,
+    encrypt_reader_to_file, file_encrypted_for, sign_and_encrypt_to_multiple,
 };
 
 // Re-export symmetric algorithm type for use with encrypt_bytes_to_multiple_with_algo
@@ -136,14 +136,23 @@ pub use pgp::crypto::sym::SymmetricKeyAlgorithm;
 pub use pgp::types::KeyVersion;
 
 // Re-export decryption functions
-pub use decrypt::{decrypt_bytes, decrypt_bytes_legacy, decrypt_file, decrypt_reader_to_file};
+pub use decrypt::{
+    decrypt_and_verify, decrypt_bytes, decrypt_bytes_legacy, decrypt_file, decrypt_reader_to_file,
+    DecryptVerifyResult, DecryptVerifySignature,
+};
 
 // Re-export signing functions
 pub use sign::{
     sign_bytes, sign_bytes_cleartext, sign_bytes_cleartext_with_primary_key, sign_bytes_detached,
-    sign_bytes_detached_with_primary_key, sign_bytes_with_primary_key, sign_file,
-    sign_file_cleartext, sign_file_detached,
+    sign_bytes_detached_with_hash, sign_bytes_detached_with_primary_key,
+    sign_bytes_with_primary_key, sign_file, sign_file_cleartext, sign_file_detached,
+    DetachedSignOutput,
 };
+
+// Re-export the rpgp HashAlgorithm so callers can request a specific hash
+// without importing the underlying `pgp` crate directly. Used by
+// `sign_bytes_detached_with_hash`.
+pub use pgp::crypto::hash::HashAlgorithm;
 
 // Re-export verification functions
 pub use verify::{
