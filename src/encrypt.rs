@@ -365,7 +365,7 @@ fn validate_sym_algo(sym_algo: SymmetricKeyAlgorithm) -> Result<()> {
 /// every recipient's primary key. A mixed V4/V6 recipient list is rejected
 /// with [`Error::KeyVersionMismatch`] since RFC 9580 forbids V6 ESK packets
 /// preceding a V1 SEIPD and vice versa.
-fn collect_encryption_keys(
+pub(crate) fn collect_encryption_keys(
     recipient_keys: &[&[u8]],
 ) -> Result<(Vec<pgp::composed::SignedPublicSubKey>, KeyVersion)> {
     let mut encryption_keys = Vec::new();

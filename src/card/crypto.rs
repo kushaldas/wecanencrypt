@@ -13,19 +13,22 @@ use super::get_card_backend;
 use super::types::CardError;
 use crate::error::{Error, Result};
 use crate::internal::{
-    can_primary_certify, can_primary_sign, is_subkey_valid, parse_public_key,
+    can_primary_certify, can_primary_sign, can_subkey_sign, is_subkey_valid, parse_public_key,
     validate_primary_key_signing_usage, SigningKeyUsage,
 };
 use pgp::composed::{
-    DetachedSignature, Esk, Message, PlainSessionKey, RawSessionKey, SignedPublicKey,
+    CleartextSignedMessage, DetachedSignature, Esk, Message, MessageBuilder, PlainSessionKey,
+    RawSessionKey, SignedPublicKey,
 };
+use pgp::crypto::aead::{AeadAlgorithm, ChunkSize};
 use pgp::crypto::hash::HashAlgorithm;
 use pgp::crypto::sym::SymmetricKeyAlgorithm;
 use pgp::packet::{Signature, SignatureConfig, SignatureType, Subpacket, SubpacketData};
 use pgp::types::{
-    EskType, Fingerprint, KeyDetails, Mpi, PkeskBytes, PkeskVersion, PublicParams, SignatureBytes,
-    Timestamp,
+    EskType, Fingerprint, KeyDetails, KeyVersion, Mpi, Password, PkeskBytes, PkeskVersion,
+    PublicParams, SignatureBytes, Timestamp,
 };
+use rand::thread_rng;
 
 /// Sign bytes using the signing key on the smart card.
 ///
@@ -1547,6 +1550,299 @@ pub fn ssh_authenticate_for_hash_on_card(
     })?;
 
     Ok(signature)
+}
+
+/// Build a [`CardSigningKey`] over the public-key entry that matches the
+/// card's signing-slot fingerprint. Picks the primary or whichever subkey
+/// matches; mirrors the lookup in [`get_signing_key_info`] but yields a
+/// `CardSigningKey<'a>` so it can plug into [`MessageBuilder::sign`] /
+/// [`CleartextSignedMessage::sign`] for sign-then-encrypt and cleartext
+/// signing on the card.
+///
+/// `usage` is `DataSignature` for sign / sign+encrypt / cleartext-sign and
+/// `KeyMaintenance` only for certifying-on-card paths (e.g. expiry update).
+fn get_card_signing_key<'a>(
+    public_key: &'a SignedPublicKey,
+    pin: &'a [u8],
+    ident: Option<&'a str>,
+    usage: SigningKeyUsage,
+) -> Result<CardSigningKey<'a>> {
+    validate_primary_key_signing_usage(public_key, usage)?;
+
+    let card_fp = get_card_signing_fingerprint(ident)?;
+
+    // Try primary first.
+    let primary = &public_key.primary_key;
+    let primary_fp = hex::encode(primary.fingerprint().as_bytes());
+    let primary_can_sign = can_primary_sign(public_key) || can_primary_certify(public_key);
+    if primary_fp == card_fp && can_sign(primary.public_params()) && primary_can_sign {
+        let params = primary.public_params();
+        let hash_alg = select_hash_for_params(params);
+        return Ok(CardSigningKey {
+            public_params: params.clone(),
+            fingerprint: primary.fingerprint(),
+            key_id: primary.legacy_key_id(),
+            algorithm: primary.algorithm(),
+            version: primary.version(),
+            created_at: primary.created_at(),
+            hash_alg,
+            pin,
+            ident,
+        });
+    }
+
+    // Try each subkey.
+    for subkey in &public_key.public_subkeys {
+        let key = &subkey.key;
+        let subkey_fp = hex::encode(key.fingerprint().as_bytes());
+        if subkey_fp != card_fp {
+            continue;
+        }
+        if !can_sign(key.public_params()) {
+            continue;
+        }
+        if !can_subkey_sign(subkey) {
+            continue;
+        }
+        let subkey_usable = match usage {
+            SigningKeyUsage::DataSignature => {
+                is_subkey_valid(&public_key.primary_key, subkey, false)
+            }
+            SigningKeyUsage::KeyMaintenance => {
+                is_subkey_valid(&public_key.primary_key, subkey, true)
+            }
+        };
+        if !subkey_usable {
+            continue;
+        }
+
+        let params = key.public_params();
+        let hash_alg = select_hash_for_params(params);
+        return Ok(CardSigningKey {
+            public_params: params.clone(),
+            fingerprint: key.fingerprint(),
+            key_id: key.legacy_key_id(),
+            algorithm: key.algorithm(),
+            version: key.version(),
+            created_at: key.created_at(),
+            hash_alg,
+            pin,
+            ident,
+        });
+    }
+
+    Err(Error::Crypto(format!(
+        "No key in public key matches card signing slot fingerprint: {}",
+        card_fp
+    )))
+}
+
+/// Sign with a key on the card and encrypt to one or more recipients in a
+/// single OpenPGP message (sign-then-encrypt).
+///
+/// Card-backed counterpart to [`crate::sign_and_encrypt_to_multiple`]. The
+/// signer is identified by `signer_public_key` (armored or binary OpenPGP
+/// public key); the matching secret key MUST live in the card's signing
+/// slot. The card produces the inner signature; the encrypted outer
+/// message is built in software.
+///
+/// Auto-routes to SEIPD v1 (V4 recipients) or SEIPD v2 (V6 recipients), the
+/// same way [`crate::sign_and_encrypt_to_multiple`] does. A mixed V4/V6
+/// recipient list is rejected with [`Error::KeyVersionMismatch`].
+///
+/// # Arguments
+/// * `signer_public_key` - The signer's public key; must match the card's
+///   signing slot fingerprint.
+/// * `pin` - The user PIN for the card (UTF-8).
+/// * `ident` - Optional card ident (`"MANUFACTURER:SERIAL"`); pass `None`
+///   when only one card is connected.
+/// * `recipient_keys` - Slice of recipient public keys (armored or binary).
+/// * `plaintext` - The data to sign and encrypt.
+/// * `armor` - If true, output ASCII-armored; otherwise binary.
+pub fn sign_and_encrypt_to_multiple_on_card(
+    signer_public_key: &[u8],
+    pin: &[u8],
+    ident: Option<&str>,
+    recipient_keys: &[&[u8]],
+    plaintext: &[u8],
+    armor: bool,
+) -> Result<Vec<u8>> {
+    if recipient_keys.is_empty() {
+        return Err(Error::InvalidInput("No recipients specified".to_string()));
+    }
+    let public_key = parse_public_key(signer_public_key)?;
+    let card_signing_key =
+        get_card_signing_key(&public_key, pin, ident, SigningKeyUsage::DataSignature)?;
+
+    let (encryption_keys, recipients_version) =
+        crate::encrypt::collect_encryption_keys(recipient_keys)?;
+
+    let mut rng = thread_rng();
+    // CardSigningKey ignores the password (PIN flows through self.pin), but
+    // MessageBuilder::sign still requires a Password — pass an empty one.
+    let empty_pwd: Password = "".into();
+    let hash_alg = card_signing_key.hash_alg;
+
+    if recipients_version == KeyVersion::V6 {
+        let mut builder = MessageBuilder::from_bytes("", plaintext.to_vec()).seipd_v2(
+            &mut rng,
+            SymmetricKeyAlgorithm::AES256,
+            AeadAlgorithm::Ocb,
+            ChunkSize::default(),
+        );
+        builder.sign(&card_signing_key, empty_pwd, hash_alg);
+        for key in &encryption_keys {
+            builder
+                .encrypt_to_key(&mut rng, key)
+                .map_err(|e| Error::Crypto(e.to_string()))?;
+        }
+        if armor {
+            builder
+                .to_armored_string(&mut rng, None.into())
+                .map(|s| s.into_bytes())
+                .map_err(|e| Error::Crypto(e.to_string()))
+        } else {
+            builder
+                .to_vec(&mut rng)
+                .map_err(|e| Error::Crypto(e.to_string()))
+        }
+    } else {
+        let mut builder = MessageBuilder::from_bytes("", plaintext.to_vec())
+            .seipd_v1(&mut rng, SymmetricKeyAlgorithm::AES256);
+        builder.sign(&card_signing_key, empty_pwd, hash_alg);
+        for key in &encryption_keys {
+            builder
+                .encrypt_to_key(&mut rng, key)
+                .map_err(|e| Error::Crypto(e.to_string()))?;
+        }
+        if armor {
+            builder
+                .to_armored_string(&mut rng, None.into())
+                .map(|s| s.into_bytes())
+                .map_err(|e| Error::Crypto(e.to_string()))
+        } else {
+            builder
+                .to_vec(&mut rng)
+                .map_err(|e| Error::Crypto(e.to_string()))
+        }
+    }
+}
+
+/// Sign `text` with a key on the card, producing a cleartext-signed
+/// (`-----BEGIN PGP SIGNED MESSAGE-----`) message.
+///
+/// Card-backed counterpart to [`crate::sign_bytes_cleartext`]. The card's
+/// signing slot key (primary or signing subkey) signs the normalized
+/// (CRLF-line-ending) text; the resulting armored output is byte-for-byte
+/// the shape `gpg --clearsign` would produce.
+///
+/// `text` is treated as UTF-8 with lossy conversion (matching the software
+/// path); pass actual text content, not arbitrary binary.
+pub fn sign_text_cleartext_on_card(
+    text: &[u8],
+    signer_public_key: &[u8],
+    pin: &[u8],
+    ident: Option<&str>,
+) -> Result<Vec<u8>> {
+    let public_key = parse_public_key(signer_public_key)?;
+    let card_signing_key =
+        get_card_signing_key(&public_key, pin, ident, SigningKeyUsage::DataSignature)?;
+
+    let mut rng = thread_rng();
+    let empty_pwd: Password = "".into();
+    let text_str = String::from_utf8_lossy(text);
+
+    let csm = CleartextSignedMessage::sign(&mut rng, &text_str, &card_signing_key, &empty_pwd)
+        .map_err(|e| Error::Crypto(e.to_string()))?;
+
+    csm.to_armored_string(None.into())
+        .map(|s| s.into_bytes())
+        .map_err(|e| Error::Crypto(e.to_string()))
+}
+
+/// Decrypt `data` on the card and, if the inner payload was sign-then-
+/// encrypted, verify the signature against a caller-supplied resolver.
+///
+/// Card-backed counterpart to [`crate::decrypt_and_verify`]. The session
+/// key is decrypted on the card (via [`decrypt_session_key_on_card`]), the
+/// rest of the message is parsed and decompressed in software, and the
+/// inner signature classification reuses [`crate::decrypt::inspect_inner_signatures`]
+/// so callers see the same `Good`/`Bad`/`Unsigned`/`UnknownKey` outcomes as
+/// the software path.
+///
+/// `signer_public_key` is the recipient's own public key (whose decryption
+/// subkey lives on the card). `resolve_signer` is called to look up the
+/// inner signature's signer (a *different* key, the sender's public key);
+/// it gets the issuer ids extracted from each inner signature.
+pub fn decrypt_and_verify_on_card<F>(
+    data: &[u8],
+    public_key: &[u8],
+    pin: &[u8],
+    ident: Option<&str>,
+    mut resolve_signer: F,
+) -> Result<crate::decrypt::DecryptVerifyResult>
+where
+    F: FnMut(&[String]) -> Option<Vec<u8>>,
+{
+    let public_key = parse_public_key(public_key)?;
+
+    let message = match Message::from_armor(Cursor::new(data)) {
+        Ok((msg, _headers)) => msg,
+        Err(_) => Message::from_bytes(data).map_err(|e| Error::Parse(e.to_string()))?,
+    };
+
+    let esk_packets = match &message {
+        Message::Encrypted { esk, .. } => esk.clone(),
+        _ => return Err(Error::Crypto("Message is not encrypted".to_string())),
+    };
+
+    let enc_key_info = get_encryption_key_info(&public_key)?;
+    let mut session_key: Option<PlainSessionKey> = None;
+
+    for esk in &esk_packets {
+        if let Esk::PublicKeyEncryptedSessionKey(pkesk) = esk {
+            if pkesk.match_identity(&enc_key_info) {
+                let values = pkesk.values().map_err(|e| Error::Crypto(e.to_string()))?;
+                let esk_type = match pkesk.version() {
+                    PkeskVersion::V3 => EskType::V3_4,
+                    PkeskVersion::V6 => EskType::V6,
+                    _ => continue,
+                };
+                let decrypted =
+                    decrypt_session_key_on_card(values, &enc_key_info, pin, esk_type, ident)?;
+                session_key = Some(decrypted);
+                break;
+            }
+        }
+    }
+
+    let session_key = session_key
+        .ok_or_else(|| Error::Crypto("No matching PKESK found for card key".to_string()))?;
+
+    let decrypted = message
+        .decrypt_with_session_key(session_key)
+        .map_err(|e| Error::Crypto(e.to_string()))?;
+
+    let mut decompressed = if decrypted.is_compressed() {
+        decrypted
+            .decompress()
+            .map_err(|e| Error::Crypto(e.to_string()))?
+    } else {
+        decrypted
+    };
+
+    // Drain the message — populates the internal hash state needed by the
+    // inner-signature verifier on a sign-then-encrypted payload.
+    let plaintext = decompressed
+        .as_data_vec()
+        .map_err(|e| Error::Crypto(e.to_string()))?;
+
+    let signature = crate::decrypt::inspect_inner_signatures(&decompressed, &mut resolve_signer)?;
+
+    Ok(crate::decrypt::DecryptVerifyResult {
+        plaintext,
+        signature,
+    })
 }
 
 #[cfg(test)]

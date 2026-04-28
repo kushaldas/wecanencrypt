@@ -232,7 +232,11 @@ where
 
 /// After a signed-then-encrypted message has been drained, inspect its
 /// inner signature(s) and verify against caller-supplied signer keys.
-fn inspect_inner_signatures<F>(
+///
+/// Crate-public so the card path (`card::decrypt_and_verify_on_card`) can
+/// reuse the exact same signer-resolution and `Good`/`Bad`/`UnknownKey`
+/// classification after on-card session-key decryption.
+pub(crate) fn inspect_inner_signatures<F>(
     message: &Message<'_>,
     resolve_signer: &mut F,
 ) -> Result<DecryptVerifySignature>
@@ -341,13 +345,15 @@ fn parse_verifying_cert(cert_bytes: &[u8]) -> Result<SignedPublicKey> {
     if let Ok((cert, _)) = SignedPublicKey::from_reader_single(Cursor::new(cert_bytes)) {
         return Ok(cert);
     }
-    if let Ok((secret, _)) = pgp::composed::SignedSecretKey::from_armor_single(Cursor::new(
-        cert_bytes,
-    )) {
+    if let Ok((secret, _)) =
+        pgp::composed::SignedSecretKey::from_armor_single(Cursor::new(cert_bytes))
+    {
         return Ok(secret.into());
     }
     let (secret, _) = pgp::composed::SignedSecretKey::from_reader_single(Cursor::new(cert_bytes))
-        .map_err(|e| Error::Parse(format!("failed to parse signer cert for verification: {e}")))?;
+        .map_err(|e| {
+        Error::Parse(format!("failed to parse signer cert for verification: {e}"))
+    })?;
     Ok(secret.into())
 }
 
@@ -403,12 +409,8 @@ mod tests {
         let alice = create_key_simple("pw", &["Alice <a@example.com>"]).unwrap();
 
         // Encrypt-only — no signer.
-        let ct = encrypt_bytes_to_multiple(
-            &[alice.public_key.as_bytes()],
-            b"hello world",
-            true,
-        )
-        .unwrap();
+        let ct = encrypt_bytes_to_multiple(&[alice.public_key.as_bytes()], b"hello world", true)
+            .unwrap();
 
         let result = decrypt_and_verify(&alice.secret_key, &ct, "pw", |_| {
             panic!("resolve_signer must not be invoked for unsigned message");
@@ -516,10 +518,10 @@ mod tests {
         )
         .unwrap();
 
-        // Resolver returns Mallory's key for whatever issuer ids — the
-        // fingerprints won't match Alice's, so we fall through to
-        // UnknownKey (issuer_matches() filters first). This guards against
-        // a "Good" result for a substituted key.
+        // Resolver returns Mallory's key for whatever issuer ids. Because
+        // the resolver returns Some(_), this exercises the "resolvable but
+        // wrong key" path: verification must fail and must not report
+        // "Good" for a substituted key.
         let result = decrypt_and_verify(&bob.secret_key, &ct, "pw", |_| {
             Some(mallory.public_key.as_bytes().to_vec())
         })
@@ -538,14 +540,10 @@ mod tests {
     fn decrypt_and_verify_wrong_passphrase() {
         let alice = create_key_simple("pw", &["Alice <a@example.com>"]).unwrap();
 
-        let ct =
-            encrypt_bytes_to_multiple(&[alice.public_key.as_bytes()], b"hello", true).unwrap();
+        let ct = encrypt_bytes_to_multiple(&[alice.public_key.as_bytes()], b"hello", true).unwrap();
 
         let err = decrypt_and_verify(&alice.secret_key, &ct, "wrong-pw", |_| None).unwrap_err();
-        assert!(
-            err.to_string().contains("Decryption failed"),
-            "got: {err}"
-        );
+        assert!(err.to_string().contains("Decryption failed"), "got: {err}");
     }
 
     /// Standalone signed-not-encrypted message should error: this API is

@@ -44,9 +44,7 @@ pub(crate) fn select_hash_for_params(params: &PublicParams) -> HashAlgorithm {
 ///
 /// When multiple signing subkeys are valid, the most recently created one is
 /// preferred (e.g. after key rotation the newest subkey should be used).
-pub(crate) fn find_signing_subkey(
-    secret_key: &SignedSecretKey,
-) -> Option<&SignedSecretSubKey> {
+pub(crate) fn find_signing_subkey(secret_key: &SignedSecretKey) -> Option<&SignedSecretSubKey> {
     let mut best: Option<&SignedSecretSubKey> = None;
 
     for subkey in &secret_key.secret_subkeys {
@@ -550,7 +548,10 @@ mod tests {
         let valid =
             crate::verify_bytes_detached(key.public_key.as_bytes(), crlf, out.armored.as_bytes())
                 .unwrap();
-        assert!(valid, "CRLF-signed signature must verify against CRLF input");
+        assert!(
+            valid,
+            "CRLF-signed signature must verify against CRLF input"
+        );
 
         // Negative side: same signature against the LF-normalized input
         // must NOT verify. Confirms we're really signing CRLF, not LF.
