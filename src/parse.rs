@@ -11,8 +11,8 @@ use pgp::types::KeyDetails;
 use crate::error::Result;
 use crate::internal::{
     classify_key_algorithm, fingerprint_to_hex, get_algorithm_name, get_key_bit_size,
-    is_subkey_revoked, is_subkey_valid, keyid_to_hex, parse_key, system_time_to_datetime,
-    verified_primary_revocation, verified_user_id_revocation,
+    is_subkey_revoked, is_subkey_valid, keyid_to_hex, most_recent_binding_sig, parse_key,
+    system_time_to_datetime, verified_primary_revocation, verified_user_id_revocation,
 };
 use crate::types::{
     AvailableSubkey, KeyCipherDetails, KeyInfo, KeyType, SubkeyInfo, UIDCertification, UserIDInfo,
@@ -218,8 +218,16 @@ fn extract_subkey_info(public_key: &SignedPublicKey, allow_expired: bool) -> Vec
         let fingerprint = fingerprint_to_hex(&subkey.key);
         let creation_time = system_time_to_datetime(subkey.key.created_at().into());
 
-        // Get expiration from binding signature
-        let expiration_time = subkey.signatures.first().and_then(|sig| {
+        // Read expiration from the MOST RECENT subkey-binding signature
+        // (RFC 4880 §11.1: the latest binding sig is authoritative for
+        // the binding's properties). `signatures.first()` returns
+        // whatever happens to be first in the packet stream, which after
+        // a `merge_signatures` re-import is the OLDEST binding (existing
+        // sigs are kept first, new sigs appended) — making a renewed key
+        // look as if its original (long-since-expired) binding still
+        // governs the subkey. Aligns with `is_subkey_valid` which
+        // already uses the most-recent-binding rule.
+        let expiration_time = most_recent_binding_sig(subkey).and_then(|sig| {
             sig.key_expiration_time().map(|validity| {
                 let creation: std::time::SystemTime = subkey.key.created_at().into();
                 system_time_to_datetime(creation + validity.into())
@@ -258,7 +266,11 @@ fn extract_subkey_info(public_key: &SignedPublicKey, allow_expired: bool) -> Vec
 
 /// Determine the key type from subkey binding signature.
 fn determine_key_type(subkey: &pgp::composed::SignedPublicSubKey) -> KeyType {
-    for sig in &subkey.signatures {
+    // RFC 4880 §11.1: the most recent binding signature is authoritative
+    // for subkey key flags. Iterating every sig and returning on the
+    // first match accepts capabilities that may have been stripped by
+    // a re-binding.
+    if let Some(sig) = most_recent_binding_sig(subkey) {
         let flags = sig.key_flags();
         if flags.encrypt_comms() || flags.encrypt_storage() {
             return KeyType::Encryption;
@@ -338,11 +350,13 @@ where
             continue;
         }
 
-        // Check key flags
-        let matches_predicate = subkey.signatures.iter().any(|sig| {
-            let flags = sig.key_flags();
-            predicate(&flags)
-        });
+        // Check key flags on the MOST RECENT binding signature (RFC
+        // 4880 §11.1). OR-ing flags across every sig would accept a
+        // capability that's been stripped on re-binding.
+        let binding = most_recent_binding_sig(subkey);
+        let matches_predicate = binding
+            .map(|sig| predicate(&sig.key_flags()))
+            .unwrap_or(false);
 
         if !matches_predicate {
             continue;
@@ -350,7 +364,9 @@ where
 
         let key_type = determine_key_type(subkey);
 
-        let expiration_time = subkey.signatures.first().and_then(|sig| {
+        // Same most-recent-binding rule for the expiration. See
+        // `extract_subkey_info` for the reasoning.
+        let expiration_time = binding.and_then(|sig| {
             sig.key_expiration_time().map(|validity| {
                 let creation: std::time::SystemTime = subkey.key.created_at().into();
                 system_time_to_datetime(creation + validity.into())

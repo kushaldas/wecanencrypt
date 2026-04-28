@@ -86,7 +86,8 @@ pub use types::{CardError, CardInfo, CardKeyMatch, CardSummary, KeySlot, SlotMat
 // Re-export get_card_backend for use by crypto module
 pub(crate) use connection::get_card_backend;
 pub use crypto::{
-    decrypt_bytes_on_card, sign_bytes_detached_on_card, ssh_authenticate_for_hash_on_card,
+    decrypt_and_verify_on_card, decrypt_bytes_on_card, sign_and_encrypt_to_multiple_on_card,
+    sign_bytes_detached_on_card, sign_text_cleartext_on_card, ssh_authenticate_for_hash_on_card,
     ssh_authenticate_on_card, update_primary_expiry_on_card, update_subkeys_expiry_on_card,
 };
 // Re-export Hash for callers of ssh_authenticate_for_hash_on_card

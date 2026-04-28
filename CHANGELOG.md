@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.2] — 2026-04-27
+
+Mail-extension Phase 0: primitives the upcoming `Tumpa Mail.app` macOS
+extension needs to handle PGP/MIME outgoing and incoming mail.
+
+### Added
+
+- `decrypt_and_verify(secret_key, ciphertext, password, resolve_signer)`
+  — single-pass decrypt + inner-signature verify for sign-then-encrypt
+  payloads. The `resolve_signer` closure receives uppercase-hex issuer
+  ids (40-char fingerprints and/or 16-char key ids) and returns
+  optional signer cert bytes. Result variants
+  (`DecryptVerifySignature::Unsigned / Good / Bad / UnknownKey`) map
+  cleanly to PGP/MIME UI states.
+- `sign_bytes_detached_with_hash(secret_key, data, password, hash_algo)`
+  — detached sign with optional hash override. Returns
+  `DetachedSignOutput { armored, hash_algorithm }`. Callers building
+  `multipart/signed` parts use `hash_algorithm` to fill the `micalg`
+  parameter (RFC 3156).
+- `sign_and_encrypt_to_multiple(signer_secret, signer_password,
+  recipient_keys, plaintext, armor)` — single-pass sign-then-encrypt
+  to one or more recipients. Auto-routes to SEIPDv1 (V4) or SEIPDv2
+  (V6) recipients, matching `encrypt_bytes_to_multiple`.
+- `HashAlgorithm` re-exported at the crate root.
+
+### Notes
+
+- `sign_bytes_detached` and `sign_bytes_detached_with_primary_key`
+  delegate to `sign_bytes_detached_with_hash` with `hash_algo = None`;
+  behavior unchanged.
+- Detached signing does not normalize line endings — CRLF input is
+  signed verbatim, as required by RFC 3156. Regression test added.
+
 ## [0.10.0] — 2026-04-16
 
 First release since `0.9.0`. Major theme: make terminology unambiguous

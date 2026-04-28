@@ -11,11 +11,15 @@ use pgp::composed::{MessageBuilder, SignedPublicKey};
 use pgp::crypto::aead::{AeadAlgorithm, ChunkSize};
 use pgp::crypto::sym::SymmetricKeyAlgorithm;
 use pgp::packet::{Packet, PacketParser, PublicKeyEncryptedSessionKey};
-use pgp::types::{KeyDetails, KeyVersion};
+use pgp::types::{KeyDetails, KeyVersion, Password};
 use rand::thread_rng;
 
 use crate::error::{Error, Result};
-use crate::internal::{can_subkey_encrypt, is_subkey_valid, parse_public_key};
+use crate::internal::{
+    can_details_sign, can_subkey_encrypt, is_subkey_valid, parse_public_key, parse_secret_key,
+    validate_secret_signing_usage, SigningKeyUsage,
+};
+use crate::sign::{find_signing_subkey, select_hash_for_params};
 
 /// Encrypt bytes to a single recipient.
 ///
@@ -237,6 +241,106 @@ pub fn encrypt_bytes_to_multiple_seipd_v2(
     encrypt_with_seipd_v2(&encryption_keys, plaintext, armor, sym_algo)
 }
 
+/// Sign and encrypt bytes to one or more recipients in a single OpenPGP
+/// message (sign-then-encrypt).
+///
+/// The output is a regular PGP encrypted message; after decryption, the
+/// recipient sees an inner signature over the plaintext. This is the shape
+/// of message that PGP/MIME `multipart/encrypted` parts produced by
+/// Thunderbird, Proton Mail, GPG Suite, etc. carry when "sign and encrypt"
+/// is checked.
+///
+/// Auto-routes to SEIPD v1 (V4 recipients) or SEIPD v2 (V6 recipients), the
+/// same way [`encrypt_bytes_to_multiple`] does. A mixed V4/V6 recipient list
+/// is rejected.
+///
+/// # Arguments
+/// * `signer_secret_key` - The signer's secret key (armored or binary)
+/// * `signer_password` - Password to unlock the signing key
+/// * `recipient_keys` - Slice of recipient public keys (armored or binary)
+/// * `plaintext` - The data to sign and encrypt
+/// * `armor` - If true, output ASCII-armored; otherwise binary
+pub fn sign_and_encrypt_to_multiple(
+    signer_secret_key: &[u8],
+    signer_password: &str,
+    recipient_keys: &[&[u8]],
+    plaintext: &[u8],
+    armor: bool,
+) -> Result<Vec<u8>> {
+    if recipient_keys.is_empty() {
+        return Err(Error::InvalidInput("No recipients specified".to_string()));
+    }
+
+    let secret_key = parse_secret_key(signer_secret_key)?;
+    validate_secret_signing_usage(&secret_key, SigningKeyUsage::DataSignature)?;
+
+    let (encryption_keys, recipients_version) = collect_encryption_keys(recipient_keys)?;
+
+    // Pick the signing key once so both seipd-v1 and seipd-v2 branches use
+    // the same selection rule as `sign_bytes`. The chosen `&dyn SigningKey`
+    // is borrowed from `secret_key` for the rest of this function.
+    let (signing_key, hash_alg): (&dyn pgp::types::SigningKey, _) =
+        if let Some(subkey) = find_signing_subkey(&secret_key) {
+            let h = select_hash_for_params(subkey.key.public_params());
+            (&subkey.key, h)
+        } else if can_details_sign(&secret_key.details) {
+            let h = select_hash_for_params(secret_key.primary_key.public_params());
+            (&secret_key.primary_key, h)
+        } else {
+            return Err(Error::NoSigningSubkey);
+        };
+
+    let mut rng = thread_rng();
+    let signer_pwd: Password = signer_password.into();
+
+    // The SEIPD-typed MessageBuilder's `sign` and `encrypt_to_key` methods
+    // are split across two type states; the cleanest way to share the body
+    // is two parallel branches that each produce the final bytes.
+    if recipients_version == KeyVersion::V6 {
+        let mut builder = MessageBuilder::from_bytes("", plaintext.to_vec()).seipd_v2(
+            &mut rng,
+            SymmetricKeyAlgorithm::AES256,
+            AeadAlgorithm::Ocb,
+            ChunkSize::default(),
+        );
+        builder.sign(signing_key, signer_pwd, hash_alg);
+        for key in &encryption_keys {
+            builder
+                .encrypt_to_key(&mut rng, key)
+                .map_err(|e| Error::Crypto(e.to_string()))?;
+        }
+        if armor {
+            builder
+                .to_armored_string(&mut rng, None.into())
+                .map(|s| s.into_bytes())
+                .map_err(|e| Error::Crypto(e.to_string()))
+        } else {
+            builder
+                .to_vec(&mut rng)
+                .map_err(|e| Error::Crypto(e.to_string()))
+        }
+    } else {
+        let mut builder = MessageBuilder::from_bytes("", plaintext.to_vec())
+            .seipd_v1(&mut rng, SymmetricKeyAlgorithm::AES256);
+        builder.sign(signing_key, signer_pwd, hash_alg);
+        for key in &encryption_keys {
+            builder
+                .encrypt_to_key(&mut rng, key)
+                .map_err(|e| Error::Crypto(e.to_string()))?;
+        }
+        if armor {
+            builder
+                .to_armored_string(&mut rng, None.into())
+                .map(|s| s.into_bytes())
+                .map_err(|e| Error::Crypto(e.to_string()))
+        } else {
+            builder
+                .to_vec(&mut rng)
+                .map_err(|e| Error::Crypto(e.to_string()))
+        }
+    }
+}
+
 /// Reject deprecated/insecure symmetric algorithms per RFC 9580 §9.3.
 fn validate_sym_algo(sym_algo: SymmetricKeyAlgorithm) -> Result<()> {
     match sym_algo {
@@ -261,7 +365,7 @@ fn validate_sym_algo(sym_algo: SymmetricKeyAlgorithm) -> Result<()> {
 /// every recipient's primary key. A mixed V4/V6 recipient list is rejected
 /// with [`Error::KeyVersionMismatch`] since RFC 9580 forbids V6 ESK packets
 /// preceding a V1 SEIPD and vice versa.
-fn collect_encryption_keys(
+pub(crate) fn collect_encryption_keys(
     recipient_keys: &[&[u8]],
 ) -> Result<(Vec<pgp::composed::SignedPublicSubKey>, KeyVersion)> {
     let mut encryption_keys = Vec::new();
