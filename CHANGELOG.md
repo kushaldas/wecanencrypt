@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-05-02
+
+Pre-op passphrase verification primitive for daemons that broker
+secrets into `wecanencrypt` (the tumpa-cli agent and Tumpa Mail XPC
+service): a way to confirm a freshly-typed passphrase before
+broadcasting it as cached, without spending a real sign or decrypt
+round-trip.
+
+### Added
+
+- `verify_software_passphrase(secret_key, password)` — parses the
+  secret-key bytes and runs `SignedSecretKey::primary_key.unlock`
+  with a no-op closure. Returns `Ok(())` when the passphrase decrypts
+  the primary secret packet; `Error::Parse` for non-OpenPGP input,
+  `Error::Crypto` for a wrong passphrase or a corrupted key. The S2K
+  KDF and secret-packet decryption do run — they're what proves the
+  passphrase correct — but no signature is produced and no message
+  data is decrypted.
+
 ## [0.14.2] — 2026-04-27
 
 Mail-extension Phase 0: primitives the upcoming `Tumpa Mail.app` macOS

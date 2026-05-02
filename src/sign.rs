@@ -85,17 +85,22 @@ pub(crate) fn find_signing_subkey(secret_key: &SignedSecretKey) -> Option<&Signe
 }
 
 /// Verify that a passphrase unlocks the primary secret key without
-/// performing any crypto operation.
+/// performing a sign or decrypt round-trip.
 ///
-/// Useful for "is this passphrase correct?" checks without burning a
-/// real sign or decrypt round-trip — for example, when a daemon has
+/// The S2K KDF and the secret-key-packet decryption do run as part of
+/// `unlock` — those are the cheapest crypto bits and are exactly what
+/// proves the passphrase correct. What this function explicitly skips
+/// is producing a signature or decrypting message data with the
+/// unlocked key.
+///
+/// Useful for daemons (tumpa-cli agent, Tumpa Mail XPC service) that
 /// just received a freshly-typed passphrase from a pinentry frontend
-/// and wants to validate it before broadcasting it as cached.
+/// and want to validate it before broadcasting it as cached.
 ///
-/// Implementation: parses the secret key bytes, then calls the
-/// `pgp::SignedSecretKey::primary_key.unlock(password, |_, _| Ok(()))`
-/// path. The closure returns immediately, so we exercise only the
-/// passphrase-decrypt step on the secret-key packet.
+/// Implementation: parses the secret key bytes, then calls
+/// `pgp::SignedSecretKey::primary_key.unlock(password, |_, _| Ok(()))`.
+/// The closure returns immediately, so we exercise only the
+/// passphrase-driven secret-packet decrypt step.
 ///
 /// # Errors
 ///
@@ -115,13 +120,12 @@ pub(crate) fn find_signing_subkey(secret_key: &SignedSecretKey) -> Option<&Signe
 pub fn verify_software_passphrase(secret_key: &[u8], password: &str) -> Result<()> {
     let secret_key = parse_secret_key(secret_key)?;
     let password_obj: Password = password.into();
+    let unlock_err = |e: pgp::errors::Error| Error::Crypto(format!("primary-key unlock failed: {e}"));
     secret_key
         .primary_key
         .unlock(&password_obj, |_pub_params, _plain| Ok(()))
-        .map_err(|e| Error::Crypto(format!("primary-key unlock failed: {e}")))?
-        .map_err(|e: pgp::errors::Error| {
-            Error::Crypto(format!("primary-key unlock failed: {e}"))
-        })?;
+        .map_err(unlock_err)?
+        .map_err(unlock_err)?;
     Ok(())
 }
 
