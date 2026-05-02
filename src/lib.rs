@@ -146,7 +146,7 @@ pub use sign::{
     sign_bytes, sign_bytes_cleartext, sign_bytes_cleartext_with_primary_key, sign_bytes_detached,
     sign_bytes_detached_with_hash, sign_bytes_detached_with_primary_key,
     sign_bytes_with_primary_key, sign_file, sign_file_cleartext, sign_file_detached,
-    DetachedSignOutput,
+    verify_software_passphrase, DetachedSignOutput,
 };
 
 // Re-export the rpgp HashAlgorithm so callers can request a specific hash

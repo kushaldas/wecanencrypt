@@ -84,6 +84,47 @@ pub(crate) fn find_signing_subkey(secret_key: &SignedSecretKey) -> Option<&Signe
     best
 }
 
+/// Verify that a passphrase unlocks the primary secret key without
+/// performing any crypto operation.
+///
+/// Useful for "is this passphrase correct?" checks without burning a
+/// real sign or decrypt round-trip — for example, when a daemon has
+/// just received a freshly-typed passphrase from a pinentry frontend
+/// and wants to validate it before broadcasting it as cached.
+///
+/// Implementation: parses the secret key bytes, then calls the
+/// `pgp::SignedSecretKey::primary_key.unlock(password, |_, _| Ok(()))`
+/// path. The closure returns immediately, so we exercise only the
+/// passphrase-decrypt step on the secret-key packet.
+///
+/// # Errors
+///
+/// * `Error::Parse` - secret key bytes do not parse.
+/// * `Error::Crypto` - the passphrase did not unlock the secret-key
+///   packet (wrong passphrase, or a corrupted key).
+///
+/// # Example
+///
+/// ```no_run
+/// use wecanencrypt::{create_key_simple, verify_software_passphrase};
+///
+/// let key = create_key_simple("password", &["Alice <a@example.com>"]).unwrap();
+/// assert!(verify_software_passphrase(&key.secret_key, "password").is_ok());
+/// assert!(verify_software_passphrase(&key.secret_key, "wrong").is_err());
+/// ```
+pub fn verify_software_passphrase(secret_key: &[u8], password: &str) -> Result<()> {
+    let secret_key = parse_secret_key(secret_key)?;
+    let password_obj: Password = password.into();
+    secret_key
+        .primary_key
+        .unlock(&password_obj, |_pub_params, _plain| Ok(()))
+        .map_err(|e| Error::Crypto(format!("primary-key unlock failed: {e}")))?
+        .map_err(|e: pgp::errors::Error| {
+            Error::Crypto(format!("primary-key unlock failed: {e}"))
+        })?;
+    Ok(())
+}
+
 /// Sign bytes with a binary signature (wrapping the message).
 ///
 /// Creates an OpenPGP signed message that includes both the signature and
@@ -495,6 +536,33 @@ fn sign_bytes_internal(
 mod tests {
     use super::*;
     use crate::create_key_simple;
+
+    #[test]
+    fn verify_software_passphrase_accepts_correct() {
+        let key = create_key_simple("pw", &["Alice <a@example.com>"]).unwrap();
+        verify_software_passphrase(&key.secret_key, "pw").unwrap();
+    }
+
+    #[test]
+    fn verify_software_passphrase_rejects_wrong() {
+        let key = create_key_simple("pw", &["Alice <a@example.com>"]).unwrap();
+        let err = verify_software_passphrase(&key.secret_key, "WRONG").unwrap_err();
+        match err {
+            Error::Crypto(_) => (),
+            other => panic!("expected Error::Crypto, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn verify_software_passphrase_rejects_garbage_key() {
+        // Random bytes that don't parse as an OpenPGP key should fail
+        // at the parse step, not at the unlock step.
+        let err = verify_software_passphrase(b"not an openpgp key", "anything").unwrap_err();
+        match err {
+            Error::Parse(_) => (),
+            other => panic!("expected Error::Parse, got {:?}", other),
+        }
+    }
 
     /// `sign_bytes_detached_with_hash(_, _, _, None)` matches the auto-
     /// selected algorithm for an Ed25519 key (SHA256).
