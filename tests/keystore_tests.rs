@@ -749,6 +749,7 @@ fn test_keystore_with_fixture_files() {
 
 #[test]
 fn test_keystore_update_key_merges_correctly() {
+    wecanencrypt::__test_disable_policy();
     let dir = tempdir().unwrap();
     let db_path = dir.path().join("test.db");
 
@@ -940,6 +941,7 @@ fn test_keystore_schema_upgrade() {
 /// Port of JCE test_keystore.py::test_keystore_keyids
 #[test]
 fn test_keystore_keyids() {
+    wecanencrypt::__test_disable_policy();
     let dir = tempdir().unwrap();
     let db_path = dir.path().join("test.db");
 

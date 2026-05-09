@@ -172,6 +172,28 @@ Other policy decisions:
 - Revoked keys rejected for signing and verification; expired keys can still verify old signatures
 - Secret key material wrapped in `Zeroizing<Vec<u8>>` for secure memory erasure
 
+### System crypto policy (Fedora)
+
+Since 0.16.0, wecanencrypt consults
+`/etc/crypto-policies/back-ends/sequoia.config` and refuses
+algorithms that `update-crypto-policies --set DEFAULT/LEGACY/FUTURE/
+FIPS` disallows. Verify, decrypt, encrypt, sign, and key parsing
+all check the active policy; a banned algorithm yields
+`Error::PolicyViolation`. Override precedence:
+
+1. `WECANENCRYPT_CRYPTO_POLICY=off` — disable enforcement entirely.
+2. `WECANENCRYPT_CRYPTO_POLICY=/path/to/config.toml` — use an
+   alternate config file.
+3. `SEQUOIA_CRYPTO_POLICY=...` — same, the ecosystem-wide variable.
+4. The Fedora default file at the path above.
+5. None of the above present → accept everything (fallback).
+
+Strict enforcement applies to **every signature attached to a
+parsed certificate**: UID self-sigs, subkey bindings, and third-
+party certifications. Loading legacy keys with SHA-1 self-sigs
+under DEFAULT therefore fails — use `LEGACY` or the env-var
+opt-out for those.
+
 ## Running Tests
 
 ### Run all tests in the tests/ directory

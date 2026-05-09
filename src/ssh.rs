@@ -379,6 +379,7 @@ pub enum SshSignResult {
 /// value is only consulted for RSA.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SshHashAlgorithm {
+    Sha1,
     Sha256,
     Sha512,
 }
@@ -572,6 +573,13 @@ fn ssh_raw_sign_with_params(
 
             // Use the explicitly provided hash algorithm
             let sig_bytes = match hash_alg {
+                SshHashAlgorithm::Sha1 => {
+                    let signer = RsaSigningKey::<sha1::Sha1>::new(private_key);
+                    signer
+                        .sign_prehash(data)
+                        .map_err(|e| Error::Crypto(format!("RSA signing failed: {}", e)))?
+                        .to_vec()
+                }
                 SshHashAlgorithm::Sha256 => {
                     let signer = RsaSigningKey::<sha2::Sha256>::new(private_key);
                     signer

@@ -14,14 +14,15 @@ use crate::error::{Error, Result};
 pub(crate) fn parse_secret_key(data: &[u8]) -> Result<SignedSecretKey> {
     // Try armored first, then binary
     let cursor = Cursor::new(data);
-    match SignedSecretKey::from_armor_single(cursor) {
-        Ok((key, _headers)) => Ok(key),
+    let key = match SignedSecretKey::from_armor_single(cursor) {
+        Ok((key, _headers)) => key,
         Err(_) => {
-            // Try binary
             let cursor = Cursor::new(data);
-            SignedSecretKey::from_bytes(cursor).map_err(|e| Error::Parse(e.to_string()))
+            SignedSecretKey::from_bytes(cursor).map_err(|e| Error::Parse(e.to_string()))?
         }
-    }
+    };
+    crate::crypto_policy::check_certificate(&key.to_public_key())?;
+    Ok(key)
 }
 
 /// Parse a public key from bytes (armored or binary).
@@ -30,16 +31,19 @@ pub(crate) fn parse_public_key(data: &[u8]) -> Result<SignedPublicKey> {
     // Try armored public key first
     let cursor = Cursor::new(data);
     if let Ok((key, _headers)) = SignedPublicKey::from_armor_single(cursor) {
+        crate::crypto_policy::check_certificate(&key)?;
         return Ok(key);
     }
 
     // Try binary public key
     let cursor = Cursor::new(data);
     if let Ok(key) = SignedPublicKey::from_bytes(cursor) {
+        crate::crypto_policy::check_certificate(&key)?;
         return Ok(key);
     }
 
     // Maybe it's a secret key - try to extract public key from it
+    // (parse_secret_key already runs the policy check.)
     if let Ok(secret_key) = parse_secret_key(data) {
         return Ok(secret_key.to_public_key());
     }

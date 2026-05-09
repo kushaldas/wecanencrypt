@@ -309,6 +309,9 @@ pub fn sign_bytes_detached_with_hash(
     password: &str,
     hash_algo: Option<HashAlgorithm>,
 ) -> Result<DetachedSignOutput> {
+    if let Some(h) = hash_algo {
+        crate::crypto_policy::current().hash_algorithm(h)?;
+    }
     sign_bytes_detached_impl(secret_key, data, password, false, hash_algo)
 }
 
@@ -363,6 +366,7 @@ fn sign_bytes_detached_impl(
         if let Some(subkey) = find_signing_subkey(&secret_key) {
             let hash_alg =
                 hash_override.unwrap_or_else(|| select_hash_for_params(subkey.key.public_params()));
+            crate::crypto_policy::current().hash_algorithm(hash_alg)?;
             let sig = DetachedSignature::sign_binary_data(
                 &mut rng,
                 &subkey.key,
@@ -375,6 +379,7 @@ fn sign_bytes_detached_impl(
         } else if can_details_sign(&secret_key.details) {
             let hash_alg = hash_override
                 .unwrap_or_else(|| select_hash_for_params(secret_key.primary_key.public_params()));
+            crate::crypto_policy::current().hash_algorithm(hash_alg)?;
             let sig = DetachedSignature::sign_binary_data(
                 &mut rng,
                 &secret_key.primary_key,
@@ -390,6 +395,7 @@ fn sign_bytes_detached_impl(
     } else {
         let hash_alg = hash_override
             .unwrap_or_else(|| select_hash_for_params(secret_key.primary_key.public_params()));
+        crate::crypto_policy::current().hash_algorithm(hash_alg)?;
         let sig = DetachedSignature::sign_binary_data(
             &mut rng,
             &secret_key.primary_key,
@@ -523,9 +529,11 @@ fn sign_bytes_internal(
 
         if let Some(subkey) = signing_subkey {
             let hash_alg = select_hash_for_params(subkey.key.public_params());
+            crate::crypto_policy::current().hash_algorithm(hash_alg)?;
             builder.sign(&subkey.key, password_obj, hash_alg);
         } else {
             let hash_alg = select_hash_for_params(secret_key.primary_key.public_params());
+            crate::crypto_policy::current().hash_algorithm(hash_alg)?;
             builder.sign(&secret_key.primary_key, password_obj, hash_alg);
         };
 

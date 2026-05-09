@@ -97,6 +97,10 @@ pub fn verify_bytes_detached(signer_key: &[u8], data: &[u8], signature: &[u8]) -
         }
     };
 
+    // Gate the signature's hash algorithm against the active crypto
+    // policy before doing the cryptographic verify.
+    crate::crypto_policy::check_signature(&sig.signature)?;
+
     // Try verifying against primary key (only if not expired/revoked)
     if is_primary_key_valid_for_verification(&public_key)
         && sig.verify(&public_key.primary_key, data).is_ok()
@@ -172,6 +176,11 @@ fn verify_cleartext(public_key: &SignedPublicKey, signed_message: &[u8]) -> Resu
     let (msg, _) =
         CleartextSignedMessage::from_string(&text).map_err(|e| Error::Parse(e.to_string()))?;
 
+    // Gate every contained signature's hash algorithm.
+    for sig in msg.signatures() {
+        crate::crypto_policy::check_signature(sig)?;
+    }
+
     // Try verifying against primary key (only if not expired/revoked)
     if is_primary_key_valid_for_verification(public_key)
         && msg.verify(&public_key.primary_key).is_ok()
@@ -207,6 +216,10 @@ fn extract_cleartext(
         Ok(result) => result,
         Err(_) => return Ok(None),
     };
+
+    for sig in msg.signatures() {
+        crate::crypto_policy::check_signature(sig)?;
+    }
 
     // Try verifying against primary key (only if not revoked)
     if is_primary_key_valid_for_verification(public_key)
@@ -255,6 +268,14 @@ fn verify_inline_signed(public_key: &SignedPublicKey, signed_message: &[u8]) -> 
         .as_data_vec()
         .map_err(|e| Error::Parse(e.to_string()))?;
 
+    if let Message::Signed { reader, .. } = &message {
+        if let Some(sigs) = reader.signatures() {
+            for sig in sigs {
+                crate::crypto_policy::check_signature(sig.signature())?;
+            }
+        }
+    }
+
     // Try verifying against primary key (only if not revoked)
     if is_primary_key_valid_for_verification(public_key)
         && message.verify(&public_key.primary_key).is_ok()
@@ -294,6 +315,14 @@ fn extract_inline_signed(public_key: &SignedPublicKey, signed_message: &[u8]) ->
     let content = message
         .as_data_vec()
         .map_err(|e| Error::Parse(e.to_string()))?;
+
+    if let Message::Signed { reader, .. } = &message {
+        if let Some(sigs) = reader.signatures() {
+            for sig in sigs {
+                crate::crypto_policy::check_signature(sig.signature())?;
+            }
+        }
+    }
 
     // Try verifying against primary key (only if not revoked)
     if is_primary_key_valid_for_verification(public_key)

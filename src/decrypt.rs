@@ -99,6 +99,22 @@ pub fn decrypt_with_key(
         Err(_) => Message::from_bytes(ciphertext).map_err(|e| Error::Parse(e.to_string()))?,
     };
 
+    // Gate ESK packets against the system crypto policy before
+    // touching key material. Catches SHA-1 S2K, IDEA/3DES SKESK,
+    // and unsupported public-key algorithms in PKESK.
+    if let pgp::composed::Message::Encrypted { ref esk, .. } = message {
+        for slot in esk {
+            match slot {
+                pgp::composed::Esk::SymKeyEncryptedSessionKey(s) => {
+                    crate::crypto_policy::check_skesk(s)?;
+                }
+                pgp::composed::Esk::PublicKeyEncryptedSessionKey(p) => {
+                    crate::crypto_policy::check_pkesk(p)?;
+                }
+            }
+        }
+    }
+
     // Try standard decrypt first (integrity-protected: SEIPDv1/MDC or SEIPDv2/AEAD).
     // Return a uniform error to avoid leaking which phase failed (oracle prevention).
     let decrypted = message
@@ -202,6 +218,21 @@ where
         Err(_) => Message::from_bytes(ciphertext).map_err(|e| Error::Parse(e.to_string()))?,
     };
 
+    // Crypto-policy gate: walk ESK packets before any key material
+    // is touched.
+    if let pgp::composed::Message::Encrypted { ref esk, .. } = message {
+        for slot in esk {
+            match slot {
+                pgp::composed::Esk::SymKeyEncryptedSessionKey(s) => {
+                    crate::crypto_policy::check_skesk(s)?;
+                }
+                pgp::composed::Esk::PublicKeyEncryptedSessionKey(p) => {
+                    crate::crypto_policy::check_pkesk(p)?;
+                }
+            }
+        }
+    }
+
     // Standard decrypt. Uniform "Decryption failed" matches `decrypt_bytes`
     // to avoid leaking which phase failed.
     let decrypted = message
@@ -262,6 +293,10 @@ where
             continue;
         };
         let Some(cfg) = sig.config() else { continue };
+
+        // Reject inner signatures whose hash algorithm is banned
+        // by the active crypto policy before doing the verify.
+        crate::crypto_policy::current().hash_algorithm(cfg.hash_alg)?;
 
         let mut issuer_ids: Vec<String> = Vec::new();
         for fp in cfg.issuer_fingerprint() {
