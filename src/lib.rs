@@ -82,6 +82,7 @@
 pub use pgp;
 
 // Modules
+mod crypto_policy;
 mod error;
 mod internal;
 mod types;
@@ -105,6 +106,13 @@ pub mod keystore;
 
 // Re-export error types
 pub use error::{Error, Result};
+
+// Test-only crypto-policy escape hatches (not part of the stable API).
+// Gated behind the `test-helpers` feature so they're absent from
+// production builds. Enable with `cargo test --features test-helpers`.
+#[cfg(any(test, feature = "test-helpers"))]
+#[doc(hidden)]
+pub use crypto_policy::{__test_disable_policy, __test_install_policy_from_toml};
 
 // Re-export all public types
 pub use types::{

@@ -66,7 +66,10 @@ mod parse_key {
 
     #[test]
     fn test_parse_expired_old_cert() {
-        // This tests an old expired key that would normally fail with StandardPolicy
+        // This tests an old expired key that would normally fail with StandardPolicy.
+        // The fixture also has SHA-1 self-signatures that the system policy
+        // rejects under DEFAULT — disable the gate for legacy fixture loading.
+        wecanencrypt::__test_disable_policy();
         let keypath = store_dir().join("old.asc");
 
         // Parse with null policy (should succeed despite expiry)
@@ -108,6 +111,7 @@ mod parse_key {
 
     #[test]
     fn test_merge_keys() {
+        wecanencrypt::__test_disable_policy();
         // Same as Python test:
         // ctime = datetime.datetime(2017, 10, 17, 20, 53, 47)
         // etime = datetime.datetime(2027, 10, 15)
@@ -239,6 +243,7 @@ mod sign_verify {
 
     #[test]
     fn test_sign_from_gpg_verify_file() {
+        wecanencrypt::__test_disable_policy();
         // Verify a signed message from GPG
         let keypath = store_dir().join("kushal_updated_key.asc");
         let key_data = read_file(&keypath);
@@ -251,6 +256,7 @@ mod sign_verify {
 
     #[test]
     fn test_verify_bytes_from_signed_message() {
+        wecanencrypt::__test_disable_policy();
         // Verify a signed message from GPG and extract content
         let keypath = store_dir().join("kushal_updated_key.asc");
         let key_data = read_file(&keypath);
@@ -375,6 +381,7 @@ mod ssh_pubkey {
 
     #[test]
     fn test_get_ssh_pubkey_rsa() {
+        wecanencrypt::__test_disable_policy();
         let keypath = store_dir().join("kushal_updated_key.asc");
         let key_data = read_file(&keypath);
 
@@ -801,6 +808,7 @@ mod keystore_fixtures {
 
     #[test]
     fn test_keystore_search_by_uid() {
+        wecanencrypt::__test_disable_policy();
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("test.db");
 
@@ -1745,6 +1753,7 @@ mod certification_fixtures {
     /// Tests introspection of certification details on a fixture key
     #[test]
     fn test_uid_certs() {
+        wecanencrypt::__test_disable_policy();
         let keypath = store_dir().join("kushal_updated_key.asc");
         let key_data = read_file(&keypath);
 

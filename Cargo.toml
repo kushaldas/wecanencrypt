@@ -1,6 +1,6 @@
 [package]
 name = "wecanencrypt"
-version = "0.15.0"
+version = "0.16.0"
 edition = "2021"
 license = "MIT"
 description = "Simple Rust OpenPGP library for encryption, signing, and key management."
@@ -20,6 +20,15 @@ include = [
 default = ["keystore", "network"]
 keystore = ["rusqlite"]
 network = ["reqwest", "sha1"]
+
+# Crypto-policy escape hatches for in-crate testing. Off by default.
+# Required to compile the integration tests under `tests/` that load
+# legacy SHA-1-self-signed fixtures or install hand-built strict
+# policies (they call `wecanencrypt::__test_disable_policy()` and
+# `__test_install_policy_from_toml()`). Run them with:
+#   cargo test --features test-helpers
+# Production callers should never enable this feature.
+test-helpers = []
 
 # Card support is layered:
 #
@@ -78,6 +87,12 @@ rand = "0.8"
 # Hex encoding (used in card module for fingerprints)
 hex = "0.4"
 
+# Fedora crypto-policies parser. Reads
+# /etc/crypto-policies/back-ends/sequoia.config and lets
+# `update-crypto-policies --set DEFAULT/LEGACY/...` gate the
+# algorithms wecanencrypt accepts at parse/verify/decrypt/encrypt time.
+toml = "1"
+
 # Crypto dependencies for SSH key export and card operations
 rsa = "0.9"
 p256 = "0.13"
@@ -130,3 +145,18 @@ rustdoc-args = ["--cfg", "docsrs"]
 [[example]]
 name = "upexp"
 required-features = ["card"]
+
+# Integration tests that need the test-helpers escape hatches.
+# Skipped silently unless `cargo test --features test-helpers` (or
+# `--all-features`) is used.
+[[test]]
+name = "fixture_tests"
+required-features = ["test-helpers"]
+
+[[test]]
+name = "keystore_tests"
+required-features = ["test-helpers"]
+
+[[test]]
+name = "policy_tests"
+required-features = ["test-helpers"]

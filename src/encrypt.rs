@@ -289,6 +289,9 @@ pub fn sign_and_encrypt_to_multiple(
         } else {
             return Err(Error::NoSigningSubkey);
         };
+    // The hash here was picked from key parameters, not from a
+    // caller-supplied algorithm, so gate it before signing.
+    crate::crypto_policy::current().hash_algorithm(hash_alg)?;
 
     let mut rng = thread_rng();
     let signer_pwd: Password = signer_password.into();
@@ -341,8 +344,14 @@ pub fn sign_and_encrypt_to_multiple(
     }
 }
 
-/// Reject deprecated/insecure symmetric algorithms per RFC 9580 §9.3.
+/// Reject deprecated/insecure symmetric algorithms per RFC 9580 §9.3
+/// AND per the active Fedora crypto policy.
 fn validate_sym_algo(sym_algo: SymmetricKeyAlgorithm) -> Result<()> {
+    // Crypto-policy gate first. Under Fedora DEFAULT this catches
+    // IDEA/3DES/CAST5/Blowfish; under FUTURE it can also reject
+    // AES-128 if the policy is configured to.
+    crate::crypto_policy::current().symmetric_algorithm(sym_algo)?;
+
     match sym_algo {
         SymmetricKeyAlgorithm::AES128
         | SymmetricKeyAlgorithm::AES192

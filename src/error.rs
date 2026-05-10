@@ -107,6 +107,53 @@ pub enum Error {
     #[cfg(feature = "card")]
     #[error("Smart card error: {0}")]
     Card(#[from] crate::card::CardError),
+
+    /// Operation rejected by the active crypto policy
+    /// (`/etc/crypto-policies/back-ends/sequoia.config` on Fedora,
+    /// `WECANENCRYPT_CRYPTO_POLICY` / `SEQUOIA_CRYPTO_POLICY` env vars,
+    /// or a hand-built policy installed via `set_for_test`).
+    #[error("crypto policy violation: {what}")]
+    PolicyViolation {
+        /// Human-readable description of which algorithm or key was
+        /// rejected and why (for caller-visible error messages).
+        what: String,
+    },
+}
+
+impl Error {
+    pub(crate) fn policy_hash(algo: pgp::crypto::hash::HashAlgorithm) -> Self {
+        Error::PolicyViolation {
+            what: format!("hash algorithm {algo:?} blocked by system crypto policy"),
+        }
+    }
+
+    pub(crate) fn policy_sym(algo: pgp::crypto::sym::SymmetricKeyAlgorithm) -> Self {
+        Error::PolicyViolation {
+            what: format!("symmetric algorithm {algo:?} blocked by system crypto policy"),
+        }
+    }
+
+    #[allow(dead_code)] // Reserved for AEAD-gating call sites we haven't added yet.
+    pub(crate) fn policy_aead(
+        aead: pgp::crypto::aead::AeadAlgorithm,
+        sym: pgp::crypto::sym::SymmetricKeyAlgorithm,
+    ) -> Self {
+        Error::PolicyViolation {
+            what: format!(
+                "AEAD algorithm {aead:?} with symmetric {sym:?} blocked by system crypto policy"
+            ),
+        }
+    }
+
+    pub(crate) fn policy_pubkey(
+        algo: pgp::crypto::public_key::PublicKeyAlgorithm,
+        bits: Option<u32>,
+    ) -> Self {
+        let bits = bits.map(|b| format!(" ({b}-bit)")).unwrap_or_default();
+        Error::PolicyViolation {
+            what: format!("public-key algorithm {algo:?}{bits} blocked by system crypto policy"),
+        }
+    }
 }
 
 /// A specialized Result type for wecanencrypt operations.

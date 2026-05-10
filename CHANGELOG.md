@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0] — 2026-05-10
+
+Fedora `crypto-policies` integration. Verify, decrypt, encrypt,
+sign, and key-parse paths now consult
+`/etc/crypto-policies/back-ends/sequoia.config` (or an override
+config file) and refuse algorithms that
+`update-crypto-policies --set DEFAULT/LEGACY/FUTURE/FIPS` disallows.
+
+### Added
+
+- New `Error::PolicyViolation { what: String }` variant returned when
+  an operation hits an algorithm the active policy bans.
+- Lookup precedence for the active policy:
+  1. `WECANENCRYPT_CRYPTO_POLICY` env var
+     - Value `off` (case-insensitive) → no enforcement.
+     - Otherwise → file path to a sequoia.config-style TOML file.
+  2. `SEQUOIA_CRYPTO_POLICY` env var → file path.
+  3. `/etc/crypto-policies/back-ends/sequoia.config` (Fedora default
+     location).
+  4. None of the above parse → accept-everything fallback.
+- Perimeter-only enforcement: gates message-level signature hashes,
+  PKESK and SKESK packet algorithms (symmetric + S2K hash), and
+  every signature attached to a parsed certificate (UID self-sigs,
+  subkey bindings, third-party certs). Crypto operations entirely
+  inside rpgp's internals (e.g. self-cert verification during a
+  decrypt-with-key flow) are not gated.
+
+### Changed
+
+- `parse_key_bytes` / `parse_key_file` and the internal
+  `parse_secret_key` / `parse_public_key` helpers now reject any
+  certificate whose primary key, subkey, or any attached signature
+  uses an algorithm the active policy bans. Under Fedora DEFAULT
+  this means **legacy keys with SHA-1 self-signatures or 1024-bit
+  RSA primaries fail to load**. The supported escape hatches are
+  `WECANENCRYPT_CRYPTO_POLICY=off` or
+  `update-crypto-policies --set LEGACY`.
+- `encrypt_bytes_to_multiple_with_algo` /
+  `encrypt_bytes_to_multiple_seipd_v2` and
+  `sign_bytes_detached_with_hash` reject caller-supplied banned
+  algorithms with `Error::PolicyViolation`. Default-algo paths
+  (`encrypt_bytes`, `sign_bytes`, ...) keep working — rpgp's
+  defaults (AES-256, OCB, SHA-256) are on every Fedora policy's
+  allow-list.
+
+### Dependencies
+
+- Added `toml = "1"` for parsing the system policy file. Fedora
+  ships `rust-toml-1.1.0`, so the `rust-wecanencrypt` RPM gains no
+  new BuildRequires it doesn't already cover.
+
+### Testing
+
+- New Cargo feature `test-helpers` (off by default) gates the
+  `__test_disable_policy` and `__test_install_policy_from_toml`
+  escape hatches. Production builds cannot accidentally flip the
+  active policy from any caller. Run the integration tests with
+  `cargo test --features test-helpers`. The lib's own unit tests
+  (`cargo test --lib`) work without the feature because they're
+  compiled with `cfg(test)`.
+
 ## [0.15.0] — 2026-05-02
 
 Pre-op passphrase verification primitive for daemons that broker
