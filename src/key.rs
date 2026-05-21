@@ -476,11 +476,16 @@ pub fn get_pub_key(key_data: &[u8]) -> Result<String> {
 ///
 /// If more than one UID matches `addr` (e.g. a key with two UIDs sharing
 /// the same email but different display names), exactly one is selected
-/// deterministically: the UID flagged as primary
-/// (`PrimaryUserId` subpacket) if present, otherwise the first matching
-/// UID in packet order. This keeps the on-the-wire bytes stable across
-/// export calls and avoids leaking an alternate display name into every
-/// outbound message.
+/// deterministically. Only UIDs with at least one cryptographically
+/// verified self-cert are eligible. Among those, the UID flagged as
+/// primary (`PrimaryUserId` subpacket on a verified self-cert) wins;
+/// otherwise the first matching UID in packet order. Checking
+/// `PrimaryUserId` only on verified signatures means an attacker who can
+/// splice packets cannot force selection by adding a forged "primary"
+/// flag — the flag is meaningless unless the signature it sits in
+/// actually verifies. This also keeps the on-the-wire bytes stable
+/// across export calls and avoids leaking an alternate display name
+/// into every outbound message.
 ///
 /// # Arguments
 /// * `key_data` - Key data (armored or binary), public or secret. If a
@@ -512,51 +517,67 @@ pub fn export_public_for_autocrypt(key_data: &[u8], addr: &str) -> Result<Vec<u8
     // Pick exactly ONE UID matching `addr` (Autocrypt §2.1.1: "exactly one
     // user id packet"). Multiple UIDs can carry the same email address —
     // an extra UID with a different display name, an `add_uid` mistake,
-    // etc. — so select deterministically:
-    //   1. the matching UID flagged as primary (PrimaryUserId subpacket),
+    // etc. — so select deterministically among UIDs that have at least
+    // one cryptographically valid self-cert:
+    //   1. prefer a matching UID where a verified self-cert carries the
+    //      PrimaryUserId subpacket (RFC 4880 §5.2.3.19);
     //   2. otherwise the first matching UID in packet order.
-    // Picking deterministically (rather than including all matches) keeps
-    // the on-the-wire bytes stable across export calls and avoids leaking
-    // an alternate display name into every outbound message.
+    // The PrimaryUserId flag is only meaningful when it appears on a
+    // signature the primary actually issued — an attacker who can splice
+    // packets could otherwise force selection of a UID with no usable
+    // self-cert by marking it "primary" via a forged signature. Verifying
+    // first defeats that.
     let matches_addr = |u: &SignedUser| {
         let uid_str = String::from_utf8_lossy(u.id.id());
         extract_uid_email(&uid_str)
             .map(|e| e.to_ascii_lowercase() == addr_lc)
             .unwrap_or(false)
     };
-    let picked_user = public_key
+
+    // Precompute (uid, verified_self_sigs) for every UID matching `addr`,
+    // dropping the ones whose verified self-sig list is empty.
+    let candidates: Vec<(&SignedUser, Vec<pgp::packet::Signature>)> = public_key
         .details
         .users
         .iter()
-        .find(|u| matches_addr(u) && u.is_primary())
-        .or_else(|| public_key.details.users.iter().find(|u| matches_addr(u)))
-        .ok_or_else(|| Error::InvalidInput(format!("no User ID on key matches address {addr}")))?;
-
-    // Keep only signatures that cryptographically verify against the
-    // primary key. The issuer-fingerprint subpacket is just metadata —
-    // an attacker can splice a forged signature whose issuer subpacket
-    // claims the primary as issuer but doesn't verify; and legitimate
-    // self-sigs may omit the subpacket entirely (V6, some V4 producers).
-    // Verifying is the only sound test of "did this primary actually
-    // issue this signature".
-    let user_self_sigs: Vec<pgp::packet::Signature> = picked_user
-        .signatures
-        .iter()
-        .filter(|sig| is_verified_self_uid_signature(sig, primary, picked_user))
-        .cloned()
+        .filter(|u| matches_addr(u))
+        .map(|u| {
+            let verified: Vec<pgp::packet::Signature> = u
+                .signatures
+                .iter()
+                .filter(|sig| is_verified_self_uid_signature(sig, primary, u))
+                .cloned()
+                .collect();
+            (u, verified)
+        })
+        .filter(|(_, sigs)| !sigs.is_empty())
         .collect();
+
     // RFC 4880 §11.1: a transferable public key requires at least one
-    // signature following each User ID packet. If verification dropped
-    // every self-sig on the picked UID (key never had one, or the only
-    // self-sigs are corrupted) we'd emit a packet sequence that's not a
-    // valid transferable public key; refuse rather than produce keydata
-    // every receiving MUA will reject.
-    if user_self_sigs.is_empty() {
-        return Err(Error::InvalidInput(format!(
-            "User ID matching {addr} has no verified self-signature; \
-             cannot produce a structurally-valid Autocrypt key"
-        )));
+    // signature following each User ID packet. If NO matching UID has a
+    // verified self-cert we'd be forced to emit a packet sequence that
+    // isn't a valid transferable public key; refuse rather than produce
+    // keydata every receiving MUA will reject. The distinction between
+    // "no UID matches" and "matching UID(s) but none verified" matters
+    // for debugging, so the two paths report different messages.
+    if candidates.is_empty() {
+        let any_matching_uid = public_key.details.users.iter().any(matches_addr);
+        return Err(Error::InvalidInput(if any_matching_uid {
+            format!(
+                "User ID matching {addr} has no verified self-signature; \
+                 cannot produce a structurally-valid Autocrypt key"
+            )
+        } else {
+            format!("no User ID on key matches address {addr}")
+        }));
     }
+
+    // Pick by primary-from-verified-sig, else first.
+    let (picked_user, user_self_sigs) = candidates
+        .iter()
+        .find(|(_, sigs)| sigs.iter().any(|s| s.is_primary()))
+        .cloned()
+        .unwrap_or_else(|| candidates[0].clone());
     let matching_users = vec![SignedUser::new(picked_user.id.clone(), user_self_sigs)];
 
     // Subkey binding/revocation signatures: keep sigs that verify against
@@ -2073,6 +2094,93 @@ mod tests {
             "subkeys with no verified binding signature must be dropped \
              from the autocrypt output (had {subkey_count_before} before \
              tampering, expected 0 after)"
+        );
+    }
+
+    /// The PrimaryUserId subpacket only matters when it appears on a
+    /// signature the primary actually issued. Otherwise an attacker who
+    /// can splice packets could mark a UID with no usable self-cert as
+    /// "primary" via a forged signature and force the picker to land on
+    /// it — making the export error out for keys that have a perfectly
+    /// good sibling UID with valid self-sigs.
+    ///
+    /// Setup: two UIDs share the same address. UID1 has a genuine
+    /// verified self-cert (no PrimaryUserId flag). UID2's only signature
+    /// is Bob's UID self-cert — which carries Bob's `is_primary()` flag
+    /// (rpgp marks the first UID of a generated key as primary) but
+    /// fails to verify against Alice's primary. The new picker MUST
+    /// land on UID1; the old metadata-only picker would have grabbed
+    /// UID2 (via `SignedUser::is_primary` returning true on the
+    /// unverified sig) and then errored out.
+    #[test]
+    fn autocrypt_export_ignores_primary_flag_on_unverified_self_signature() {
+        use pgp::composed::{Deserializable, SignedPublicKey};
+        use pgp::ser::Serialize;
+
+        let alice = crate::create_key_simple("pw", &["Alice <alice@example.com>"]).unwrap();
+        let with_dup = crate::add_uid(&alice.secret_key, "Alice 2 <alice@example.com>", "pw")
+            .expect("add_uid");
+        let bob = crate::create_key_simple("pw", &["Bob <bob@example.com>"]).unwrap();
+
+        let alice_secret =
+            pgp::composed::SignedSecretKey::from_bytes(std::io::Cursor::new(&with_dup)).unwrap();
+        let alice_pub = alice_secret.to_public_key();
+        let bob_secret =
+            pgp::composed::SignedSecretKey::from_bytes(std::io::Cursor::new(&bob.secret_key))
+                .unwrap();
+        let bob_pub = bob_secret.to_public_key();
+        let bob_uid_sig = bob_pub
+            .details
+            .users
+            .first()
+            .and_then(|u| u.signatures.first())
+            .cloned()
+            .expect("bob has a UID self-sig");
+        // rpgp marks the first generated UID as primary; assert that so
+        // the test is doing what it claims.
+        assert!(
+            bob_uid_sig.is_primary(),
+            "test fixture: bob's UID self-sig should carry the \
+             PrimaryUserId subpacket"
+        );
+
+        // Tampered key: UID1 keeps its real self-cert, UID2's signature
+        // list contains only Bob's (primary-flagged) self-cert.
+        let tampered_users: Vec<SignedUser> = alice_pub
+            .details
+            .users
+            .iter()
+            .map(|u| {
+                let uid_text = String::from_utf8_lossy(u.id.id()).to_string();
+                if uid_text.contains("Alice 2") {
+                    SignedUser::new(u.id.clone(), vec![bob_uid_sig.clone()])
+                } else {
+                    u.clone()
+                }
+            })
+            .collect();
+        let tampered = SignedPublicKey {
+            primary_key: alice_pub.primary_key.clone(),
+            details: pgp::composed::SignedKeyDetails::new(
+                alice_pub.details.revocation_signatures.clone(),
+                alice_pub.details.direct_signatures.clone(),
+                tampered_users,
+                alice_pub.details.user_attributes.clone(),
+            ),
+            public_subkeys: alice_pub.public_subkeys.clone(),
+        };
+        let tampered_bytes = tampered.to_bytes().expect("serialize tampered");
+
+        // Should succeed (not error) — UID1 has a verified self-cert
+        // and the picker must skip the falsely-flagged "primary" UID2.
+        let autocrypt = super::export_public_for_autocrypt(&tampered_bytes, "alice@example.com")
+            .expect("picker should land on UID1, not UID2");
+        let info = crate::parse_key_bytes(&autocrypt, false).expect("parse output");
+        assert_eq!(info.user_ids.len(), 1);
+        assert_eq!(
+            info.user_ids[0].value, "Alice <alice@example.com>",
+            "picker must select the UID with a verified self-cert, not \
+             the one whose only signature is a forged primary claim"
         );
     }
 }

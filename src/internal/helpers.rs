@@ -109,7 +109,13 @@ pub(crate) fn extract_uid_email(uid: &str) -> Option<String> {
         if let Some(rel_end) = uid[start + 1..].find('>') {
             let end = start + 1 + rel_end;
             let inner = uid[start + 1..end].trim();
-            if !inner.is_empty() {
+            // Same shape check as the bare-token branch below: the
+            // contents between the brackets must contain `@` and no
+            // embedded spaces. Without this, a malformed UID like
+            // `"Name <not_an_email>"` or `"Name <addr with space>"`
+            // would put a non-email token into the keystore email index
+            // and into Autocrypt address comparisons.
+            if inner.contains('@') && !inner.contains(' ') {
                 return Some(inner.to_string());
             }
         }

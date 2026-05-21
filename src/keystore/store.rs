@@ -1874,6 +1874,12 @@ mod tests {
             extract_uid_email("A>lice <alice@example.com>"),
             Some("alice@example.com".to_string())
         );
+        // Brackets containing a non-email token must NOT be returned —
+        // otherwise the keystore email index and Autocrypt address
+        // comparisons would accept garbage like "Name <not_an_email>"
+        // or "Name <addr with space>".
+        assert_eq!(extract_uid_email("Name <not_an_email>"), None);
+        assert_eq!(extract_uid_email("Name <addr with space>"), None);
     }
 
     #[test]
