@@ -1732,9 +1732,15 @@ pub fn sign_and_encrypt_to_multiple_on_card(
 ///
 /// Sibling of [`crate::encrypt::sign_and_encrypt_to_multiple_with_hidden`]
 /// — same shape, with the signer key living on a smartcard. Hidden
-/// recipients have their PKESK packet's key id blanked to the all-zero
-/// wildcard (RFC 4880 `throw-keyid`), so the on-the-wire message reveals
-/// only that an extra recipient exists, not who.
+/// recipients receive a PKESK whose recipient identifier is suppressed:
+///
+/// * V3 PKESK (used with V4 recipient keys): the 8-byte recipient key-id
+///   field is set to the all-zero wildcard.
+/// * V6 PKESK (used with V6 recipient keys, RFC 9580): the optional
+///   recipient fingerprint field is omitted entirely.
+///
+/// Either form leaks no identifier for the recipient (RFC 4880
+/// `throw-keyid` / `--hidden-recipient`).
 pub fn sign_and_encrypt_to_multiple_on_card_with_hidden(
     signer_public_key: &[u8],
     pin: &[u8],
@@ -1744,30 +1750,17 @@ pub fn sign_and_encrypt_to_multiple_on_card_with_hidden(
     plaintext: &[u8],
     armor: bool,
 ) -> Result<Vec<u8>> {
-    if visible_recipient_keys.is_empty() && hidden_recipient_keys.is_empty() {
-        return Err(Error::InvalidInput("No recipients specified".to_string()));
-    }
     let public_key = parse_public_key(signer_public_key)?;
     let card_signing_key =
         get_card_signing_key(&public_key, pin, ident, SigningKeyUsage::DataSignature)?;
 
-    // Validate visible + hidden together so a mixed V4/V6 split is caught.
-    let mut combined: Vec<&[u8]> =
-        Vec::with_capacity(visible_recipient_keys.len() + hidden_recipient_keys.len());
-    combined.extend_from_slice(visible_recipient_keys);
-    combined.extend_from_slice(hidden_recipient_keys);
-    let (_all_subkeys, recipients_version) = crate::encrypt::collect_encryption_keys(&combined)?;
-
-    let visible_subkeys: Vec<_> = if visible_recipient_keys.is_empty() {
-        Vec::new()
-    } else {
-        crate::encrypt::collect_encryption_keys(visible_recipient_keys)?.0
-    };
-    let hidden_subkeys: Vec<_> = if hidden_recipient_keys.is_empty() {
-        Vec::new()
-    } else {
-        crate::encrypt::collect_encryption_keys(hidden_recipient_keys)?.0
-    };
+    // Single-pass-per-side: each recipient key is parsed exactly once.
+    // The helper also catches both empty-empty and mixed V4/V6 splits.
+    let (visible_subkeys, hidden_subkeys, recipients_version) =
+        crate::encrypt::collect_visible_and_hidden_keys(
+            visible_recipient_keys,
+            hidden_recipient_keys,
+        )?;
 
     let mut rng = thread_rng();
     let empty_pwd: Password = "".into();
