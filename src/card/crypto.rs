@@ -1750,17 +1750,21 @@ pub fn sign_and_encrypt_to_multiple_on_card_with_hidden(
     plaintext: &[u8],
     armor: bool,
 ) -> Result<Vec<u8>> {
-    let public_key = parse_public_key(signer_public_key)?;
-    let card_signing_key =
-        get_card_signing_key(&public_key, pin, ident, SigningKeyUsage::DataSignature)?;
-
-    // Single-pass-per-side: each recipient key is parsed exactly once.
-    // The helper also catches both empty-empty and mixed V4/V6 splits.
+    // Validate the recipient lists BEFORE touching the card. An
+    // empty-empty call (or a cross-list V4/V6 split) must fail fast with
+    // a precise `Error::InvalidInput` / `Error::KeyVersionMismatch` and
+    // never depend on a card being plugged in. Running
+    // `get_card_signing_key` first would surface a card-comm or
+    // fingerprint error instead, hiding the real problem.
     let (visible_subkeys, hidden_subkeys, recipients_version) =
         crate::encrypt::collect_visible_and_hidden_keys(
             visible_recipient_keys,
             hidden_recipient_keys,
         )?;
+
+    let public_key = parse_public_key(signer_public_key)?;
+    let card_signing_key =
+        get_card_signing_key(&public_key, pin, ident, SigningKeyUsage::DataSignature)?;
 
     let mut rng = thread_rng();
     let empty_pwd: Password = "".into();
@@ -1940,6 +1944,69 @@ where
 
 #[cfg(test)]
 mod tests {
-    // Tests require a virtual card or physical YubiKey
+    // Most tests require a virtual card or physical YubiKey
     // Run with: cargo test --features card -- --ignored
+    //
+    // The tests below exercise input-validation paths that MUST fail fast
+    // before any card I/O — they intentionally run without a card.
+
+    use super::*;
+    use crate::{create_key_simple, create_key_v6_simple, get_pub_key, CipherSuite};
+
+    /// `sign_and_encrypt_to_multiple_on_card_with_hidden` must reject an
+    /// empty-empty recipient list with `Error::InvalidInput` BEFORE doing
+    /// any card I/O. If the order is wrong, the call returns a card-comm
+    /// / fingerprint error when no card is connected, which hides the
+    /// real cause from the caller and makes the API non-deterministic.
+    ///
+    /// The signer key bytes are intentionally junk (`b""`): if recipient
+    /// validation ran late, we'd see a parse-key error or a card error
+    /// instead of `Error::InvalidInput`.
+    #[test]
+    fn on_card_with_hidden_validates_recipients_before_touching_card() {
+        let err = sign_and_encrypt_to_multiple_on_card_with_hidden(
+            b"",       // signer_public_key — never reached
+            b"123456", // pin                 — never reached
+            None,      // ident               — never reached
+            &[],       // visible_recipient_keys
+            &[],       // hidden_recipient_keys
+            b"payload",
+            true,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, Error::InvalidInput(_)),
+            "expected InvalidInput for empty-empty recipients, got {err:?}",
+        );
+    }
+
+    /// Same fast-fail guarantee for the cross-list V4/V6 mismatch path:
+    /// `KeyVersionMismatch` must come back before any card I/O.
+    #[test]
+    fn on_card_with_hidden_validates_version_match_before_touching_card() {
+        let bob_v4 = create_key_simple("bob-pw", &["Bob <bob@example.com>"]).unwrap();
+        let carol_v6 = create_key_v6_simple(
+            "carol-pw",
+            &["Carol <carol@example.com>"],
+            CipherSuite::Cv25519Modern,
+        )
+        .unwrap();
+        let bob_v4_pub = get_pub_key(&bob_v4.secret_key).unwrap();
+        let carol_v6_pub = get_pub_key(&carol_v6.secret_key).unwrap();
+
+        let err = sign_and_encrypt_to_multiple_on_card_with_hidden(
+            b"",       // signer_public_key — never reached
+            b"123456", // pin                 — never reached
+            None,
+            &[bob_v4_pub.as_bytes()],
+            &[carol_v6_pub.as_bytes()],
+            b"payload",
+            true,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, Error::KeyVersionMismatch { .. }),
+            "expected KeyVersionMismatch for V4-visible + V6-hidden, got {err:?}",
+        );
+    }
 }
