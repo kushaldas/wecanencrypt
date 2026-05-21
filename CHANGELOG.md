@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Two outgoing-mail primitives the Tumpa Mail extension needs: an Autocrypt
+minimised public-key export for the `Autocrypt:` header, and a
+throw-keyid recipient path for "Bcc with encryption" that doesn't leak
+Bcc identities into the OpenPGP packet stream.
+
+### Added
+
+- `export_public_for_autocrypt(key_data, addr)` -- minimised
+  transferable-public-key export per the Autocrypt Level 1 spec
+  (https://autocrypt.org/level1.html#openpgp-based-key-data). Returns
+  binary OpenPGP bytes the caller base64-encodes into the `keydata=`
+  attribute of the outbound `Autocrypt:` header. Accepts either public
+  or secret key input. Output contains the primary key packet, exactly
+  one User ID matching `addr` (case-insensitive on local and domain
+  parts), the subkey packets with only their self-signatures, and the
+  primary's own revocation/direct signatures. User Attribute packets,
+  non-matching UIDs, and third-party certifications are stripped --
+  Autocrypt is per-address and the header rides on every outbound mail,
+  so size discipline matters and the social graph from third-party
+  certs would leak otherwise. Errors with `Error::InvalidInput` if no
+  UID matches `addr`. Round-trip, multi-UID strip, case-insensitive
+  match, secret-to-public extraction, and third-party-cert strip
+  pinned with unit tests.
+
+- `sign_and_encrypt_to_multiple_with_hidden(signer_secret,
+  signer_password, visible_recipients, hidden_recipients, plaintext,
+  armor)` -- single-pass sign-then-encrypt where hidden recipients get
+  a PKESK with the recipient key id blanked to the all-zero wildcard
+  (RFC 4880 throw-keyid via rpgp's `encrypt_to_key_anonymous`).
+  Visible recipients get a normal PKESK. All recipients receive the
+  same ciphertext and decrypt to the same plaintext.
+- `encrypt_bytes_to_multiple_with_hidden(visible_recipients,
+  hidden_recipients, plaintext, armor)` -- the no-signer variant of
+  the same primitive.
+- `card::sign_and_encrypt_to_multiple_on_card_with_hidden(...)` --
+  card-backed variant for OpenPGP smartcards (Nitrokey 3, YubiKey).
+
+### Fixed
+
+- `card::sign_and_encrypt_to_multiple_on_card_with_hidden` validates
+  the recipient lists BEFORE any card I/O, so an empty-empty call or a
+  V4/V6 cross-list split returns `Error::InvalidInput` /
+  `Error::KeyVersionMismatch` cleanly instead of an opaque card-comm
+  error when no card is plugged in.
+
+### Notes
+
+- At least one recipient (visible OR hidden) must be supplied to the
+  `*_with_hidden` calls; empty-empty is rejected. V4/V6 version-mix is
+  validated across the combined recipient set, matching the rule for
+  `encrypt_bytes_to_multiple`.
+
 ## [0.15.0] — 2026-05-02
 
 Pre-op passphrase verification primitive for daemons that broker

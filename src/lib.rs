@@ -164,8 +164,8 @@ pub use verify::{
 // Re-export key generation and management functions
 pub use key::{
     add_uid, certify_key, create_key, create_key_simple, create_key_v6, create_key_v6_simple,
-    get_pub_key, revoke_key, revoke_uid, update_password, update_primary_expiry,
-    update_subkeys_expiry,
+    export_public_for_autocrypt, get_pub_key, revoke_key, revoke_uid, update_password,
+    update_primary_expiry, update_subkeys_expiry,
 };
 
 // Re-export keyring functions

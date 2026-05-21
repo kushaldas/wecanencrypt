@@ -8,8 +8,9 @@ use pgp::types::KeyDetails;
 
 use crate::error::{Error, Result};
 use crate::internal::{
-    fingerprint_to_hex, get_algorithm_name, get_key_bit_size, get_key_expiration, keyid_to_hex,
-    parse_key, public_key_to_armored, system_time_to_datetime, verified_primary_revocation,
+    extract_uid_email, fingerprint_to_hex, get_algorithm_name, get_key_bit_size,
+    get_key_expiration, keyid_to_hex, parse_key, public_key_to_armored, system_time_to_datetime,
+    verified_primary_revocation,
 };
 use crate::parse::parse_key_bytes;
 use crate::types::{KeyInfo, KeySummary, SubkeySummary, UserIdSummary};
@@ -212,7 +213,7 @@ impl KeyStore {
 
         for user in &public_key.details.users {
             let uid = String::from_utf8_lossy(user.id.id()).to_string();
-            let email = extract_email(&uid);
+            let email = extract_uid_email(&uid);
 
             self.conn.execute(
                 "INSERT INTO user_ids (fingerprint, uid, email) VALUES (?1, ?2, ?3)",
@@ -1288,22 +1289,6 @@ pub struct StoredCardKey {
     pub last_seen: String,
 }
 
-/// Extract email from a User ID string (e.g., "Name <email@example.com>").
-fn extract_email(uid: &str) -> Option<String> {
-    if let Some(start) = uid.find('<') {
-        if let Some(end) = uid.find('>') {
-            if start < end {
-                return Some(uid[start + 1..end].to_string());
-            }
-        }
-    }
-    // Check if the whole thing is an email
-    if uid.contains('@') && !uid.contains(' ') {
-        return Some(uid.to_string());
-    }
-    None
-}
-
 // Convenience functions for crypto operations with KeyStore
 
 /// Encrypt bytes using a key from the store.
@@ -1859,16 +1844,48 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_extract_email() {
+    fn test_extract_uid_email() {
         assert_eq!(
-            extract_email("Alice <alice@example.com>"),
+            extract_uid_email("Alice <alice@example.com>"),
             Some("alice@example.com".to_string())
         );
         assert_eq!(
-            extract_email("bob@example.com"),
+            extract_uid_email("bob@example.com"),
             Some("bob@example.com".to_string())
         );
-        assert_eq!(extract_email("Just a Name"), None);
+        assert_eq!(extract_uid_email("Just a Name"), None);
+        // Bracketed form with incidental whitespace around the address
+        // must trim — otherwise the value won't match against the
+        // address that lands in the autocrypt header.
+        assert_eq!(
+            extract_uid_email("Alice < alice@example.com >"),
+            Some("alice@example.com".to_string())
+        );
+        // Bare-address form with surrounding whitespace must trim.
+        assert_eq!(
+            extract_uid_email("  alice@example.com  "),
+            Some("alice@example.com".to_string())
+        );
+        // Display name contains a `>` before the bracketed address: the
+        // closing `>` must be searched AFTER the opening `<`, not the
+        // first `>` in the whole UID. A naive `uid.find('>')` lands
+        // before `<` and misses the address entirely.
+        assert_eq!(
+            extract_uid_email("A>lice <alice@example.com>"),
+            Some("alice@example.com".to_string())
+        );
+        // Brackets containing a non-email token must NOT be returned —
+        // otherwise the keystore email index and Autocrypt address
+        // comparisons would accept garbage like "Name <not_an_email>"
+        // or "Name <addr with space>".
+        assert_eq!(extract_uid_email("Name <not_an_email>"), None);
+        assert_eq!(extract_uid_email("Name <addr with space>"), None);
+        // Non-space whitespace inside the address (tab, newline, NBSP)
+        // is also rejected — an addr-spec can't contain any of these,
+        // and they'd otherwise pollute the keystore email index.
+        assert_eq!(extract_uid_email("Name <alice@\texample.com>"), None);
+        assert_eq!(extract_uid_email("Name <alice@\nexample.com>"), None);
+        assert_eq!(extract_uid_email("alice@\texample.com"), None);
     }
 
     #[test]

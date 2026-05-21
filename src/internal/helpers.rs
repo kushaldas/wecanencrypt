@@ -82,6 +82,58 @@ pub(crate) fn fingerprint_to_hex(key: &impl KeyDetails) -> String {
     hex::encode_upper(key.fingerprint().as_bytes())
 }
 
+/// Pull the email out of a `"Name <addr@host>"` UID string, or treat a bare
+/// `addr@host` token as the email. Returns `None` for comment-only UIDs
+/// with no address (so callers don't silently pick a UID with no email).
+///
+/// Shared between the keystore email-index population and the Autocrypt
+/// minimised-key export — keeping the two in sync matters because the
+/// keystore's per-UID `email` column is what tools use to look up keys for
+/// the address that's about to go into an `Autocrypt:` header, and the
+/// export then has to match on the same address.
+pub(crate) fn extract_uid_email(uid: &str) -> Option<String> {
+    // Bracketed form: `Name <addr@host>` — trim whitespace inside the
+    // angle brackets. Some UIDs in the wild include incidental spaces
+    // around the address (e.g. "Alice < alice@example.com >"); without
+    // trimming we'd return " alice@example.com " and miss the match
+    // against `addr.trim()` in autocrypt export, and pollute the
+    // keystore email index with whitespace-padded values.
+    //
+    // The closing `>` MUST be searched after the opening `<` rather than
+    // with a naive `uid.find('>')`. A display name can legitimately
+    // contain `>` (e.g. `"A>lice <alice@example.com>"`); searching from
+    // the start of the string would find the wrong `>`, give an `end`
+    // ordinal smaller than `start`, and miss the bracketed address
+    // entirely.
+    if let Some(start) = uid.find('<') {
+        if let Some(rel_end) = uid[start + 1..].find('>') {
+            let end = start + 1 + rel_end;
+            let inner = uid[start + 1..end].trim();
+            // Same shape check as the bare-token branch below: the
+            // contents between the brackets must contain `@` and no
+            // embedded whitespace. Without this, a malformed UID like
+            // `"Name <not_an_email>"` or `"Name <addr with space>"`
+            // would put a non-email token into the keystore email index
+            // and into Autocrypt address comparisons. Rejecting any
+            // `char::is_whitespace()` (not just ASCII `' '`) covers
+            // tabs, newlines, and NBSPs that an addr-spec also can't
+            // contain.
+            if inner.contains('@') && !inner.chars().any(char::is_whitespace) {
+                return Some(inner.to_string());
+            }
+        }
+    }
+    // Bare-address form: the whole UID is the address. Strip outer
+    // whitespace before checking for embedded whitespace — that's how
+    // "alice@example.com\n" or "  alice@example.com  " still classifies
+    // as a bare email, while "Just A Name" with internal spaces does not.
+    let trimmed = uid.trim();
+    if trimmed.contains('@') && !trimmed.chars().any(char::is_whitespace) {
+        return Some(trimmed.to_string());
+    }
+    None
+}
+
 /// Get the key ID as a hex string.
 pub(crate) fn keyid_to_hex(key: &impl KeyDetails) -> String {
     hex::encode_upper(key.legacy_key_id().as_ref())
