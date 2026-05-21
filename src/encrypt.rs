@@ -887,13 +887,44 @@ fn find_valid_encryption_subkeys(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{create_key_simple, decrypt_bytes, get_pub_key};
+    use crate::{create_key_simple, create_key_v6_simple, decrypt_bytes, get_pub_key, CipherSuite};
+
+    /// Walk every PKESK packet in a (possibly armored) ciphertext and
+    /// return the parsed enum values. Unlike [`bytes_encrypted_for`],
+    /// which formats and drops anonymous V6 PKESKs, this helper preserves
+    /// every PKESK so tests can match on the exact variant shape — in
+    /// particular `V6 { fingerprint: None, .. }` for V6 hidden recipients.
+    fn parse_pkesks(ciphertext: &[u8]) -> Vec<PublicKeyEncryptedSessionKey> {
+        let data = if ciphertext.starts_with(b"-----BEGIN PGP") {
+            let cursor = Cursor::new(ciphertext);
+            let dearmor = Dearmor::new(cursor);
+            let mut buf = Vec::new();
+            let mut reader = BufReader::new(dearmor);
+            reader.read_to_end(&mut buf).expect("dearmor");
+            buf
+        } else {
+            ciphertext.to_vec()
+        };
+        let parser = PacketParser::new(Cursor::new(&data));
+        let mut out = Vec::new();
+        for packet_result in parser {
+            match packet_result {
+                Ok(Packet::PublicKeyEncryptedSessionKey(pkesk)) => out.push(pkesk),
+                Ok(_) => {}
+                // Stop walking at the first parse error — usually the
+                // ciphertext body, which we can't decode without the key.
+                Err(_) => break,
+            }
+        }
+        out
+    }
 
     /// `sign_and_encrypt_to_multiple_with_hidden` must emit at least one
     /// PKESK that exposes the visible recipient's identifier and at least
-    /// one PKESK that hides the hidden recipient (V3 wildcard key id; the
-    /// V6 omitted-fingerprint case is observed via the
-    /// `bytes_encrypted_for` SKIP — see the V6 test below). Both
+    /// one PKESK that hides the hidden recipient. This V4-keys test covers
+    /// the V3 wildcard form; the V6 omitted-fingerprint form is covered
+    /// separately by
+    /// [`sign_encrypt_v6_with_hidden_omits_fingerprint_in_pkesk`]. Both
     /// recipients must still decrypt the same plaintext.
     ///
     /// The assertions deliberately AVOID pinning the PKESK count: a
@@ -1047,5 +1078,160 @@ mod tests {
         );
         let pt = decrypt_bytes(&bob.secret_key, &ct, "bob-pw").unwrap();
         assert_eq!(pt, b"hidden-only");
+    }
+
+    /// V6 keys exercise the SEIPD-v2 / `encrypt_to_key_anonymous` path —
+    /// hidden recipients receive a V6 PKESK whose optional `fingerprint`
+    /// field is `None` (RFC 9580 §5.1.2). Pin both the packet shape and
+    /// that both recipients still decrypt to the same plaintext.
+    ///
+    /// `bytes_encrypted_for` skips anonymous V6 PKESKs (no identifier to
+    /// report), so we walk the packet stream directly via `parse_pkesks`.
+    #[test]
+    fn sign_encrypt_v6_with_hidden_omits_fingerprint_in_pkesk() {
+        let alice = create_key_v6_simple(
+            "alice-pw",
+            &["Alice <alice@example.com>"],
+            CipherSuite::Cv25519Modern,
+        )
+        .unwrap();
+        let bob = create_key_v6_simple(
+            "bob-pw",
+            &["Bob <bob@example.com>"],
+            CipherSuite::Cv25519Modern,
+        )
+        .unwrap();
+        let carol = create_key_v6_simple(
+            "carol-pw",
+            &["Carol <carol@example.com>"],
+            CipherSuite::Cv25519Modern,
+        )
+        .unwrap();
+        let bob_pub = get_pub_key(&bob.secret_key).unwrap();
+        let carol_pub = get_pub_key(&carol.secret_key).unwrap();
+
+        let ct = sign_and_encrypt_to_multiple_with_hidden(
+            &alice.secret_key,
+            "alice-pw",
+            &[bob_pub.as_bytes()],
+            &[carol_pub.as_bytes()],
+            b"v6 hidden bcc",
+            true,
+        )
+        .expect("v6 encrypt with hidden recipients");
+
+        let pkesks = parse_pkesks(&ct);
+        assert!(
+            !pkesks.is_empty(),
+            "expected at least one PKESK in the V6 ciphertext"
+        );
+        // Every PKESK must be V6 (the recipients are V6 keys).
+        for p in &pkesks {
+            assert!(
+                matches!(p, PublicKeyEncryptedSessionKey::V6 { .. }),
+                "expected V6 PKESK packets, got {:?}",
+                p
+            );
+        }
+        // At least one V6 PKESK has fingerprint = None (Carol, hidden).
+        assert!(
+            pkesks.iter().any(|p| matches!(
+                p,
+                PublicKeyEncryptedSessionKey::V6 {
+                    fingerprint: None,
+                    ..
+                }
+            )),
+            "expected at least one V6 PKESK with omitted fingerprint (Carol hidden), got {:?}",
+            pkesks
+        );
+        // At least one V6 PKESK has fingerprint = Some(_) (Bob, visible).
+        assert!(
+            pkesks.iter().any(|p| matches!(
+                p,
+                PublicKeyEncryptedSessionKey::V6 {
+                    fingerprint: Some(_),
+                    ..
+                }
+            )),
+            "expected at least one V6 PKESK with a fingerprint (Bob visible), got {:?}",
+            pkesks
+        );
+
+        // Both recipients still decrypt to the same plaintext.
+        let pt_bob = decrypt_bytes(&bob.secret_key, &ct, "bob-pw").unwrap();
+        let pt_carol = decrypt_bytes(&carol.secret_key, &ct, "carol-pw").unwrap();
+        assert_eq!(pt_bob, b"v6 hidden bcc");
+        assert_eq!(pt_bob, pt_carol);
+    }
+
+    /// Encrypt-only V6 sibling of the test above: no signer, same V6
+    /// PKESK shape assertion (hidden ⇒ `fingerprint: None`; visible ⇒
+    /// `fingerprint: Some(_)`).
+    #[test]
+    fn encrypt_only_v6_with_hidden_omits_fingerprint_in_pkesk() {
+        let bob = create_key_v6_simple(
+            "bob-pw",
+            &["Bob <bob@example.com>"],
+            CipherSuite::Cv25519Modern,
+        )
+        .unwrap();
+        let carol = create_key_v6_simple(
+            "carol-pw",
+            &["Carol <carol@example.com>"],
+            CipherSuite::Cv25519Modern,
+        )
+        .unwrap();
+        let bob_pub = get_pub_key(&bob.secret_key).unwrap();
+        let carol_pub = get_pub_key(&carol.secret_key).unwrap();
+
+        let ct = encrypt_bytes_to_multiple_with_hidden(
+            &[bob_pub.as_bytes()],
+            &[carol_pub.as_bytes()],
+            b"v6 no signer",
+            true,
+        )
+        .expect("v6 encrypt-only with hidden");
+
+        let pkesks = parse_pkesks(&ct);
+        assert!(!pkesks.is_empty());
+        for p in &pkesks {
+            assert!(
+                matches!(p, PublicKeyEncryptedSessionKey::V6 { .. }),
+                "expected V6 PKESK packets in V6 encrypt-only ciphertext, got {:?}",
+                p
+            );
+        }
+        assert!(
+            pkesks.iter().any(|p| matches!(
+                p,
+                PublicKeyEncryptedSessionKey::V6 {
+                    fingerprint: None,
+                    ..
+                }
+            )),
+            "expected at least one V6 PKESK with omitted fingerprint (Carol hidden), got {:?}",
+            pkesks
+        );
+        assert!(
+            pkesks.iter().any(|p| matches!(
+                p,
+                PublicKeyEncryptedSessionKey::V6 {
+                    fingerprint: Some(_),
+                    ..
+                }
+            )),
+            "expected at least one V6 PKESK with a fingerprint (Bob visible), got {:?}",
+            pkesks
+        );
+
+        assert_eq!(
+            decrypt_bytes(&bob.secret_key, &ct, "bob-pw").unwrap(),
+            b"v6 no signer"
+        );
+        assert_eq!(
+            decrypt_bytes(&carol.secret_key, &ct, "carol-pw").unwrap(),
+            b"v6 no signer"
+        );
     }
 }
