@@ -1728,6 +1728,106 @@ pub fn sign_and_encrypt_to_multiple_on_card(
     }
 }
 
+/// Card-backed sign-and-encrypt to a mixed visible/hidden recipient set.
+///
+/// Sibling of [`crate::encrypt::sign_and_encrypt_to_multiple_with_hidden`]
+/// — same shape, with the signer key living on a smartcard. Hidden
+/// recipients have their PKESK packet's key id blanked to the all-zero
+/// wildcard (RFC 4880 `throw-keyid`), so the on-the-wire message reveals
+/// only that an extra recipient exists, not who.
+pub fn sign_and_encrypt_to_multiple_on_card_with_hidden(
+    signer_public_key: &[u8],
+    pin: &[u8],
+    ident: Option<&str>,
+    visible_recipient_keys: &[&[u8]],
+    hidden_recipient_keys: &[&[u8]],
+    plaintext: &[u8],
+    armor: bool,
+) -> Result<Vec<u8>> {
+    if visible_recipient_keys.is_empty() && hidden_recipient_keys.is_empty() {
+        return Err(Error::InvalidInput("No recipients specified".to_string()));
+    }
+    let public_key = parse_public_key(signer_public_key)?;
+    let card_signing_key =
+        get_card_signing_key(&public_key, pin, ident, SigningKeyUsage::DataSignature)?;
+
+    // Validate visible + hidden together so a mixed V4/V6 split is caught.
+    let mut combined: Vec<&[u8]> =
+        Vec::with_capacity(visible_recipient_keys.len() + hidden_recipient_keys.len());
+    combined.extend_from_slice(visible_recipient_keys);
+    combined.extend_from_slice(hidden_recipient_keys);
+    let (_all_subkeys, recipients_version) = crate::encrypt::collect_encryption_keys(&combined)?;
+
+    let visible_subkeys: Vec<_> = if visible_recipient_keys.is_empty() {
+        Vec::new()
+    } else {
+        crate::encrypt::collect_encryption_keys(visible_recipient_keys)?.0
+    };
+    let hidden_subkeys: Vec<_> = if hidden_recipient_keys.is_empty() {
+        Vec::new()
+    } else {
+        crate::encrypt::collect_encryption_keys(hidden_recipient_keys)?.0
+    };
+
+    let mut rng = thread_rng();
+    let empty_pwd: Password = "".into();
+    let hash_alg = card_signing_key.hash_alg;
+
+    if recipients_version == KeyVersion::V6 {
+        let mut builder = MessageBuilder::from_bytes("", plaintext.to_vec()).seipd_v2(
+            &mut rng,
+            SymmetricKeyAlgorithm::AES256,
+            AeadAlgorithm::Ocb,
+            ChunkSize::default(),
+        );
+        builder.sign(&card_signing_key, empty_pwd, hash_alg);
+        for key in &visible_subkeys {
+            builder
+                .encrypt_to_key(&mut rng, key)
+                .map_err(|e| Error::Crypto(e.to_string()))?;
+        }
+        for key in &hidden_subkeys {
+            builder
+                .encrypt_to_key_anonymous(&mut rng, key)
+                .map_err(|e| Error::Crypto(e.to_string()))?;
+        }
+        if armor {
+            builder
+                .to_armored_string(&mut rng, None.into())
+                .map(|s| s.into_bytes())
+                .map_err(|e| Error::Crypto(e.to_string()))
+        } else {
+            builder
+                .to_vec(&mut rng)
+                .map_err(|e| Error::Crypto(e.to_string()))
+        }
+    } else {
+        let mut builder = MessageBuilder::from_bytes("", plaintext.to_vec())
+            .seipd_v1(&mut rng, SymmetricKeyAlgorithm::AES256);
+        builder.sign(&card_signing_key, empty_pwd, hash_alg);
+        for key in &visible_subkeys {
+            builder
+                .encrypt_to_key(&mut rng, key)
+                .map_err(|e| Error::Crypto(e.to_string()))?;
+        }
+        for key in &hidden_subkeys {
+            builder
+                .encrypt_to_key_anonymous(&mut rng, key)
+                .map_err(|e| Error::Crypto(e.to_string()))?;
+        }
+        if armor {
+            builder
+                .to_armored_string(&mut rng, None.into())
+                .map(|s| s.into_bytes())
+                .map_err(|e| Error::Crypto(e.to_string()))
+        } else {
+            builder
+                .to_vec(&mut rng)
+                .map_err(|e| Error::Crypto(e.to_string()))
+        }
+    }
+}
+
 /// Sign `text` with a key on the card, producing a cleartext-signed
 /// (`-----BEGIN PGP SIGNED MESSAGE-----`) message.
 ///

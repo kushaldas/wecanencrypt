@@ -341,6 +341,230 @@ pub fn sign_and_encrypt_to_multiple(
     }
 }
 
+/// Sign-and-encrypt to a mixed set of "visible" and "hidden" recipients.
+///
+/// Visible recipients are added with `encrypt_to_key` (standard PKESK with
+/// the recipient's key id). Hidden recipients are added with
+/// `encrypt_to_key_anonymous` (a.k.a. RFC 4880 `throw-keyid` /
+/// `--hidden-recipient`): the PKESK packet's recipient key id is replaced
+/// with the all-zero wildcard so the message reveals only that an extra
+/// recipient exists, not who.
+///
+/// This is the primitive that PGP/MIME mail clients use to deliver
+/// "Bcc with encryption" without leaking Bcc identities to the To/Cc
+/// recipients. The full ciphertext is still a single OpenPGP message
+/// (efficient on the wire); every recipient — visible or hidden — sees the
+/// same plaintext after decryption.
+///
+/// At least one recipient (visible OR hidden) must be supplied; both
+/// lists may not be empty simultaneously. All recipients must share a
+/// single key version (V4 or V6); a mixed list is rejected per
+/// [`Error::KeyVersionMismatch`].
+///
+/// # Arguments
+/// * `signer_secret_key` - Signer's secret key bytes (armored or binary).
+/// * `signer_password` - Passphrase that unlocks the signing key.
+/// * `visible_recipient_keys` - Public keys whose key ids ARE exposed in
+///   the PKESK packets.
+/// * `hidden_recipient_keys` - Public keys whose key ids are REPLACED with
+///   the all-zero wildcard in the PKESK packets.
+/// * `plaintext` - Bytes to sign and encrypt.
+/// * `armor` - If true, ASCII-armored output; otherwise binary.
+pub fn sign_and_encrypt_to_multiple_with_hidden(
+    signer_secret_key: &[u8],
+    signer_password: &str,
+    visible_recipient_keys: &[&[u8]],
+    hidden_recipient_keys: &[&[u8]],
+    plaintext: &[u8],
+    armor: bool,
+) -> Result<Vec<u8>> {
+    if visible_recipient_keys.is_empty() && hidden_recipient_keys.is_empty() {
+        return Err(Error::InvalidInput("No recipients specified".to_string()));
+    }
+
+    let secret_key = parse_secret_key(signer_secret_key)?;
+    validate_secret_signing_usage(&secret_key, SigningKeyUsage::DataSignature)?;
+
+    // Validate visible + hidden together so a mixed V4/V6 split still gets
+    // caught (e.g. a visible V4 + hidden V6 must fail just like any other
+    // version mix).
+    let mut combined: Vec<&[u8]> =
+        Vec::with_capacity(visible_recipient_keys.len() + hidden_recipient_keys.len());
+    combined.extend_from_slice(visible_recipient_keys);
+    combined.extend_from_slice(hidden_recipient_keys);
+    let (_all_subkeys, recipients_version) = collect_encryption_keys(&combined)?;
+
+    // Re-collect each side separately so we can tell which subkeys to add
+    // via `encrypt_to_key` and which via `encrypt_to_key_anonymous`.
+    // `collect_encryption_keys` validated the version above, so per-side
+    // re-collection just produces the subkey lists.
+    let visible_subkeys: Vec<_> = if visible_recipient_keys.is_empty() {
+        Vec::new()
+    } else {
+        collect_encryption_keys(visible_recipient_keys)?.0
+    };
+    let hidden_subkeys: Vec<_> = if hidden_recipient_keys.is_empty() {
+        Vec::new()
+    } else {
+        collect_encryption_keys(hidden_recipient_keys)?.0
+    };
+
+    let (signing_key, hash_alg): (&dyn pgp::types::SigningKey, _) =
+        if let Some(subkey) = find_signing_subkey(&secret_key) {
+            let h = select_hash_for_params(subkey.key.public_params());
+            (&subkey.key, h)
+        } else if can_details_sign(&secret_key.details) {
+            let h = select_hash_for_params(secret_key.primary_key.public_params());
+            (&secret_key.primary_key, h)
+        } else {
+            return Err(Error::NoSigningSubkey);
+        };
+
+    let mut rng = thread_rng();
+    let signer_pwd: Password = signer_password.into();
+
+    if recipients_version == KeyVersion::V6 {
+        let mut builder = MessageBuilder::from_bytes("", plaintext.to_vec()).seipd_v2(
+            &mut rng,
+            SymmetricKeyAlgorithm::AES256,
+            AeadAlgorithm::Ocb,
+            ChunkSize::default(),
+        );
+        builder.sign(signing_key, signer_pwd, hash_alg);
+        for key in &visible_subkeys {
+            builder
+                .encrypt_to_key(&mut rng, key)
+                .map_err(|e| Error::Crypto(e.to_string()))?;
+        }
+        for key in &hidden_subkeys {
+            builder
+                .encrypt_to_key_anonymous(&mut rng, key)
+                .map_err(|e| Error::Crypto(e.to_string()))?;
+        }
+        if armor {
+            builder
+                .to_armored_string(&mut rng, None.into())
+                .map(|s| s.into_bytes())
+                .map_err(|e| Error::Crypto(e.to_string()))
+        } else {
+            builder
+                .to_vec(&mut rng)
+                .map_err(|e| Error::Crypto(e.to_string()))
+        }
+    } else {
+        let mut builder = MessageBuilder::from_bytes("", plaintext.to_vec())
+            .seipd_v1(&mut rng, SymmetricKeyAlgorithm::AES256);
+        builder.sign(signing_key, signer_pwd, hash_alg);
+        for key in &visible_subkeys {
+            builder
+                .encrypt_to_key(&mut rng, key)
+                .map_err(|e| Error::Crypto(e.to_string()))?;
+        }
+        for key in &hidden_subkeys {
+            builder
+                .encrypt_to_key_anonymous(&mut rng, key)
+                .map_err(|e| Error::Crypto(e.to_string()))?;
+        }
+        if armor {
+            builder
+                .to_armored_string(&mut rng, None.into())
+                .map(|s| s.into_bytes())
+                .map_err(|e| Error::Crypto(e.to_string()))
+        } else {
+            builder
+                .to_vec(&mut rng)
+                .map_err(|e| Error::Crypto(e.to_string()))
+        }
+    }
+}
+
+/// Encrypt to a mixed set of "visible" and "hidden" recipients (no
+/// signature). Sibling of [`sign_and_encrypt_to_multiple_with_hidden`].
+///
+/// Hidden recipients receive a PKESK with the recipient key id replaced
+/// by the all-zero wildcard (RFC 4880 `throw-keyid` / `--hidden-recipient`).
+pub fn encrypt_bytes_to_multiple_with_hidden(
+    visible_recipient_keys: &[&[u8]],
+    hidden_recipient_keys: &[&[u8]],
+    plaintext: &[u8],
+    armor: bool,
+) -> Result<Vec<u8>> {
+    if visible_recipient_keys.is_empty() && hidden_recipient_keys.is_empty() {
+        return Err(Error::InvalidInput("No recipients specified".to_string()));
+    }
+
+    let mut combined: Vec<&[u8]> =
+        Vec::with_capacity(visible_recipient_keys.len() + hidden_recipient_keys.len());
+    combined.extend_from_slice(visible_recipient_keys);
+    combined.extend_from_slice(hidden_recipient_keys);
+    let (_all_subkeys, recipients_version) = collect_encryption_keys(&combined)?;
+
+    let visible_subkeys: Vec<_> = if visible_recipient_keys.is_empty() {
+        Vec::new()
+    } else {
+        collect_encryption_keys(visible_recipient_keys)?.0
+    };
+    let hidden_subkeys: Vec<_> = if hidden_recipient_keys.is_empty() {
+        Vec::new()
+    } else {
+        collect_encryption_keys(hidden_recipient_keys)?.0
+    };
+
+    let mut rng = thread_rng();
+
+    if recipients_version == KeyVersion::V6 {
+        let mut builder = MessageBuilder::from_bytes("", plaintext.to_vec()).seipd_v2(
+            &mut rng,
+            SymmetricKeyAlgorithm::AES256,
+            AeadAlgorithm::Ocb,
+            ChunkSize::default(),
+        );
+        for key in &visible_subkeys {
+            builder
+                .encrypt_to_key(&mut rng, key)
+                .map_err(|e| Error::Crypto(e.to_string()))?;
+        }
+        for key in &hidden_subkeys {
+            builder
+                .encrypt_to_key_anonymous(&mut rng, key)
+                .map_err(|e| Error::Crypto(e.to_string()))?;
+        }
+        if armor {
+            builder
+                .to_armored_string(&mut rng, None.into())
+                .map(|s| s.into_bytes())
+                .map_err(|e| Error::Crypto(e.to_string()))
+        } else {
+            builder
+                .to_vec(&mut rng)
+                .map_err(|e| Error::Crypto(e.to_string()))
+        }
+    } else {
+        let mut builder = MessageBuilder::from_bytes("", plaintext.to_vec())
+            .seipd_v1(&mut rng, SymmetricKeyAlgorithm::AES256);
+        for key in &visible_subkeys {
+            builder
+                .encrypt_to_key(&mut rng, key)
+                .map_err(|e| Error::Crypto(e.to_string()))?;
+        }
+        for key in &hidden_subkeys {
+            builder
+                .encrypt_to_key_anonymous(&mut rng, key)
+                .map_err(|e| Error::Crypto(e.to_string()))?;
+        }
+        if armor {
+            builder
+                .to_armored_string(&mut rng, None.into())
+                .map(|s| s.into_bytes())
+                .map_err(|e| Error::Crypto(e.to_string()))
+        } else {
+            builder
+                .to_vec(&mut rng)
+                .map_err(|e| Error::Crypto(e.to_string()))
+        }
+    }
+}
+
 /// Reject deprecated/insecure symmetric algorithms per RFC 9580 §9.3.
 fn validate_sym_algo(sym_algo: SymmetricKeyAlgorithm) -> Result<()> {
     match sym_algo {
@@ -643,5 +867,142 @@ fn find_valid_encryption_subkeys(
 
 #[cfg(test)]
 mod tests {
-    // Tests would require key fixtures
+    use super::*;
+    use crate::{create_key_simple, decrypt_bytes, get_pub_key};
+
+    /// `sign_and_encrypt_to_multiple_with_hidden` must emit the visible
+    /// recipient's key id in clear, the hidden recipient's key id blanked
+    /// to the all-zero wildcard, and produce a ciphertext that BOTH
+    /// recipients can decrypt to the same plaintext. The wildcard PKESK
+    /// is what mail clients use to carry encrypted-Bcc without leaking
+    /// who the Bcc was.
+    #[test]
+    fn sign_encrypt_with_hidden_emits_wildcard_keyid_for_hidden_recipients() {
+        let alice = create_key_simple("alice-pw", &["Alice <alice@example.com>"]).unwrap();
+        let bob = create_key_simple("bob-pw", &["Bob <bob@example.com>"]).unwrap();
+        let carol = create_key_simple("carol-pw", &["Carol <carol@example.com>"]).unwrap();
+
+        let bob_pub = get_pub_key(&bob.secret_key).unwrap();
+        let carol_pub = get_pub_key(&carol.secret_key).unwrap();
+
+        let ct = sign_and_encrypt_to_multiple_with_hidden(
+            &alice.secret_key,
+            "alice-pw",
+            &[bob_pub.as_bytes()],
+            &[carol_pub.as_bytes()],
+            b"the secret is forty-two",
+            true,
+        )
+        .expect("encrypt with hidden recipients");
+
+        // PKESK enumeration: exactly two recipients, one with Bob's key
+        // id, one with the wildcard (all-zero) key id.
+        let key_ids = bytes_encrypted_for(&ct).expect("enumerate PKESKs");
+        assert_eq!(
+            key_ids.len(),
+            2,
+            "expected 2 PKESK packets (1 visible + 1 hidden), got {:?}",
+            key_ids
+        );
+        let wildcard = "0000000000000000";
+        assert!(
+            key_ids.iter().any(|id| id.eq_ignore_ascii_case(wildcard)),
+            "expected one wildcard PKESK id (Carol hidden), got {:?}",
+            key_ids
+        );
+        assert!(
+            key_ids.iter().any(|id| !id.eq_ignore_ascii_case(wildcard)),
+            "expected one non-wildcard PKESK id (Bob visible), got {:?}",
+            key_ids
+        );
+
+        // Both recipients still decrypt to the same plaintext.
+        let pt_bob = decrypt_bytes(&bob.secret_key, &ct, "bob-pw").unwrap();
+        let pt_carol = decrypt_bytes(&carol.secret_key, &ct, "carol-pw").unwrap();
+        assert_eq!(pt_bob, b"the secret is forty-two");
+        assert_eq!(pt_bob, pt_carol);
+    }
+
+    /// `encrypt_bytes_to_multiple_with_hidden` (no signer) is the
+    /// equivalent primitive for encrypt-only PGP/MIME messages. Same
+    /// wildcard-PKESK behaviour, same dual decryptability.
+    #[test]
+    fn encrypt_only_with_hidden_emits_wildcard_keyid_for_hidden_recipients() {
+        let bob = create_key_simple("bob-pw", &["Bob <bob@example.com>"]).unwrap();
+        let carol = create_key_simple("carol-pw", &["Carol <carol@example.com>"]).unwrap();
+        let bob_pub = get_pub_key(&bob.secret_key).unwrap();
+        let carol_pub = get_pub_key(&carol.secret_key).unwrap();
+
+        let ct = encrypt_bytes_to_multiple_with_hidden(
+            &[bob_pub.as_bytes()],
+            &[carol_pub.as_bytes()],
+            b"no signer",
+            true,
+        )
+        .expect("encrypt-only with hidden");
+
+        let key_ids = bytes_encrypted_for(&ct).expect("enumerate PKESKs");
+        let wildcard = "0000000000000000";
+        assert_eq!(key_ids.len(), 2);
+        assert!(key_ids.iter().any(|id| id.eq_ignore_ascii_case(wildcard)));
+
+        // Bob and Carol both decrypt.
+        assert_eq!(
+            decrypt_bytes(&bob.secret_key, &ct, "bob-pw").unwrap(),
+            b"no signer"
+        );
+        assert_eq!(
+            decrypt_bytes(&carol.secret_key, &ct, "carol-pw").unwrap(),
+            b"no signer"
+        );
+    }
+
+    /// At least one recipient must be supplied across the two lists —
+    /// both empty is rejected. Prevents accidentally producing a
+    /// "header-only" OpenPGP message that no-one can decrypt.
+    #[test]
+    fn sign_encrypt_with_hidden_rejects_empty_recipient_lists() {
+        let alice = create_key_simple("alice-pw", &["Alice <alice@example.com>"]).unwrap();
+        let err = sign_and_encrypt_to_multiple_with_hidden(
+            &alice.secret_key,
+            "alice-pw",
+            &[],
+            &[],
+            b"nope",
+            true,
+        )
+        .unwrap_err();
+        assert!(matches!(err, Error::InvalidInput(_)));
+    }
+
+    /// A hidden-only recipient list is accepted: the entire send is Bcc.
+    /// This pins that the implementation doesn't accidentally require at
+    /// least one visible recipient (chithi may need this for newsletter-
+    /// style sends where every recipient is anonymised).
+    #[test]
+    fn sign_encrypt_with_hidden_accepts_hidden_only() {
+        let alice = create_key_simple("alice-pw", &["Alice <alice@example.com>"]).unwrap();
+        let bob = create_key_simple("bob-pw", &["Bob <bob@example.com>"]).unwrap();
+        let bob_pub = get_pub_key(&bob.secret_key).unwrap();
+
+        let ct = sign_and_encrypt_to_multiple_with_hidden(
+            &alice.secret_key,
+            "alice-pw",
+            &[],
+            &[bob_pub.as_bytes()],
+            b"hidden-only",
+            true,
+        )
+        .expect("encrypt with only hidden recipients");
+
+        let key_ids = bytes_encrypted_for(&ct).expect("enumerate PKESKs");
+        assert_eq!(key_ids.len(), 1);
+        assert!(
+            key_ids[0].eq_ignore_ascii_case("0000000000000000"),
+            "expected wildcard PKESK in hidden-only ciphertext: {:?}",
+            key_ids
+        );
+        let pt = decrypt_bytes(&bob.secret_key, &ct, "bob-pw").unwrap();
+        assert_eq!(pt, b"hidden-only");
+    }
 }

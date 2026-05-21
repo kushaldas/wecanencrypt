@@ -120,7 +120,8 @@ pub(crate) fn find_signing_subkey(secret_key: &SignedSecretKey) -> Option<&Signe
 pub fn verify_software_passphrase(secret_key: &[u8], password: &str) -> Result<()> {
     let secret_key = parse_secret_key(secret_key)?;
     let password_obj: Password = password.into();
-    let unlock_err = |e: pgp::errors::Error| Error::Crypto(format!("primary-key unlock failed: {e}"));
+    let unlock_err =
+        |e: pgp::errors::Error| Error::Crypto(format!("primary-key unlock failed: {e}"));
     secret_key
         .primary_key
         .unlock(&password_obj, |_pub_params, _plain| Ok(()))
