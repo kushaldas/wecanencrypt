@@ -564,7 +564,7 @@ pub fn export_public_for_autocrypt(key_data: &[u8], addr: &str) -> Result<Vec<u8
         let any_matching_uid = public_key.details.users.iter().any(matches_addr);
         return Err(Error::InvalidInput(if any_matching_uid {
             format!(
-                "User ID matching {addr} has no verified self-signature; \
+                "no User ID matching {addr} has a verified self-signature; \
                  cannot produce a structurally-valid Autocrypt key"
             )
         } else {
@@ -2025,7 +2025,7 @@ mod tests {
                     "error should mention the address; got: {msg}"
                 );
                 assert!(
-                    msg.contains("no verified self-signature"),
+                    msg.contains("verified self-signature"),
                     "error should explain the cause; got: {msg}"
                 );
             }

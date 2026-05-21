@@ -111,21 +111,24 @@ pub(crate) fn extract_uid_email(uid: &str) -> Option<String> {
             let inner = uid[start + 1..end].trim();
             // Same shape check as the bare-token branch below: the
             // contents between the brackets must contain `@` and no
-            // embedded spaces. Without this, a malformed UID like
+            // embedded whitespace. Without this, a malformed UID like
             // `"Name <not_an_email>"` or `"Name <addr with space>"`
             // would put a non-email token into the keystore email index
-            // and into Autocrypt address comparisons.
-            if inner.contains('@') && !inner.contains(' ') {
+            // and into Autocrypt address comparisons. Rejecting any
+            // `char::is_whitespace()` (not just ASCII `' '`) covers
+            // tabs, newlines, and NBSPs that an addr-spec also can't
+            // contain.
+            if inner.contains('@') && !inner.chars().any(char::is_whitespace) {
                 return Some(inner.to_string());
             }
         }
     }
     // Bare-address form: the whole UID is the address. Strip outer
-    // whitespace before checking for embedded spaces — that's how
+    // whitespace before checking for embedded whitespace — that's how
     // "alice@example.com\n" or "  alice@example.com  " still classifies
     // as a bare email, while "Just A Name" with internal spaces does not.
     let trimmed = uid.trim();
-    if trimmed.contains('@') && !trimmed.contains(' ') {
+    if trimmed.contains('@') && !trimmed.chars().any(char::is_whitespace) {
         return Some(trimmed.to_string());
     }
     None

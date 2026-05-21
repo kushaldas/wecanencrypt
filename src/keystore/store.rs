@@ -1880,6 +1880,12 @@ mod tests {
         // or "Name <addr with space>".
         assert_eq!(extract_uid_email("Name <not_an_email>"), None);
         assert_eq!(extract_uid_email("Name <addr with space>"), None);
+        // Non-space whitespace inside the address (tab, newline, NBSP)
+        // is also rejected — an addr-spec can't contain any of these,
+        // and they'd otherwise pollute the keystore email index.
+        assert_eq!(extract_uid_email("Name <alice@\texample.com>"), None);
+        assert_eq!(extract_uid_email("Name <alice@\nexample.com>"), None);
+        assert_eq!(extract_uid_email("alice@\texample.com"), None);
     }
 
     #[test]
