@@ -1234,4 +1234,89 @@ mod tests {
             b"v6 no signer"
         );
     }
+
+    /// `collect_visible_and_hidden_keys` rejects a cross-list V4/V6 split:
+    /// a V4 visible recipient + V6 hidden recipient (or vice versa) must
+    /// surface as [`Error::KeyVersionMismatch`] before any encryption
+    /// happens, because RFC 9580 §5.1.2 / §5.3.2 forbid V6 PKESKs
+    /// preceding a V1 SEIPD and V3 PKESKs preceding a V2 SEIPD. Without
+    /// this guard the caller could not route the message down a single
+    /// SEIPD path.
+    ///
+    /// One V4 key + one V6 key cover all four permutations (two public
+    /// entry points × two orderings) without paying the V6-keygen cost
+    /// more than once.
+    #[test]
+    fn with_hidden_rejects_cross_list_v4_v6_split() {
+        let alice_v4 = create_key_simple("alice-pw", &["Alice <alice@example.com>"]).unwrap();
+        let bob_v4 = create_key_simple("bob-pw", &["Bob <bob@example.com>"]).unwrap();
+        let carol_v6 = create_key_v6_simple(
+            "carol-pw",
+            &["Carol <carol@example.com>"],
+            CipherSuite::Cv25519Modern,
+        )
+        .unwrap();
+        let bob_v4_pub = get_pub_key(&bob_v4.secret_key).unwrap();
+        let carol_v6_pub = get_pub_key(&carol_v6.secret_key).unwrap();
+
+        let assert_mismatch = |err: Error, label: &str| {
+            assert!(
+                matches!(err, Error::KeyVersionMismatch { .. }),
+                "{label}: expected KeyVersionMismatch, got {err:?}",
+            );
+        };
+
+        // sign_and_encrypt_to_multiple_with_hidden: V4 visible + V6 hidden.
+        assert_mismatch(
+            sign_and_encrypt_to_multiple_with_hidden(
+                &alice_v4.secret_key,
+                "alice-pw",
+                &[bob_v4_pub.as_bytes()],
+                &[carol_v6_pub.as_bytes()],
+                b"payload",
+                true,
+            )
+            .unwrap_err(),
+            "sign+encrypt V4-visible + V6-hidden",
+        );
+
+        // sign_and_encrypt_to_multiple_with_hidden: V6 visible + V4 hidden
+        // (swap the two sides — the guard must fire either way).
+        assert_mismatch(
+            sign_and_encrypt_to_multiple_with_hidden(
+                &alice_v4.secret_key,
+                "alice-pw",
+                &[carol_v6_pub.as_bytes()],
+                &[bob_v4_pub.as_bytes()],
+                b"payload",
+                true,
+            )
+            .unwrap_err(),
+            "sign+encrypt V6-visible + V4-hidden",
+        );
+
+        // encrypt_bytes_to_multiple_with_hidden: V4 visible + V6 hidden.
+        assert_mismatch(
+            encrypt_bytes_to_multiple_with_hidden(
+                &[bob_v4_pub.as_bytes()],
+                &[carol_v6_pub.as_bytes()],
+                b"payload",
+                true,
+            )
+            .unwrap_err(),
+            "encrypt-only V4-visible + V6-hidden",
+        );
+
+        // encrypt_bytes_to_multiple_with_hidden: V6 visible + V4 hidden.
+        assert_mismatch(
+            encrypt_bytes_to_multiple_with_hidden(
+                &[carol_v6_pub.as_bytes()],
+                &[bob_v4_pub.as_bytes()],
+                b"payload",
+                true,
+            )
+            .unwrap_err(),
+            "encrypt-only V6-visible + V4-hidden",
+        );
+    }
 }
