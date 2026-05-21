@@ -16,8 +16,9 @@ use zeroize::Zeroizing;
 
 use crate::error::{Error, Result};
 use crate::internal::{
-    fingerprint_to_hex, is_primary_secret_key_revoked, parse_public_key, parse_secret_key,
-    public_key_to_armored, secret_key_to_bytes, validate_secret_signing_usage, SigningKeyUsage,
+    fingerprint_to_hex, is_primary_secret_key_revoked, parse_key, parse_public_key,
+    parse_secret_key, public_key_to_armored, secret_key_to_bytes, validate_secret_signing_usage,
+    SigningKeyUsage,
 };
 use crate::types::{CertificationType, CipherSuite, GeneratedKey, SubkeyFlags};
 
@@ -452,6 +453,155 @@ pub fn get_pub_key(key_data: &[u8]) -> Result<String> {
     let secret_key = parse_secret_key(key_data)?;
     let public_key = SignedPublicKey::from(secret_key);
     public_key_to_armored(&public_key)
+}
+
+/// Export an Autocrypt-Level-1-compliant transferable public key (binary).
+///
+/// Returns the binary OpenPGP bytes the caller should base64-encode into the
+/// `keydata=` attribute of the `Autocrypt:` mail header (RFC-ish — see
+/// https://autocrypt.org/level1.html#openpgp-based-key-data). The bytes are
+/// a minimised transferable public key per Autocrypt §5.2:
+///
+/// - the primary public-key packet
+/// - **exactly one** User ID packet whose email address matches `addr`
+///   (other UIDs and User Attribute packets are stripped — Autocrypt is
+///   per-address, and every mail carries this header, so size matters)
+/// - the subkey packets, each followed only by its **self**-signatures
+/// - no third-party certifications anywhere
+///
+/// Self-signatures are kept on revoked components so receivers can still
+/// honour primary-key and subkey revocations.
+///
+/// # Arguments
+/// * `key_data` - Key data (armored or binary), public or secret. If a
+///   secret key is provided, the public material is extracted from it.
+/// * `addr` - Email address selecting which UID to keep (e.g.
+///   `"alice@example.com"`). Comparison is case-insensitive on the local
+///   and domain parts.
+///
+/// # Errors
+/// Returns [`Error::InvalidInput`] if `addr` doesn't match any UID on the key.
+pub fn export_public_for_autocrypt(key_data: &[u8], addr: &str) -> Result<Vec<u8>> {
+    use pgp::ser::Serialize;
+
+    let (public_key, _) = parse_key(key_data)?;
+
+    let primary_fp_upper = fingerprint_to_hex(&public_key.primary_key);
+    let primary_key_id_upper = hex::encode_upper(public_key.primary_key.legacy_key_id().as_ref());
+    let addr_lc = addr.trim().to_ascii_lowercase();
+
+    // Filter UIDs to the one matching `addr`. Strip third-party certs;
+    // keep only self-signatures from the primary key.
+    let matching_users: Vec<SignedUser> = public_key
+        .details
+        .users
+        .iter()
+        .filter(|u| {
+            let uid_str = String::from_utf8_lossy(u.id.id());
+            extract_uid_email(&uid_str)
+                .map(|e| e.to_ascii_lowercase() == addr_lc)
+                .unwrap_or(false)
+        })
+        .map(|u| {
+            let self_sigs: Vec<pgp::packet::Signature> = u
+                .signatures
+                .iter()
+                .filter(|sig| is_self_signature(sig, &primary_fp_upper, &primary_key_id_upper))
+                .cloned()
+                .collect();
+            SignedUser::new(u.id.clone(), self_sigs)
+        })
+        .collect();
+
+    if matching_users.is_empty() {
+        return Err(Error::InvalidInput(format!(
+            "no User ID on key matches address {addr}"
+        )));
+    }
+
+    // Strip third-party certifications from subkey binding signatures.
+    // Keep every subkey — Autocrypt is fine with signing subkeys present,
+    // and downstream MUAs may need them to verify the sender's signatures.
+    let stripped_subkeys: Vec<pgp::composed::SignedPublicSubKey> = public_key
+        .public_subkeys
+        .iter()
+        .map(|sk| {
+            let self_sigs: Vec<pgp::packet::Signature> = sk
+                .signatures
+                .iter()
+                .filter(|sig| is_self_signature(sig, &primary_fp_upper, &primary_key_id_upper))
+                .cloned()
+                .collect();
+            pgp::composed::SignedPublicSubKey {
+                key: sk.key.clone(),
+                signatures: self_sigs,
+            }
+        })
+        .collect();
+
+    // Direct-key signatures: keep only self-signatures (V6 keys carry
+    // capability/expiration in direct sigs). Revocation signatures live in
+    // their own slot and are kept intact.
+    let direct_sigs: Vec<pgp::packet::Signature> = public_key
+        .details
+        .direct_signatures
+        .iter()
+        .filter(|sig| is_self_signature(sig, &primary_fp_upper, &primary_key_id_upper))
+        .cloned()
+        .collect();
+
+    let minimised = SignedPublicKey {
+        primary_key: public_key.primary_key.clone(),
+        details: SignedKeyDetails::new(
+            public_key.details.revocation_signatures.clone(),
+            direct_sigs,
+            matching_users,
+            // User Attributes (notably image packets) are large and not
+            // useful per-message — Autocrypt strips them.
+            Vec::new(),
+        ),
+        public_subkeys: stripped_subkeys,
+    };
+
+    minimised
+        .to_bytes()
+        .map_err(|e| Error::Crypto(e.to_string()))
+}
+
+/// Pull the email out of a `"Name <addr@host>"` UID string, or treat a bare
+/// `addr@host` token as the email. Mirrors `keystore::store::extract_email`.
+fn extract_uid_email(uid: &str) -> Option<String> {
+    if let (Some(start), Some(end)) = (uid.find('<'), uid.find('>')) {
+        if start < end {
+            return Some(uid[start + 1..end].to_string());
+        }
+    }
+    if uid.contains('@') && !uid.contains(' ') {
+        return Some(uid.to_string());
+    }
+    None
+}
+
+/// True if a signature was issued by `primary` (matched on either issuer
+/// fingerprint or — for V4-era sigs without a fingerprint subpacket — the
+/// legacy 8-byte key ID). Signatures with neither subpacket present are
+/// conservatively treated as third-party.
+fn is_self_signature(
+    sig: &pgp::packet::Signature,
+    primary_fp_upper: &str,
+    primary_key_id_upper: &str,
+) -> bool {
+    for fp in sig.issuer_fingerprint() {
+        if hex::encode_upper(fp.as_bytes()) == primary_fp_upper {
+            return true;
+        }
+    }
+    for kid in sig.issuer_key_id() {
+        if hex::encode_upper(kid.as_ref()) == primary_key_id_upper {
+            return true;
+        }
+    }
+    false
 }
 
 /// Update the expiration time for specific subkeys.
@@ -1387,5 +1537,152 @@ mod tests {
         assert!(flags.encryption);
         assert!(flags.signing);
         assert!(!flags.authentication);
+    }
+
+    /// The autocrypt minimisation must round-trip through rpgp's binary
+    /// parser. If the output won't reparse, no receiving MUA will accept it.
+    #[test]
+    fn autocrypt_export_round_trips_through_parser() {
+        let key = crate::create_key_simple("pw", &["Alice <alice@example.com>"]).unwrap();
+
+        let autocrypt =
+            super::export_public_for_autocrypt(key.public_key.as_bytes(), "alice@example.com")
+                .expect("autocrypt export");
+
+        // Must be BINARY (no armor header).
+        assert!(
+            !autocrypt.starts_with(b"-----BEGIN"),
+            "autocrypt keydata MUST be binary, not armored"
+        );
+
+        // Parse it back as a valid transferable public key.
+        let info = crate::parse_key_bytes(&autocrypt, false).expect("parse minimised key");
+        assert_eq!(info.user_ids.len(), 1, "exactly one UID");
+        assert_eq!(info.user_ids[0].value, "Alice <alice@example.com>");
+        assert!(!info.subkeys.is_empty(), "subkey survived minimisation");
+    }
+
+    /// Multi-UID keys: only the UID matching `addr` is kept, and the others
+    /// are stripped — this is the per-address invariant Autocrypt §2.1.1
+    /// requires, and the size win that justifies sending the header at all.
+    #[test]
+    fn autocrypt_export_strips_non_matching_uids() {
+        let key = crate::create_key_simple("pw", &["Alice <alice@example.com>"]).unwrap();
+        // Add a second UID, then minimise on the first.
+        let with_two = crate::add_uid(&key.secret_key, "Alice Work <alice@work.example>", "pw")
+            .expect("add_uid");
+
+        let autocrypt =
+            super::export_public_for_autocrypt(&with_two, "alice@example.com").expect("export");
+
+        let info = crate::parse_key_bytes(&autocrypt, false).expect("parse");
+        assert_eq!(info.user_ids.len(), 1, "only addr-matching UID kept");
+        assert_eq!(info.user_ids[0].value, "Alice <alice@example.com>");
+    }
+
+    /// Address match is case-insensitive on both local and domain parts —
+    /// users routinely type Mixed-Case addresses, and RFC 5321 §2.3.11
+    /// says the domain part is case-insensitive anyway.
+    #[test]
+    fn autocrypt_export_matches_address_case_insensitively() {
+        let key = crate::create_key_simple("pw", &["Alice <Alice@Example.COM>"]).unwrap();
+
+        let autocrypt =
+            super::export_public_for_autocrypt(key.public_key.as_bytes(), "alice@example.com")
+                .expect("case-insensitive match");
+        let info = crate::parse_key_bytes(&autocrypt, false).unwrap();
+        assert_eq!(info.user_ids.len(), 1);
+    }
+
+    /// No matching UID → caller-visible error. Silently dropping all UIDs
+    /// would produce an OpenPGP packet sequence that's not a valid
+    /// transferable public key (RFC 4880 §11.1 mandates one user id) and
+    /// every receiving MUA would reject it.
+    #[test]
+    fn autocrypt_export_errors_when_addr_does_not_match() {
+        let key = crate::create_key_simple("pw", &["Alice <alice@example.com>"]).unwrap();
+        let err =
+            super::export_public_for_autocrypt(key.public_key.as_bytes(), "nobody@example.com")
+                .expect_err("should fail");
+        match err {
+            Error::InvalidInput(msg) => assert!(msg.contains("nobody@example.com")),
+            other => panic!("unexpected error variant: {other:?}"),
+        }
+    }
+
+    /// Secret-key input should produce the same minimised PUBLIC bytes as
+    /// public-key input. Callers (libtumpa) pass whatever the keystore has —
+    /// we mustn't leak secret packets either way.
+    #[test]
+    fn autocrypt_export_extracts_public_from_secret_input() {
+        let key = crate::create_key_simple("pw", &["Alice <alice@example.com>"]).unwrap();
+
+        let from_secret =
+            super::export_public_for_autocrypt(&key.secret_key, "alice@example.com").unwrap();
+        let from_public =
+            super::export_public_for_autocrypt(key.public_key.as_bytes(), "alice@example.com")
+                .unwrap();
+
+        // Reparse and compare: the minimised keys must have identical
+        // primary-key fingerprints AND must contain no secret packets.
+        let info_s = crate::parse_key_bytes(&from_secret, false).unwrap();
+        let info_p = crate::parse_key_bytes(&from_public, false).unwrap();
+        assert_eq!(info_s.fingerprint, info_p.fingerprint);
+        assert!(
+            !info_s.is_secret,
+            "autocrypt export must never include secret material"
+        );
+    }
+
+    /// Third-party certifications on the UID must NOT appear in the
+    /// autocrypt output (Autocrypt §5.2). If they leaked through, the
+    /// header would grow unboundedly with each third-party cert and might
+    /// expose the social graph of the sender.
+    #[test]
+    fn autocrypt_export_strips_third_party_certifications() {
+        let alice = crate::create_key_simple("pw", &["Alice <alice@example.com>"]).unwrap();
+        let bob = crate::create_key_simple("pw", &["Bob <bob@example.com>"]).unwrap();
+
+        // Bob certifies Alice's UID.
+        let alice_certified = crate::certify_key(
+            &bob.secret_key,
+            alice.public_key.as_bytes(),
+            CertificationType::Positive,
+            None,
+            "pw",
+        )
+        .expect("certify_key");
+
+        // Sanity: the certified copy has Bob's signature on Alice's UID.
+        let info_before = crate::parse_key_bytes(&alice_certified, false).unwrap();
+        assert!(
+            !info_before.user_ids[0].certifications.is_empty(),
+            "test setup: expected Bob's third-party cert on Alice's UID"
+        );
+
+        // Run the minimisation, then check the third-party cert is gone.
+        let autocrypt =
+            super::export_public_for_autocrypt(&alice_certified, "alice@example.com").unwrap();
+        let info_after = crate::parse_key_bytes(&autocrypt, false).unwrap();
+        assert_eq!(info_after.user_ids.len(), 1);
+        assert!(
+            info_after.user_ids[0].certifications.is_empty(),
+            "third-party certifications must be stripped from autocrypt keydata"
+        );
+    }
+
+    #[test]
+    fn extract_uid_email_handles_common_shapes() {
+        assert_eq!(
+            super::extract_uid_email("Alice <alice@example.com>").as_deref(),
+            Some("alice@example.com"),
+        );
+        assert_eq!(
+            super::extract_uid_email("alice@example.com").as_deref(),
+            Some("alice@example.com"),
+        );
+        // Comment-only UIDs (no email) → None, so the caller errors out
+        // cleanly rather than silently picking a UID with no address.
+        assert_eq!(super::extract_uid_email("Just A Name").as_deref(), None);
     }
 }
