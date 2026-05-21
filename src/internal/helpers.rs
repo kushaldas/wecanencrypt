@@ -92,13 +92,27 @@ pub(crate) fn fingerprint_to_hex(key: &impl KeyDetails) -> String {
 /// the address that's about to go into an `Autocrypt:` header, and the
 /// export then has to match on the same address.
 pub(crate) fn extract_uid_email(uid: &str) -> Option<String> {
+    // Bracketed form: `Name <addr@host>` — trim whitespace inside the
+    // angle brackets. Some UIDs in the wild include incidental spaces
+    // around the address (e.g. "Alice < alice@example.com >"); without
+    // trimming we'd return " alice@example.com " and miss the match
+    // against `addr.trim()` in autocrypt export, and pollute the
+    // keystore email index with whitespace-padded values.
     if let (Some(start), Some(end)) = (uid.find('<'), uid.find('>')) {
         if start < end {
-            return Some(uid[start + 1..end].to_string());
+            let inner = uid[start + 1..end].trim();
+            if !inner.is_empty() {
+                return Some(inner.to_string());
+            }
         }
     }
-    if uid.contains('@') && !uid.contains(' ') {
-        return Some(uid.to_string());
+    // Bare-address form: the whole UID is the address. Strip outer
+    // whitespace before checking for embedded spaces — that's how
+    // "alice@example.com\n" or "  alice@example.com  " still classifies
+    // as a bare email, while "Just A Name" with internal spaces does not.
+    let trimmed = uid.trim();
+    if trimmed.contains('@') && !trimmed.contains(' ') {
+        return Some(trimmed.to_string());
     }
     None
 }

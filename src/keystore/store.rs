@@ -1844,7 +1844,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_extract_email() {
+    fn test_extract_uid_email() {
         assert_eq!(
             extract_uid_email("Alice <alice@example.com>"),
             Some("alice@example.com".to_string())
@@ -1854,6 +1854,18 @@ mod tests {
             Some("bob@example.com".to_string())
         );
         assert_eq!(extract_uid_email("Just a Name"), None);
+        // Bracketed form with incidental whitespace around the address
+        // must trim — otherwise the value won't match against the
+        // address that lands in the autocrypt header.
+        assert_eq!(
+            extract_uid_email("Alice < alice@example.com >"),
+            Some("alice@example.com".to_string())
+        );
+        // Bare-address form with surrounding whitespace must trim.
+        assert_eq!(
+            extract_uid_email("  alice@example.com  "),
+            Some("alice@example.com".to_string())
+        );
     }
 
     #[test]

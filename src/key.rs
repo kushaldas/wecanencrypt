@@ -495,9 +495,7 @@ pub fn export_public_for_autocrypt(key_data: &[u8], addr: &str) -> Result<Vec<u8
     use pgp::ser::Serialize;
 
     let (public_key, _) = parse_key(key_data)?;
-
-    let primary_fp_upper = fingerprint_to_hex(&public_key.primary_key);
-    let primary_key_id_upper = hex::encode_upper(public_key.primary_key.legacy_key_id().as_ref());
+    let primary = &public_key.primary_key;
     let addr_lc = addr.trim().to_ascii_lowercase();
 
     // Pick exactly ONE UID matching `addr` (Autocrypt §2.1.1: "exactly one
@@ -523,18 +521,25 @@ pub fn export_public_for_autocrypt(key_data: &[u8], addr: &str) -> Result<Vec<u8
         .or_else(|| public_key.details.users.iter().find(|u| matches_addr(u)))
         .ok_or_else(|| Error::InvalidInput(format!("no User ID on key matches address {addr}")))?;
 
-    // Strip third-party certifications on the kept UID; keep only self-sigs.
+    // Keep only signatures that cryptographically verify against the
+    // primary key. The issuer-fingerprint subpacket is just metadata —
+    // an attacker can splice a forged signature whose issuer subpacket
+    // claims the primary as issuer but doesn't verify; and legitimate
+    // self-sigs may omit the subpacket entirely (V6, some V4 producers).
+    // Verifying is the only sound test of "did this primary actually
+    // issue this signature".
     let user_self_sigs: Vec<pgp::packet::Signature> = picked_user
         .signatures
         .iter()
-        .filter(|sig| is_self_signature(sig, &primary_fp_upper, &primary_key_id_upper))
+        .filter(|sig| is_verified_self_uid_signature(sig, primary, picked_user))
         .cloned()
         .collect();
     let matching_users = vec![SignedUser::new(picked_user.id.clone(), user_self_sigs)];
 
-    // Strip third-party certifications from subkey binding signatures.
-    // Keep every subkey — Autocrypt is fine with signing subkeys present,
-    // and downstream MUAs may need them to verify the sender's signatures.
+    // Subkey binding/revocation signatures: keep every subkey, drop sigs
+    // that don't verify against the primary. Autocrypt is fine with
+    // signing subkeys present, and downstream MUAs may need them to
+    // verify the sender's signatures.
     let stripped_subkeys: Vec<pgp::composed::SignedPublicSubKey> = public_key
         .public_subkeys
         .iter()
@@ -542,7 +547,7 @@ pub fn export_public_for_autocrypt(key_data: &[u8], addr: &str) -> Result<Vec<u8
             let self_sigs: Vec<pgp::packet::Signature> = sk
                 .signatures
                 .iter()
-                .filter(|sig| is_self_signature(sig, &primary_fp_upper, &primary_key_id_upper))
+                .filter(|sig| is_verified_self_subkey_signature(sig, primary, &sk.key))
                 .cloned()
                 .collect();
             pgp::composed::SignedPublicSubKey {
@@ -552,33 +557,32 @@ pub fn export_public_for_autocrypt(key_data: &[u8], addr: &str) -> Result<Vec<u8
         })
         .collect();
 
-    // Direct-key signatures: keep only self-signatures (V6 keys carry
-    // capability/expiration in direct sigs).
+    // Direct-key signatures (V6 keys carry capability/expiration in
+    // direct sigs, type 0x1F). Keep only those that verify against the
+    // primary.
     let direct_sigs: Vec<pgp::packet::Signature> = public_key
         .details
         .direct_signatures
         .iter()
-        .filter(|sig| is_self_signature(sig, &primary_fp_upper, &primary_key_id_upper))
+        .filter(|sig| is_verified_self_primary_signature(sig, primary))
         .cloned()
         .collect();
 
-    // Primary-key revocation signatures: keep only self-revocations.
-    // RFC 4880 §5.2.3.15 lets a designated revoker issue KeyRevocation
-    // signatures from a different key; those are conceptually third-party
-    // assertions about this key's status and don't belong in a minimised
-    // Autocrypt header (the receiving MUA cannot verify the revoker's
-    // authority from the keydata alone, and including them grows the
-    // header for no benefit).
+    // Primary-key revocation signatures (type 0x20). RFC 4880 §5.2.3.15
+    // lets a designated revoker issue KeyRevocation signatures from a
+    // different key; those are conceptually third-party assertions and
+    // don't belong in a minimised Autocrypt header. Verifying against
+    // the primary keeps only the primary's own self-revocations.
     let revocation_sigs: Vec<pgp::packet::Signature> = public_key
         .details
         .revocation_signatures
         .iter()
-        .filter(|sig| is_self_signature(sig, &primary_fp_upper, &primary_key_id_upper))
+        .filter(|sig| is_verified_self_primary_signature(sig, primary))
         .cloned()
         .collect();
 
     let minimised = SignedPublicKey {
-        primary_key: public_key.primary_key.clone(),
+        primary_key: primary.clone(),
         details: SignedKeyDetails::new(
             revocation_sigs,
             direct_sigs,
@@ -595,26 +599,59 @@ pub fn export_public_for_autocrypt(key_data: &[u8], addr: &str) -> Result<Vec<u8
         .map_err(|e| Error::Crypto(e.to_string()))
 }
 
-/// True if a signature was issued by `primary` (matched on either issuer
-/// fingerprint or — for V4-era sigs without a fingerprint subpacket — the
-/// legacy 8-byte key ID). Signatures with neither subpacket present are
-/// conservatively treated as third-party.
-fn is_self_signature(
+/// True if `sig` is a UID self-signature (certification or self-revocation)
+/// that cryptographically verifies against `primary` over `user.id`.
+///
+/// Verification is the only sound test of "did this primary actually
+/// issue this signature": the issuer-fingerprint subpacket is unsigned
+/// metadata an attacker can spoof, and legitimate self-sigs sometimes
+/// omit it entirely (V6 and some older V4 producers).
+fn is_verified_self_uid_signature(
     sig: &pgp::packet::Signature,
-    primary_fp_upper: &str,
-    primary_key_id_upper: &str,
+    primary: &pgp::packet::PublicKey,
+    user: &SignedUser,
 ) -> bool {
-    for fp in sig.issuer_fingerprint() {
-        if hex::encode_upper(fp.as_bytes()) == primary_fp_upper {
-            return true;
-        }
-    }
-    for kid in sig.issuer_key_id() {
-        if hex::encode_upper(kid.as_ref()) == primary_key_id_upper {
-            return true;
-        }
-    }
-    false
+    matches!(
+        sig.typ(),
+        Some(SignatureType::CertGeneric)
+            | Some(SignatureType::CertPersona)
+            | Some(SignatureType::CertCasual)
+            | Some(SignatureType::CertPositive)
+            | Some(SignatureType::CertRevocation)
+    ) && sig
+        .verify_certification(primary, pgp::types::Tag::UserId, &user.id)
+        .is_ok()
+}
+
+/// True if `sig` is a subkey binding or subkey revocation that
+/// cryptographically verifies against `primary` over `subkey_key`.
+/// `verify_subkey_binding` hashes `primary || subkey`, which is the
+/// hash input for both SubkeyBinding (0x18) and SubkeyRevocation (0x28).
+fn is_verified_self_subkey_signature<K>(
+    sig: &pgp::packet::Signature,
+    primary: &pgp::packet::PublicKey,
+    subkey_key: &K,
+) -> bool
+where
+    K: pgp::types::KeyDetails + pgp::ser::Serialize,
+{
+    matches!(
+        sig.typ(),
+        Some(SignatureType::SubkeyBinding) | Some(SignatureType::SubkeyRevocation)
+    ) && sig.verify_subkey_binding(primary, subkey_key).is_ok()
+}
+
+/// True if `sig` is a direct-key signature (0x1F) or self key-revocation
+/// (0x20) that cryptographically verifies against `primary`.
+/// `verify_key` is documented to handle both.
+fn is_verified_self_primary_signature(
+    sig: &pgp::packet::Signature,
+    primary: &pgp::packet::PublicKey,
+) -> bool {
+    matches!(
+        sig.typ(),
+        Some(SignatureType::Key) | Some(SignatureType::KeyRevocation)
+    ) && sig.verify_key(primary).is_ok()
 }
 
 /// Update the expiration time for specific subkeys.
@@ -1734,9 +1771,8 @@ mod tests {
         // Build a tampered alice key whose `revocation_signatures` slot
         // contains a bona-fide signature from BOB — a stand-in for a
         // designated-revoker KeyRevocation that Bob would have issued.
-        // We borrow Bob's UID self-cert (which carries Bob's issuer
-        // subpacket, so `is_self_signature` against Alice's primary will
-        // reject it) and splice it in.
+        // We borrow Bob's UID self-cert (which is signed by Bob's primary,
+        // so verifying it against Alice's primary fails) and splice it in.
         let (alice_pub, _) = SignedPublicKey::from_armor_single(Cursor::new(&alice.public_key))
             .expect("parse alice pub");
         let (bob_pub, _) = SignedPublicKey::from_armor_single(Cursor::new(&bob.public_key))
@@ -1777,6 +1813,93 @@ mod tests {
             "third-party signatures in the revocation_signatures slot must be \
              stripped — the minimised export should be identical with or \
              without them"
+        );
+    }
+
+    /// "Self" is established by cryptographic verification, not by trusting
+    /// the issuer-fingerprint subpacket. A signature genuinely issued by
+    /// the primary key (so the issuer subpacket is "correct") but spliced
+    /// into the WRONG context (hash input doesn't match the target UID)
+    /// must be dropped from the minimised export. A metadata-only check
+    /// would happily keep this signature because the issuer subpacket
+    /// names the right primary; only `verify_certification` catches that
+    /// the hash doesn't agree with the surrounding UID.
+    #[test]
+    fn autocrypt_export_drops_signatures_that_dont_cryptographically_verify() {
+        use pgp::composed::{Deserializable, SignedPublicKey};
+        use pgp::ser::Serialize;
+        use std::io::Cursor;
+
+        // One key, two UIDs. Each UID carries its own self-cert from the
+        // primary, computed over that UID's own text.
+        let key = crate::create_key_simple("pw", &["Alice <alice@example.com>"]).unwrap();
+        let two_uids =
+            crate::add_uid(&key.secret_key, "Alice 2 <alice2@example.com>", "pw").unwrap();
+
+        let parsed_secret = pgp::composed::SignedSecretKey::from_bytes(Cursor::new(&two_uids))
+            .expect("parse secret");
+        let pub_two = parsed_secret.to_public_key();
+
+        // Locate the two UIDs by their text and pluck UID1's self-cert.
+        let uid1 = pub_two
+            .details
+            .users
+            .iter()
+            .find(|u| String::from_utf8_lossy(u.id.id()).contains("alice@example.com"))
+            .expect("uid1 present");
+        let uid2 = pub_two
+            .details
+            .users
+            .iter()
+            .find(|u| String::from_utf8_lossy(u.id.id()).contains("alice2@example.com"))
+            .expect("uid2 present");
+        let uid1_self_cert = uid1
+            .signatures
+            .first()
+            .cloned()
+            .expect("uid1 self-cert exists");
+
+        // Build a tampered key where UID2's signature list ALSO contains
+        // UID1's self-cert. The spliced sig was genuinely issued by the
+        // primary (issuer fingerprint subpacket would have pointed at it),
+        // but its hash input is UID1's text, not UID2's — so it cannot
+        // verify as a self-cert of UID2 and must be dropped.
+        let mut uid2_sigs = uid2.signatures.clone();
+        uid2_sigs.push(uid1_self_cert);
+        let tampered_uid2 = SignedUser::new(uid2.id.clone(), uid2_sigs);
+
+        let mut tampered_users = pub_two.details.users.clone();
+        // Replace the UID2 entry in-place to preserve packet order.
+        for u in tampered_users.iter_mut() {
+            if String::from_utf8_lossy(u.id.id()).contains("alice2@example.com") {
+                *u = tampered_uid2.clone();
+            }
+        }
+        let tampered = SignedPublicKey {
+            primary_key: pub_two.primary_key.clone(),
+            details: pgp::composed::SignedKeyDetails::new(
+                pub_two.details.revocation_signatures.clone(),
+                pub_two.details.direct_signatures.clone(),
+                tampered_users,
+                pub_two.details.user_attributes.clone(),
+            ),
+            public_subkeys: pub_two.public_subkeys.clone(),
+        };
+        let tampered_bytes = tampered.to_bytes().expect("serialize tampered");
+
+        // Export targeting UID2. The autocrypt output of the tampered key
+        // must equal the autocrypt output of the un-tampered key: the
+        // spliced UID1 cert is dropped by the cryptographic check.
+        let from_tampered =
+            super::export_public_for_autocrypt(&tampered_bytes, "alice2@example.com").unwrap();
+        let clean_bytes = pub_two.to_bytes().expect("serialize clean");
+        let from_clean =
+            super::export_public_for_autocrypt(&clean_bytes, "alice2@example.com").unwrap();
+        assert_eq!(
+            from_tampered, from_clean,
+            "a signature issued by the primary but over the WRONG hash \
+             input must be rejected — the minimised export must be \
+             byte-identical with and without the spliced signature"
         );
     }
 }
