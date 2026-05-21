@@ -1866,6 +1866,14 @@ mod tests {
             extract_uid_email("  alice@example.com  "),
             Some("alice@example.com".to_string())
         );
+        // Display name contains a `>` before the bracketed address: the
+        // closing `>` must be searched AFTER the opening `<`, not the
+        // first `>` in the whole UID. A naive `uid.find('>')` lands
+        // before `<` and misses the address entirely.
+        assert_eq!(
+            extract_uid_email("A>lice <alice@example.com>"),
+            Some("alice@example.com".to_string())
+        );
     }
 
     #[test]

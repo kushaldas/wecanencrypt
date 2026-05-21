@@ -490,7 +490,18 @@ pub fn get_pub_key(key_data: &[u8]) -> Result<String> {
 ///   and domain parts.
 ///
 /// # Errors
-/// Returns [`Error::InvalidInput`] if `addr` doesn't match any UID on the key.
+/// Returns [`Error::InvalidInput`] if:
+/// - `addr` doesn't match any UID on the key, or
+/// - the matching UID has no cryptographically valid self-signature
+///   (RFC 4880 §11.1 requires at least one signature after each UID
+///   packet — producing a UID with zero self-sigs would emit
+///   structurally-invalid Autocrypt keydata that every receiving MUA
+///   would reject).
+///
+/// Subkeys without a verified `SubkeyBinding` signature are silently
+/// dropped from the output (also per §11.1: a subkey packet must be
+/// followed by a binding signature, or it isn't part of the
+/// transferable public key).
 pub fn export_public_for_autocrypt(key_data: &[u8], addr: &str) -> Result<Vec<u8>> {
     use pgp::ser::Serialize;
 
@@ -534,26 +545,48 @@ pub fn export_public_for_autocrypt(key_data: &[u8], addr: &str) -> Result<Vec<u8
         .filter(|sig| is_verified_self_uid_signature(sig, primary, picked_user))
         .cloned()
         .collect();
+    // RFC 4880 §11.1: a transferable public key requires at least one
+    // signature following each User ID packet. If verification dropped
+    // every self-sig on the picked UID (key never had one, or the only
+    // self-sigs are corrupted) we'd emit a packet sequence that's not a
+    // valid transferable public key; refuse rather than produce keydata
+    // every receiving MUA will reject.
+    if user_self_sigs.is_empty() {
+        return Err(Error::InvalidInput(format!(
+            "User ID matching {addr} has no verified self-signature; \
+             cannot produce a structurally-valid Autocrypt key"
+        )));
+    }
     let matching_users = vec![SignedUser::new(picked_user.id.clone(), user_self_sigs)];
 
-    // Subkey binding/revocation signatures: keep every subkey, drop sigs
-    // that don't verify against the primary. Autocrypt is fine with
-    // signing subkeys present, and downstream MUAs may need them to
-    // verify the sender's signatures.
+    // Subkey binding/revocation signatures: keep sigs that verify against
+    // the primary, and DROP any subkey that ends up with no verified
+    // SubkeyBinding (0x18). RFC 4880 §11.1 requires a binding signature
+    // after each subkey packet — a subkey without one isn't part of the
+    // transferable public key and any receiving MUA would either ignore
+    // it or reject the whole import. Autocrypt is fine with signing
+    // subkeys present, and downstream MUAs may need them to verify the
+    // sender's signatures, so we don't filter by capability here.
     let stripped_subkeys: Vec<pgp::composed::SignedPublicSubKey> = public_key
         .public_subkeys
         .iter()
-        .map(|sk| {
+        .filter_map(|sk| {
             let self_sigs: Vec<pgp::packet::Signature> = sk
                 .signatures
                 .iter()
                 .filter(|sig| is_verified_self_subkey_signature(sig, primary, &sk.key))
                 .cloned()
                 .collect();
-            pgp::composed::SignedPublicSubKey {
+            let has_binding = self_sigs
+                .iter()
+                .any(|sig| sig.typ() == Some(SignatureType::SubkeyBinding));
+            if !has_binding {
+                return None;
+            }
+            Some(pgp::composed::SignedPublicSubKey {
                 key: sk.key.clone(),
                 signatures: self_sigs,
-            }
+            })
         })
         .collect();
 
@@ -1900,6 +1933,146 @@ mod tests {
             "a signature issued by the primary but over the WRONG hash \
              input must be rejected — the minimised export must be \
              byte-identical with and without the spliced signature"
+        );
+    }
+
+    /// If the picked UID has no signature that survives cryptographic
+    /// verification, the export MUST error out instead of emitting a UID
+    /// packet with zero following signatures. A transferable public key
+    /// (RFC 4880 §11.1) requires at least one self-cert after each UID;
+    /// emitting an uncertified UID would produce keydata every receiving
+    /// MUA rejects, and worse, the failure would surface only on the
+    /// recipient side.
+    /// We can't construct this scenario by stripping signatures and
+    /// re-parsing — rpgp itself enforces §11.1 and refuses to parse a
+    /// UID with no following signature. So we substitute Bob's UID
+    /// self-cert in place of Alice's: the packet parses fine (claims to
+    /// be a CertPositive, has all the right subpackets), but it was
+    /// signed by Bob's primary, so `verify_certification` against
+    /// Alice's primary fails and the autocrypt filter drops it.
+    #[test]
+    fn autocrypt_export_errors_when_picked_uid_has_no_verified_self_signature() {
+        use pgp::composed::{Deserializable, SignedPublicKey};
+        use pgp::ser::Serialize;
+
+        let alice = crate::create_key_simple("pw", &["Alice <alice@example.com>"]).unwrap();
+        let bob = crate::create_key_simple("pw", &["Bob <bob@example.com>"]).unwrap();
+        let alice_secret =
+            pgp::composed::SignedSecretKey::from_bytes(std::io::Cursor::new(&alice.secret_key))
+                .unwrap();
+        let alice_pub = alice_secret.to_public_key();
+        let bob_secret =
+            pgp::composed::SignedSecretKey::from_bytes(std::io::Cursor::new(&bob.secret_key))
+                .unwrap();
+        let bob_pub = bob_secret.to_public_key();
+        let bob_uid_sig = bob_pub
+            .details
+            .users
+            .first()
+            .and_then(|u| u.signatures.first())
+            .cloned()
+            .expect("bob has a UID self-sig");
+
+        // Replace Alice's UID self-cert with Bob's, keeping the UID text.
+        // The signature parses fine but cannot verify against Alice's
+        // primary, so the autocrypt filter drops it and ends up with an
+        // empty self-sig list.
+        let tampered_users: Vec<SignedUser> = alice_pub
+            .details
+            .users
+            .iter()
+            .map(|u| SignedUser::new(u.id.clone(), vec![bob_uid_sig.clone()]))
+            .collect();
+        let tampered = SignedPublicKey {
+            primary_key: alice_pub.primary_key.clone(),
+            details: pgp::composed::SignedKeyDetails::new(
+                alice_pub.details.revocation_signatures.clone(),
+                alice_pub.details.direct_signatures.clone(),
+                tampered_users,
+                alice_pub.details.user_attributes.clone(),
+            ),
+            public_subkeys: alice_pub.public_subkeys.clone(),
+        };
+        let tampered_bytes = tampered.to_bytes().unwrap();
+
+        let err = super::export_public_for_autocrypt(&tampered_bytes, "alice@example.com")
+            .expect_err("export should fail when UID has no verified self-sig");
+        match err {
+            Error::InvalidInput(msg) => {
+                assert!(
+                    msg.contains("alice@example.com"),
+                    "error should mention the address; got: {msg}"
+                );
+                assert!(
+                    msg.contains("no verified self-signature"),
+                    "error should explain the cause; got: {msg}"
+                );
+            }
+            other => panic!("unexpected error variant: {other:?}"),
+        }
+    }
+
+    /// Subkeys without a verified `SubkeyBinding` signature MUST be
+    /// dropped from the output. A transferable public key requires a
+    /// binding signature after each subkey packet (RFC 4880 §11.1); a
+    /// subkey without one isn't part of the key, can't be used for
+    /// encryption/signing, and would just bloat every outbound mail.
+    #[test]
+    fn autocrypt_export_drops_subkeys_with_no_verified_binding_signature() {
+        use pgp::composed::{Deserializable, SignedPublicKey};
+        use pgp::ser::Serialize;
+
+        // Same constraint as the UID-no-self-sig test: rpgp enforces
+        // RFC 4880 §11.1 at parse time and won't accept a subkey with
+        // zero signatures. So we substitute Bob's subkey-binding sig in
+        // place of Alice's. The packet parses (it's a real binding sig),
+        // but it was issued by Bob's primary, so verifying it against
+        // Alice's primary over Alice's subkey fails.
+        let alice = crate::create_key_simple("pw", &["Alice <alice@example.com>"]).unwrap();
+        let bob = crate::create_key_simple("pw", &["Bob <bob@example.com>"]).unwrap();
+        let alice_secret =
+            pgp::composed::SignedSecretKey::from_bytes(std::io::Cursor::new(&alice.secret_key))
+                .unwrap();
+        let alice_pub = alice_secret.to_public_key();
+        let bob_secret =
+            pgp::composed::SignedSecretKey::from_bytes(std::io::Cursor::new(&bob.secret_key))
+                .unwrap();
+        let bob_pub = bob_secret.to_public_key();
+        assert!(
+            !alice_pub.public_subkeys.is_empty(),
+            "test fixture should have at least one subkey"
+        );
+        let subkey_count_before = alice_pub.public_subkeys.len();
+        let bob_subkey_binding = bob_pub
+            .public_subkeys
+            .first()
+            .and_then(|sk| sk.signatures.first())
+            .cloned()
+            .expect("bob has a subkey binding sig");
+
+        let stripped_subkeys: Vec<pgp::composed::SignedPublicSubKey> = alice_pub
+            .public_subkeys
+            .iter()
+            .map(|sk| pgp::composed::SignedPublicSubKey {
+                key: sk.key.clone(),
+                signatures: vec![bob_subkey_binding.clone()],
+            })
+            .collect();
+        let tampered = SignedPublicKey {
+            primary_key: alice_pub.primary_key.clone(),
+            details: alice_pub.details.clone(),
+            public_subkeys: stripped_subkeys,
+        };
+        let tampered_bytes = tampered.to_bytes().unwrap();
+
+        let autocrypt =
+            super::export_public_for_autocrypt(&tampered_bytes, "alice@example.com").unwrap();
+        let info = crate::parse_key_bytes(&autocrypt, false).unwrap();
+        assert!(
+            info.subkeys.is_empty(),
+            "subkeys with no verified binding signature must be dropped \
+             from the autocrypt output (had {subkey_count_before} before \
+             tampering, expected 0 after)"
         );
     }
 }

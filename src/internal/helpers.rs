@@ -98,8 +98,16 @@ pub(crate) fn extract_uid_email(uid: &str) -> Option<String> {
     // trimming we'd return " alice@example.com " and miss the match
     // against `addr.trim()` in autocrypt export, and pollute the
     // keystore email index with whitespace-padded values.
-    if let (Some(start), Some(end)) = (uid.find('<'), uid.find('>')) {
-        if start < end {
+    //
+    // The closing `>` MUST be searched after the opening `<` rather than
+    // with a naive `uid.find('>')`. A display name can legitimately
+    // contain `>` (e.g. `"A>lice <alice@example.com>"`); searching from
+    // the start of the string would find the wrong `>`, give an `end`
+    // ordinal smaller than `start`, and miss the bracketed address
+    // entirely.
+    if let Some(start) = uid.find('<') {
+        if let Some(rel_end) = uid[start + 1..].find('>') {
+            let end = start + 1 + rel_end;
             let inner = uid[start + 1..end].trim();
             if !inner.is_empty() {
                 return Some(inner.to_string());
