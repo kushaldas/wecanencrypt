@@ -82,6 +82,27 @@ pub(crate) fn fingerprint_to_hex(key: &impl KeyDetails) -> String {
     hex::encode_upper(key.fingerprint().as_bytes())
 }
 
+/// Pull the email out of a `"Name <addr@host>"` UID string, or treat a bare
+/// `addr@host` token as the email. Returns `None` for comment-only UIDs
+/// with no address (so callers don't silently pick a UID with no email).
+///
+/// Shared between the keystore email-index population and the Autocrypt
+/// minimised-key export — keeping the two in sync matters because the
+/// keystore's per-UID `email` column is what tools use to look up keys for
+/// the address that's about to go into an `Autocrypt:` header, and the
+/// export then has to match on the same address.
+pub(crate) fn extract_uid_email(uid: &str) -> Option<String> {
+    if let (Some(start), Some(end)) = (uid.find('<'), uid.find('>')) {
+        if start < end {
+            return Some(uid[start + 1..end].to_string());
+        }
+    }
+    if uid.contains('@') && !uid.contains(' ') {
+        return Some(uid.to_string());
+    }
+    None
+}
+
 /// Get the key ID as a hex string.
 pub(crate) fn keyid_to_hex(key: &impl KeyDetails) -> String {
     hex::encode_upper(key.legacy_key_id().as_ref())

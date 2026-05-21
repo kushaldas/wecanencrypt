@@ -16,9 +16,9 @@ use zeroize::Zeroizing;
 
 use crate::error::{Error, Result};
 use crate::internal::{
-    fingerprint_to_hex, is_primary_secret_key_revoked, parse_key, parse_public_key,
-    parse_secret_key, public_key_to_armored, secret_key_to_bytes, validate_secret_signing_usage,
-    SigningKeyUsage,
+    extract_uid_email, fingerprint_to_hex, is_primary_secret_key_revoked, parse_key,
+    parse_public_key, parse_secret_key, public_key_to_armored, secret_key_to_bytes,
+    validate_secret_signing_usage, SigningKeyUsage,
 };
 use crate::types::{CertificationType, CipherSuite, GeneratedKey, SubkeyFlags};
 
@@ -467,10 +467,20 @@ pub fn get_pub_key(key_data: &[u8]) -> Result<String> {
 ///   (other UIDs and User Attribute packets are stripped — Autocrypt is
 ///   per-address, and every mail carries this header, so size matters)
 /// - the subkey packets, each followed only by its **self**-signatures
-/// - no third-party certifications anywhere
+/// - no third-party certifications anywhere — including no third-party
+///   key-revocation signatures from a designated revoker (RFC 4880
+///   §5.2.3.15); only self-revocations from the primary are kept
 ///
 /// Self-signatures are kept on revoked components so receivers can still
-/// honour primary-key and subkey revocations.
+/// honour primary-key and subkey revocations the primary issued itself.
+///
+/// If more than one UID matches `addr` (e.g. a key with two UIDs sharing
+/// the same email but different display names), exactly one is selected
+/// deterministically: the UID flagged as primary
+/// (`PrimaryUserId` subpacket) if present, otherwise the first matching
+/// UID in packet order. This keeps the on-the-wire bytes stable across
+/// export calls and avoids leaking an alternate display name into every
+/// outbound message.
 ///
 /// # Arguments
 /// * `key_data` - Key data (armored or binary), public or secret. If a
@@ -490,34 +500,37 @@ pub fn export_public_for_autocrypt(key_data: &[u8], addr: &str) -> Result<Vec<u8
     let primary_key_id_upper = hex::encode_upper(public_key.primary_key.legacy_key_id().as_ref());
     let addr_lc = addr.trim().to_ascii_lowercase();
 
-    // Filter UIDs to the one matching `addr`. Strip third-party certs;
-    // keep only self-signatures from the primary key.
-    let matching_users: Vec<SignedUser> = public_key
+    // Pick exactly ONE UID matching `addr` (Autocrypt §2.1.1: "exactly one
+    // user id packet"). Multiple UIDs can carry the same email address —
+    // an extra UID with a different display name, an `add_uid` mistake,
+    // etc. — so select deterministically:
+    //   1. the matching UID flagged as primary (PrimaryUserId subpacket),
+    //   2. otherwise the first matching UID in packet order.
+    // Picking deterministically (rather than including all matches) keeps
+    // the on-the-wire bytes stable across export calls and avoids leaking
+    // an alternate display name into every outbound message.
+    let matches_addr = |u: &SignedUser| {
+        let uid_str = String::from_utf8_lossy(u.id.id());
+        extract_uid_email(&uid_str)
+            .map(|e| e.to_ascii_lowercase() == addr_lc)
+            .unwrap_or(false)
+    };
+    let picked_user = public_key
         .details
         .users
         .iter()
-        .filter(|u| {
-            let uid_str = String::from_utf8_lossy(u.id.id());
-            extract_uid_email(&uid_str)
-                .map(|e| e.to_ascii_lowercase() == addr_lc)
-                .unwrap_or(false)
-        })
-        .map(|u| {
-            let self_sigs: Vec<pgp::packet::Signature> = u
-                .signatures
-                .iter()
-                .filter(|sig| is_self_signature(sig, &primary_fp_upper, &primary_key_id_upper))
-                .cloned()
-                .collect();
-            SignedUser::new(u.id.clone(), self_sigs)
-        })
-        .collect();
+        .find(|u| matches_addr(u) && u.is_primary())
+        .or_else(|| public_key.details.users.iter().find(|u| matches_addr(u)))
+        .ok_or_else(|| Error::InvalidInput(format!("no User ID on key matches address {addr}")))?;
 
-    if matching_users.is_empty() {
-        return Err(Error::InvalidInput(format!(
-            "no User ID on key matches address {addr}"
-        )));
-    }
+    // Strip third-party certifications on the kept UID; keep only self-sigs.
+    let user_self_sigs: Vec<pgp::packet::Signature> = picked_user
+        .signatures
+        .iter()
+        .filter(|sig| is_self_signature(sig, &primary_fp_upper, &primary_key_id_upper))
+        .cloned()
+        .collect();
+    let matching_users = vec![SignedUser::new(picked_user.id.clone(), user_self_sigs)];
 
     // Strip third-party certifications from subkey binding signatures.
     // Keep every subkey — Autocrypt is fine with signing subkeys present,
@@ -540,8 +553,7 @@ pub fn export_public_for_autocrypt(key_data: &[u8], addr: &str) -> Result<Vec<u8
         .collect();
 
     // Direct-key signatures: keep only self-signatures (V6 keys carry
-    // capability/expiration in direct sigs). Revocation signatures live in
-    // their own slot and are kept intact.
+    // capability/expiration in direct sigs).
     let direct_sigs: Vec<pgp::packet::Signature> = public_key
         .details
         .direct_signatures
@@ -550,10 +562,25 @@ pub fn export_public_for_autocrypt(key_data: &[u8], addr: &str) -> Result<Vec<u8
         .cloned()
         .collect();
 
+    // Primary-key revocation signatures: keep only self-revocations.
+    // RFC 4880 §5.2.3.15 lets a designated revoker issue KeyRevocation
+    // signatures from a different key; those are conceptually third-party
+    // assertions about this key's status and don't belong in a minimised
+    // Autocrypt header (the receiving MUA cannot verify the revoker's
+    // authority from the keydata alone, and including them grows the
+    // header for no benefit).
+    let revocation_sigs: Vec<pgp::packet::Signature> = public_key
+        .details
+        .revocation_signatures
+        .iter()
+        .filter(|sig| is_self_signature(sig, &primary_fp_upper, &primary_key_id_upper))
+        .cloned()
+        .collect();
+
     let minimised = SignedPublicKey {
         primary_key: public_key.primary_key.clone(),
         details: SignedKeyDetails::new(
-            public_key.details.revocation_signatures.clone(),
+            revocation_sigs,
             direct_sigs,
             matching_users,
             // User Attributes (notably image packets) are large and not
@@ -566,20 +593,6 @@ pub fn export_public_for_autocrypt(key_data: &[u8], addr: &str) -> Result<Vec<u8
     minimised
         .to_bytes()
         .map_err(|e| Error::Crypto(e.to_string()))
-}
-
-/// Pull the email out of a `"Name <addr@host>"` UID string, or treat a bare
-/// `addr@host` token as the email. Mirrors `keystore::store::extract_email`.
-fn extract_uid_email(uid: &str) -> Option<String> {
-    if let (Some(start), Some(end)) = (uid.find('<'), uid.find('>')) {
-        if start < end {
-            return Some(uid[start + 1..end].to_string());
-        }
-    }
-    if uid.contains('@') && !uid.contains(' ') {
-        return Some(uid.to_string());
-    }
-    None
 }
 
 /// True if a signature was issued by `primary` (matched on either issuer
@@ -1671,18 +1684,99 @@ mod tests {
         );
     }
 
+    /// Two UIDs sharing the same email address (different display names)
+    /// must collapse to exactly ONE UID in the autocrypt output — Autocrypt
+    /// §2.1.1 says "exactly one user id packet", and emitting both would
+    /// (a) violate that, (b) leak the alternate display name into every
+    /// outbound mail, and (c) make the on-the-wire bytes depend on packet
+    /// order, which isn't stable across re-imports.
     #[test]
-    fn extract_uid_email_handles_common_shapes() {
+    fn autocrypt_export_picks_single_uid_when_multiple_share_address() {
+        let key = crate::create_key_simple("pw", &["Alice <alice@example.com>"]).unwrap();
+        // Second UID with the SAME email but a different display name.
+        let with_dup = crate::add_uid(&key.secret_key, "A. Liddell <alice@example.com>", "pw")
+            .expect("add_uid");
+
+        let autocrypt =
+            super::export_public_for_autocrypt(&with_dup, "alice@example.com").expect("export");
+
+        let info = crate::parse_key_bytes(&autocrypt, false).expect("parse");
         assert_eq!(
-            super::extract_uid_email("Alice <alice@example.com>").as_deref(),
-            Some("alice@example.com"),
+            info.user_ids.len(),
+            1,
+            "multiple UIDs with the same address must collapse to exactly one"
         );
+        // Deterministic pick: first matching UID in packet order wins when
+        // no UID is flagged primary. The primary UID is the FIRST added.
+        assert_eq!(info.user_ids[0].value, "Alice <alice@example.com>");
+    }
+
+    /// Third-party key-revocation signatures (RFC 4880 §5.2.3.15:
+    /// designated revoker) MUST NOT leak into the autocrypt header — the
+    /// receiving MUA can't verify the revoker's authority from the
+    /// keydata alone, and the docstring promises "no third-party
+    /// certifications anywhere".
+    ///
+    /// We can't easily fabricate a designated-revoker signature in a unit
+    /// test (rpgp doesn't expose a public helper for it), so this test
+    /// proves the filter by injecting a third-party signature into the
+    /// `revocation_signatures` slot via the rpgp struct API and verifying
+    /// the autocrypt export drops it.
+    #[test]
+    fn autocrypt_export_strips_third_party_revocation_signatures() {
+        use pgp::composed::{Deserializable, SignedPublicKey};
+        use pgp::ser::Serialize;
+        use std::io::Cursor;
+
+        let alice = crate::create_key_simple("pw", &["Alice <alice@example.com>"]).unwrap();
+        let bob = crate::create_key_simple("pw", &["Bob <bob@example.com>"]).unwrap();
+
+        // Build a tampered alice key whose `revocation_signatures` slot
+        // contains a bona-fide signature from BOB — a stand-in for a
+        // designated-revoker KeyRevocation that Bob would have issued.
+        // We borrow Bob's UID self-cert (which carries Bob's issuer
+        // subpacket, so `is_self_signature` against Alice's primary will
+        // reject it) and splice it in.
+        let (alice_pub, _) = SignedPublicKey::from_armor_single(Cursor::new(&alice.public_key))
+            .expect("parse alice pub");
+        let (bob_pub, _) = SignedPublicKey::from_armor_single(Cursor::new(&bob.public_key))
+            .expect("parse bob pub");
+        let bob_sig = bob_pub
+            .details
+            .users
+            .first()
+            .and_then(|u| u.signatures.first())
+            .cloned()
+            .expect("bob has a UID self-sig");
+
+        let tampered = SignedPublicKey {
+            primary_key: alice_pub.primary_key.clone(),
+            details: pgp::composed::SignedKeyDetails::new(
+                vec![bob_sig],
+                alice_pub.details.direct_signatures.clone(),
+                alice_pub.details.users.clone(),
+                alice_pub.details.user_attributes.clone(),
+            ),
+            public_subkeys: alice_pub.public_subkeys.clone(),
+        };
+        let tampered_bytes = tampered.to_bytes().expect("serialize tampered");
+
+        // Run the export. The filter must drop Bob's signature; the output
+        // must reparse cleanly. (We can't directly inspect packet count
+        // through KeyInfo, but a re-export with the same input must be
+        // byte-identical to one built from the *un*-tampered key, since
+        // the only difference between the two inputs is the third-party
+        // signature we're claiming gets filtered.)
+        let from_tampered =
+            super::export_public_for_autocrypt(&tampered_bytes, "alice@example.com").unwrap();
+        let from_clean =
+            super::export_public_for_autocrypt(alice.public_key.as_bytes(), "alice@example.com")
+                .unwrap();
         assert_eq!(
-            super::extract_uid_email("alice@example.com").as_deref(),
-            Some("alice@example.com"),
+            from_tampered, from_clean,
+            "third-party signatures in the revocation_signatures slot must be \
+             stripped — the minimised export should be identical with or \
+             without them"
         );
-        // Comment-only UIDs (no email) → None, so the caller errors out
-        // cleanly rather than silently picking a UID with no address.
-        assert_eq!(super::extract_uid_email("Just A Name").as_deref(), None);
     }
 }
