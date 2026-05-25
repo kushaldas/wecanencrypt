@@ -549,6 +549,56 @@ pub fn change_user_pin(old_pin: &[u8], new_pin: &[u8], ident: Option<&str>) -> R
     Ok(())
 }
 
+/// Reset the user PIN (PW1) using the admin PIN.
+///
+/// This issues `RESET RETRY COUNTER` (P1=02) after verifying the admin
+/// PIN in the same transaction, which both **sets a new user PIN** and
+/// **resets the user-PIN error counter back to its limit**. Use this
+/// when the user PIN is blocked (retry counter == 0) or any time the
+/// user has forgotten it but still has the admin PIN.
+///
+/// Unlike [`change_user_pin`], this does not require the old user PIN
+/// and works even when PW1 is blocked.
+///
+/// # Arguments
+///
+/// * `admin_pin` - The current admin PIN (PW3, typically 8+ digits)
+/// * `new_pin`   - The new user PIN (must be 6-127 bytes)
+/// * `ident`     - Optional card identifier. If None, uses the first card.
+///
+/// # Example
+///
+/// ```no_run
+/// use wecanencrypt::card::reset_user_pin;
+///
+/// // User PIN was blocked; admin unblocks it and sets it to "654321".
+/// reset_user_pin(b"12345678", b"654321", None).unwrap();
+/// ```
+pub fn reset_user_pin(admin_pin: &[u8], new_pin: &[u8], ident: Option<&str>) -> Result<()> {
+    let backend = get_card_backend(ident)?;
+    let mut card = Card::new(backend).map_err(|e| Error::Card(CardError::from(e)))?;
+
+    let mut tx = card
+        .transaction()
+        .map_err(|e| Error::Card(CardError::from(e)))?;
+
+    let admin_secret = pin_to_secret(admin_pin)?;
+    let new_secret = pin_to_secret(new_pin)?;
+
+    // Verify the admin PIN and transition into the Admin view; the
+    // openpgp-card crate's Admin::reset_user_pin issues RESET RETRY
+    // COUNTER PW1 with no resetting code, relying on the already-
+    // verified admin PIN for authorization.
+    let mut admin_card = tx
+        .to_admin_card(admin_secret)
+        .map_err(|e| Error::Card(CardError::from(e)))?;
+    admin_card
+        .reset_user_pin(new_secret)
+        .map_err(|e| Error::Card(CardError::from(e)))?;
+
+    Ok(())
+}
+
 /// Change the admin PIN (PW3).
 ///
 /// # Arguments

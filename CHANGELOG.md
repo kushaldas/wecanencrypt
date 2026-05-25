@@ -7,10 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Two outgoing-mail primitives the Tumpa Mail extension needs: an Autocrypt
-minimised public-key export for the `Autocrypt:` header, and a
-throw-keyid recipient path for "Bcc with encryption" that doesn't leak
-Bcc identities into the OpenPGP packet stream.
+## [0.16.1] — 2026-05-25
+
+Two outgoing-mail primitives the Tumpa Mail extension needs (Autocrypt
+minimised public-key export + throw-keyid recipients for Bcc), plus a
+new admin-authorized user-PIN reset for OpenPGP cards that works even
+when PW1 is blocked.
 
 ### Added
 
@@ -44,6 +46,18 @@ Bcc identities into the OpenPGP packet stream.
 - `card::sign_and_encrypt_to_multiple_on_card_with_hidden(...)` --
   card-backed variant for OpenPGP smartcards (Nitrokey 3, YubiKey).
 
+- `card::reset_user_pin(admin_pin, new_pin, ident)` -- admin-authorized
+  user-PIN reset for OpenPGP cards. Issues `RESET RETRY COUNTER` (PW1,
+  P1=02) after verifying the admin PIN in the same transaction, which
+  both sets a new user PIN and resets the user-PIN error counter back
+  to its limit. Use this whenever the user PIN is forgotten or blocked
+  (retry counter == 0); unlike `change_user_pin`, it does not need the
+  old user PIN and works even when PW1 is fully blocked. Implemented
+  via openpgp-card's `to_admin_card(...).reset_user_pin(new)` so the
+  admin verification and reset happen in a single APDU sequence, and
+  available to both PCSC (`card-pcsc`) and external (`card-external`)
+  card transports.
+
 ### Fixed
 
 - `card::sign_and_encrypt_to_multiple_on_card_with_hidden` validates
@@ -58,6 +72,13 @@ Bcc identities into the OpenPGP packet stream.
   `*_with_hidden` calls; empty-empty is rejected. V4/V6 version-mix is
   validated across the combined recipient set, matching the rule for
   `encrypt_bytes_to_multiple`.
+- `change_user_pin(old_user_pin, new_pin, ident)` is unchanged; it
+  still issues `CHANGE REFERENCE DATA` (PW1), which requires the
+  current user PIN and decrements PW1's retry counter on failure.
+  Callers exposing an admin-authorized "Change User PIN" flow should
+  use `reset_user_pin` instead -- routing such a flow through
+  `change_user_pin` with the admin PIN as `old_pin` quietly blocks
+  PW1 after three attempts.
 
 ## [0.15.0] — 2026-05-02
 
