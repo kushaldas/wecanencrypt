@@ -73,8 +73,8 @@ pub mod upload;
 
 pub use connection::{
     change_admin_pin, change_user_pin, get_card_details, get_card_serial, get_card_version,
-    get_pin_retry_counters, get_touch_modes, reset_card, set_cardholder_name, set_public_key_url,
-    set_touch_mode, verify_admin_pin, verify_user_pin,
+    get_pin_retry_counters, get_touch_modes, reset_card, reset_user_pin, set_cardholder_name,
+    set_public_key_url, set_touch_mode, verify_admin_pin, verify_user_pin,
 };
 
 // PCSC-only enumeration APIs. Mobile (`card-external`) builds omit these —
