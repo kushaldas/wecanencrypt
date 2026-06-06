@@ -186,13 +186,28 @@ impl KeyStore {
             system_time_to_datetime(st).to_rfc3339()
         });
 
-        // Store the key
+        // Store the key. Use an UPSERT (in-place UPDATE on conflict) rather
+        // than `INSERT OR REPLACE`: REPLACE resolves a PRIMARY KEY conflict by
+        // DELETE-ing the existing row and INSERT-ing a new one, and that
+        // implicit DELETE fires `card_keys`' `ON DELETE CASCADE`, silently
+        // wiping a key's card linkage on every re-import (tumpa-cli#32). An
+        // in-place UPDATE issues no DELETE, so the cascade never triggers and
+        // card associations survive.
         self.conn.execute(
-            "INSERT OR REPLACE INTO keys (
+            "INSERT INTO keys (
                 fingerprint, key_data, is_secret, primary_uid,
                 is_revoked, revocation_time, expiration_time, cert_created_at,
                 updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, CURRENT_TIMESTAMP)",
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, CURRENT_TIMESTAMP)
+             ON CONFLICT(fingerprint) DO UPDATE SET
+                key_data        = excluded.key_data,
+                is_secret       = excluded.is_secret,
+                primary_uid     = excluded.primary_uid,
+                is_revoked      = excluded.is_revoked,
+                revocation_time = excluded.revocation_time,
+                expiration_time = excluded.expiration_time,
+                cert_created_at = excluded.cert_created_at,
+                updated_at      = CURRENT_TIMESTAMP",
             params![
                 &fingerprint,
                 key_data,
@@ -2009,6 +2024,46 @@ mod tests {
         assert_eq!(a_from_all.len(), 2);
         assert_eq!(b_from_all.len(), 1);
         assert_eq!(all.len(), 3);
+    }
+
+    /// Re-importing an already-stored key must NOT drop its card linkage
+    /// (tumpa-cli#32). `card_keys` has `ON DELETE CASCADE` on the key's
+    /// fingerprint; the old `INSERT OR REPLACE` storage path deleted the
+    /// existing `keys` row before re-inserting, firing that cascade and
+    /// silently wiping the card association on every `tcli import`. The
+    /// UPSERT storage path updates in place, so the association survives.
+    #[test]
+    fn test_reimport_preserves_card_keys() {
+        use crate::create_key_simple;
+
+        let store = KeyStore::open_in_memory().unwrap();
+        let key = create_key_simple("pw", &["Carol <c@x.org>"]).unwrap();
+        let fp = store.import_key(&key.secret_key).unwrap();
+
+        // Link the key to a card slot.
+        store
+            .save_card_key(&fp, "FOO:1111", "1111", Some("Foo"), "signature", "SIGC")
+            .unwrap();
+        assert_eq!(store.get_card_keys(&fp).unwrap().len(), 1);
+
+        // Re-import the very same cert (the "Unchanged — no new data" path in
+        // tcli always calls import_key). The card linkage must persist.
+        let fp2 = store.import_key(&key.secret_key).unwrap();
+        assert_eq!(fp2, fp);
+        assert_eq!(
+            store.get_card_keys(&fp).unwrap().len(),
+            1,
+            "re-import must not wipe card linkage"
+        );
+
+        // Re-importing the public-only cert over the secret one must also
+        // preserve the linkage.
+        store.import_key(key.public_key.as_bytes()).unwrap();
+        assert_eq!(
+            store.get_card_keys(&fp).unwrap().len(),
+            1,
+            "public re-import must not wipe card linkage"
+        );
     }
 
     #[test]

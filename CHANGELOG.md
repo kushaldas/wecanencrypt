@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+A single data-integrity fix: re-importing an already-stored key no
+longer destroys that key's hardware-card associations.
+
+### Fixed
+
+- `KeyStore::import_key` now updates an existing `keys` row in place
+  (SQLite UPSERT, `ON CONFLICT(fingerprint) DO UPDATE`) instead of
+  `INSERT OR REPLACE`. REPLACE deletes the conflicting row before
+  re-inserting it, and with `PRAGMA foreign_keys = ON` that implicit
+  delete fired `card_keys`' `ON DELETE CASCADE`, silently wiping a
+  key's card linkage on every re-import. `user_ids` and `subkeys`
+  were unaffected only because `import_key` explicitly rebuilds them;
+  `card_keys` has no such rebuild and was the casualty. Reported as
+  tumpa-cli#32 — `tcli card link` followed by
+  `gpg --export | tcli import -` (even on the "Unchanged — no new
+  data" path) lost the association and forced a re-link. Pinned with
+  `test_reimport_preserves_card_keys`. See ADR 0005.
+
 ## [0.16.1] — 2026-05-25
 
 Two outgoing-mail primitives the Tumpa Mail extension needs (Autocrypt
