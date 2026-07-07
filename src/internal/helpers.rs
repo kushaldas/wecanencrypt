@@ -186,7 +186,9 @@ pub(crate) fn classify_key_algorithm(key: &impl KeyDetails) -> crate::types::Key
         PublicKeyAlgorithm::X448 => KeyAlgorithm::X448,
         PublicKeyAlgorithm::ECDSA => KeyAlgorithm::Ecdsa,
         PublicKeyAlgorithm::ECDH => match key.public_params() {
-            PublicParams::ECDH(EcdhPublicParams::Curve25519 { .. }) => KeyAlgorithm::EcdhCurve25519,
+            PublicParams::ECDH(EcdhPublicParams::Curve25519Legacy { .. }) => {
+                KeyAlgorithm::EcdhCurve25519
+            }
             PublicParams::ECDH(EcdhPublicParams::P256 { .. })
             | PublicParams::ECDH(EcdhPublicParams::P384 { .. })
             | PublicParams::ECDH(EcdhPublicParams::P521 { .. }) => KeyAlgorithm::EcdhNist,

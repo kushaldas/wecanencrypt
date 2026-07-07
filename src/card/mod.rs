@@ -1,46 +1,54 @@
-//! Smart card support for OpenPGP operations.
+//! Smart-card support for OpenPGP operations.
 //!
-//! This module provides support for YubiKey and other OpenPGP-compatible smart cards.
-//! It enables cryptographic operations (signing, decryption) using keys stored on
-//! hardware tokens.
+//! The `card` feature contains transport-independent OpenPGP-card logic:
+//! signing, decryption, SSH authentication, expiry updates, PIN management,
+//! touch policy, and key upload. A runtime transport is selected separately:
 //!
-//! # Features
+//! - `card-pcsc` enables desktop PC/SC discovery and communication.
+//! - `card-external` lets mobile or embedded callers register their own
+//!   `CardBackend` provider.
+//! - `card` alone is useful for compiling transport-agnostic consumers, but it
+//!   cannot enumerate or acquire a card by itself.
 //!
-//! This module is only available when the `card` feature is enabled:
+//! # Desktop PC/SC
 //!
 //! ```toml
 //! [dependencies]
-//! wecanencrypt = { version = "0.3", features = ["card"] }
+//! wecanencrypt = { version = "0.16", features = ["card-pcsc"] }
 //! ```
 //!
-//! # Requirements
-//!
-//! - **Linux**: Install `libpcsclite-dev` (Debian/Ubuntu) or `pcsc-lite-devel` (Fedora)
-//! - **macOS**: PC/SC framework is built-in
-//! - **Windows**: WinSCard is built-in
-//!
-//! The `pcscd` daemon must be running for card communication.
-//!
-//! # Example
+//! Linux users need the PC/SC development package (`libpcsclite-dev`,
+//! `pcsc-lite-devel`, or equivalent) and a running `pcscd`. macOS and Windows
+//! provide the system PC/SC framework.
 //!
 //! ```no_run
-//! use wecanencrypt::card::*;
+//! # #[cfg(feature = "card-pcsc")]
+//! # {
+//! use wecanencrypt::card::{
+//!     get_card_details, is_card_connected, sign_bytes_detached_on_card,
+//! };
 //!
-//! // Check if a card is connected
 //! if is_card_connected() {
-//!     // Get card details
 //!     let info = get_card_details(None).unwrap();
 //!     println!("Card serial: {}", info.serial_number);
 //!
-//!     // Sign data using the card
-//!     let key = std::fs::read("pubkey.asc").unwrap();
+//!     let public_key = std::fs::read("pubkey.asc").unwrap();
 //!     let signature = sign_bytes_detached_on_card(
 //!         b"Hello, world!",
-//!         &key,
-//!         b"123456",  // User PIN
+//!         &public_key,
+//!         b"123456",
 //!     ).unwrap();
+//!     println!("Signature has {} bytes", signature.len());
 //! }
+//! # }
 //! ```
+//!
+//! # External Transport
+//!
+//! Mobile applications should enable `card-external` and register a provider
+//! with `external::set_backend_provider`. Enumeration APIs such as
+//! `is_card_connected` are PC/SC-only; external transports normally model
+//! card availability at the app/session layer.
 //!
 //! # Touch Policy (YubiKey 4.2+)
 //!
@@ -61,8 +69,8 @@
 //! set_touch_mode(KeySlot::Authentication, TouchMode::On, b"12345678", None).unwrap();
 //! ```
 //!
-//! **Warning**: Setting `TouchMode::Fixed` or `TouchMode::CachedFixed` is permanent
-//! on some devices (like YubiKey) and cannot be changed even with a factory reset!
+//! **Warning**: Setting `TouchMode::Fixed` or `TouchMode::CachedFixed` is
+//! permanent on some devices and cannot be changed even with a factory reset.
 
 mod connection;
 mod crypto;

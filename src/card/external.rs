@@ -53,7 +53,7 @@ static PROVIDER: OnceLock<BackendProvider> = OnceLock::new();
 /// # {
 /// use openpgp_card::CardBackend;
 /// use wecanencrypt::card::external::set_backend_provider;
-/// use wecanencrypt::error::Result;
+/// use wecanencrypt::Result;
 ///
 /// fn my_provider(_ident: Option<&str>) -> Result<Box<dyn CardBackend + Send + Sync>> {
 ///     // Open an NFC / USB session and return a CardBackend.

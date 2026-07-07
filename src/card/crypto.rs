@@ -1,7 +1,9 @@
-//! Cryptographic operations using smart card.
+//! Cryptographic operations backed by an OpenPGP smart card.
 //!
-//! This module provides signing and decryption operations that use keys
-//! stored on a YubiKey or other OpenPGP-compatible smart card.
+//! These helpers keep private-key operations on the card and use the supplied
+//! OpenPGP public certificate bytes to locate the matching card slot, validate
+//! key flags, and build the OpenPGP packet output. They work with either the
+//! PC/SC transport or an external backend provider.
 
 use std::io::Cursor;
 
@@ -809,7 +811,7 @@ fn decrypt_session_key_on_card(
 /// Check if ECDH params indicate a CV25519 key (legacy Curve25519)
 fn is_cv25519_key(params: &pgp::types::EcdhPublicParams) -> bool {
     use pgp::types::EcdhPublicParams;
-    matches!(params, EcdhPublicParams::Curve25519 { .. })
+    matches!(params, EcdhPublicParams::Curve25519Legacy { .. })
 }
 
 /// Strip the 0x40 prefix from CV25519 public points
@@ -841,7 +843,7 @@ fn ecdh_unwrap_session_key(
 
     // Get the KDF parameters based on the curve type
     let (hash_algo, sym_algo): (HashAlgorithm, SymmetricKeyAlgorithm) = match ecdh_params {
-        EcdhPublicParams::Curve25519 { hash, alg_sym, .. } => (*hash, *alg_sym),
+        EcdhPublicParams::Curve25519Legacy { hash, alg_sym, .. } => (*hash, *alg_sym),
         EcdhPublicParams::P256 { hash, alg_sym, .. } => (*hash, *alg_sym),
         EcdhPublicParams::P384 { hash, alg_sym, .. } => (*hash, *alg_sym),
         EcdhPublicParams::P521 { hash, alg_sym, .. } => (*hash, *alg_sym),
@@ -1945,7 +1947,7 @@ where
 #[cfg(test)]
 mod tests {
     // Most tests require a virtual card or physical YubiKey
-    // Run with: cargo test --features card -- --ignored
+    // Run with: cargo test --features card-pcsc -- --ignored
     //
     // The tests below exercise input-validation paths that MUST fail fast
     // before any card I/O — they intentionally run without a card.

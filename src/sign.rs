@@ -1,7 +1,14 @@
-//! Signing functions.
+//! OpenPGP signing helpers.
 //!
-//! This module provides functions for creating OpenPGP signatures
-//! on data using secret key material.
+//! This module creates inline signed messages, cleartext signatures, detached
+//! signatures, and file signatures from armored or binary secret certificate
+//! bytes. By default signing prefers a valid signing subkey; the
+//! `*_with_primary_key` variants force use of the primary key when a protocol
+//! needs that exact issuer.
+//!
+//! The selected hash algorithm is derived from the signing key type: for
+//! example P-384 uses SHA-384 and Ed25519 uses SHA-256. Detached signatures can
+//! opt into a specific hash with [`sign_bytes_detached_with_hash`].
 
 use std::io::Cursor;
 use std::path::Path;
@@ -130,7 +137,7 @@ pub fn verify_software_passphrase(secret_key: &[u8], password: &str) -> Result<(
     Ok(())
 }
 
-/// Sign bytes with a binary signature (wrapping the message).
+/// Sign bytes with an inline binary signature.
 ///
 /// Creates an OpenPGP signed message that includes both the signature and
 /// the original data. The recipient can verify and extract the original message.

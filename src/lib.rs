@@ -1,56 +1,49 @@
 //! # WeCanEncrypt
 //!
-//! A simple Rust OpenPGP library for encryption, signing, and key management using [rpgp](https://docs.rs/pgp).
+//! A compact OpenPGP API for applications that want to pass armored or binary
+//! key/message bytes around without owning rPGP's lower-level packet model.
 //!
-//! This library provides a functional API for common OpenPGP operations,
-//! including:
+//! The crate exposes functional entry points for the common workflows:
 //!
-//! - **Key Generation**: Create RSA, Curve25519, or NIST curve keys
-//! - **Encryption/Decryption**: Encrypt to one or multiple recipients
-//! - **Signing/Verification**: Create and verify signatures
-//! - **Key Management**: Parse, modify, and export OpenPGP keys
-//! - **Key Storage**: SQLite-backed keystore (optional feature)
+//! - key generation with V4 and V6 packet formats
+//! - encryption and decryption for one or more recipients
+//! - inline, cleartext, and detached signatures
+//! - key parsing, UID management, expiry updates, revocation, and merging
+//! - optional SQLite storage, network lookup, DANE lookup, and smart-card I/O
 //!
-//! ## Migrating to 0.6.0
-//!
-//! ### Breaking changes
-//!
-//! - **`GeneratedKey.secret_key`** is now `Zeroizing<Vec<u8>>` (was `Vec<u8>`).
-//!   Secret key bytes are securely erased from memory on drop. `Zeroizing`
-//!   implements `Deref<Target = Vec<u8>>`, so most code works unchanged.
-//!   If you need a `Vec<u8>`, call `.to_vec()`.
-//!
-//! - **`KeyInfo.user_ids`** is now `Vec<UserIDInfo>` (was `Vec<String>`).
-//!   Each UID now includes `value` (the string), `revoked` (bool), and
-//!   `certifications` (third-party signatures). Access the UID string via
-//!   `.value` (e.g., `info.user_ids[0].value`).
-//!
-//! - **`decrypt_with_key()`** now takes an `allow_legacy: bool` parameter.
-//!   Pass `false` to reject integrity-unprotected SED packets (recommended).
-//!   Pass `true` only for historical pre-2007 data.
-//!
-//! - **`decrypt_bytes()`** no longer decrypts legacy SED packets by default.
-//!   Use [`decrypt_bytes_legacy()`] for messages without integrity protection.
-//!
-//! - **Verification now rejects revoked keys.** Signatures from revoked
-//!   keys or subkeys return `false`. Expired keys can still verify old
-//!   signatures (by design, per OpenPGP semantics).
+//! Most functions accept `&[u8]` containing either ASCII armor or binary
+//! OpenPGP data. Generated secret-key bytes are wrapped in `Zeroizing<Vec<u8>>`
+//! through [`GeneratedKey::secret_key`], so temporary secret material is cleared
+//! when dropped.
 //!
 //! ## Quick Start
 //!
 //! ```no_run
-//! use wecanencrypt::*;
+//! use wecanencrypt::{create_key_simple, decrypt_bytes, encrypt_bytes};
 //!
-//! // Generate a new Curve25519 key (fast)
+//! // Generate a V4 certificate using the default Cv25519 suite.
 //! let key = create_key_simple("password", &["Alice <alice@example.com>"]).unwrap();
 //!
-//! // Encrypt a message
+//! // Encrypt to the public certificate bytes returned by key generation.
 //! let ciphertext = encrypt_bytes(key.public_key.as_bytes(), b"Hello!", true).unwrap();
 //!
-//! // Decrypt it
+//! // Decrypt with the matching secret certificate bytes.
 //! let plaintext = decrypt_bytes(&key.secret_key, &ciphertext, "password").unwrap();
 //! assert_eq!(plaintext, b"Hello!");
 //! ```
+//!
+//! ## Key Versions
+//!
+//! [`create_key_simple`] and [`create_key`] produce broadly compatible V4
+//! certificates. [`create_key_v6_simple`] and [`create_key_v6`] produce RFC
+//! 9580 V6 certificates, which use the modern Ed25519/X25519 or Ed448/X448 key
+//! encodings for the Curve25519/Curve448 suites.
+//!
+//! Encryption helpers such as [`encrypt_bytes`] and
+//! [`encrypt_bytes_to_multiple`] inspect recipient certificates and pick the
+//! correct encrypted-data packet format automatically: SEIPD v1 for V4
+//! recipients, SEIPD v2 with AEAD for V6 recipients. A mixed V4/V6 recipient
+//! list returns [`Error::KeyVersionMismatch`].
 //!
 //! ## Cipher Suites
 //!
@@ -58,7 +51,7 @@
 //!
 //! | Suite | Primary Key | Encryption Subkey | Speed |
 //! |-------|-------------|-------------------|-------|
-//! | `Cv25519` (default) | EdDSA Legacy | ECDH Curve25519 | Fast |
+//! | `Cv25519` (default) | EdDSA Legacy | ECDH Curve25519Legacy | Fast |
 //! | `Cv25519Modern` | Ed25519 (RFC 9580) | X25519 | Fast |
 //! | `Cv448Modern` | Ed448 (RFC 9580) | X448 | Fast |
 //! | `NistP256` | ECDSA P-256 | ECDH P-256 | Fast |
@@ -69,14 +62,20 @@
 //!
 //! ## Features
 //!
-//! - `keystore`: Enable SQLite-backed key storage (requires `rusqlite`)
-//! - `network`: Enable network operations for fetching keys from keyservers
+//! - `keystore` (default): SQLite-backed key storage.
+//! - `network` (default): WKD and keyserver lookup via blocking `reqwest`.
+//! - `dane`: DNS OPENPGPKEY lookup.
+//! - `card`: transport-agnostic OpenPGP-card operations.
+//! - `card-pcsc`: desktop PC/SC transport; implies `card`.
+//! - `card-external`: mobile or custom transport provider; implies `card`.
+//! - `draft-pqc`: exposes rPGP's experimental post-quantum draft support.
 //!
-//! ## Design
+//! ## Security Defaults
 //!
-//! This library uses a functional API - all operations are standalone functions
-//! that take key data as `&[u8]`. This provides maximum flexibility
-//! and avoids the overhead of wrapper types.
+//! Decryption rejects legacy SED packets without integrity protection unless
+//! you explicitly call [`decrypt_bytes_legacy`]. Verification and signing
+//! helpers ignore revoked signing keys, and signing refuses expired or revoked
+//! key material. Expired keys may still verify old signatures.
 
 // Re-export rpgp crate
 pub use pgp;

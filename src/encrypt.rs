@@ -1,7 +1,14 @@
-//! Encryption functions.
+//! OpenPGP encryption helpers.
 //!
-//! This module provides functions for encrypting data to one or more
-//! OpenPGP recipients.
+//! The primary entry points are [`encrypt_bytes`] for a single recipient and
+//! [`encrypt_bytes_to_multiple`] for a recipient set. Both accept public
+//! certificate bytes in ASCII armor or binary form. The default helpers inspect
+//! the recipient key version and choose the compliant encrypted-data packet:
+//! SEIPD v1 for V4 recipients and SEIPD v2 with AEAD for V6 recipients.
+//!
+//! Recipient lists must be version-homogeneous. Mixing V4 and V6 certificates
+//! in one call returns [`crate::Error::KeyVersionMismatch`] instead of producing
+//! a message with ambiguous packet framing.
 
 use std::io::{BufReader, Cursor, Read};
 use std::path::Path;
@@ -23,8 +30,9 @@ use crate::sign::{find_signing_subkey, select_hash_for_params};
 
 /// Encrypt bytes to a single recipient.
 ///
-/// Uses SEIPD v1 (RFC 4880, integrity-protected with MDC). For AEAD encryption
-/// with V6 keys, use [`encrypt_bytes_v2`].
+/// Uses SEIPD v1 (RFC 4880, integrity-protected with MDC) for V4 recipients and
+/// SEIPD v2 (RFC 9580, AEAD) for V6 recipients. For callers that need to force
+/// the V6 packet shape directly, use [`encrypt_bytes_v2`].
 ///
 /// Encrypts the plaintext to the recipient's public key. The message can only
 /// be decrypted by someone with the corresponding secret key.
@@ -42,11 +50,11 @@ use crate::sign::{find_signing_subkey, select_hash_for_params};
 /// ```no_run
 /// use wecanencrypt::{create_key_simple, encrypt_bytes, decrypt_bytes, get_pub_key};
 ///
-/// // Create a key pair
+/// // Create a V4 key pair and extract the public certificate.
 /// let key = create_key_simple("password", &["Alice <alice@example.com>"]).unwrap();
 /// let public_key = get_pub_key(&key.secret_key).unwrap();
 ///
-/// // Encrypt a message
+/// // Encrypt an ASCII-armored message.
 /// let ciphertext = encrypt_bytes(public_key.as_bytes(), b"Secret message", true).unwrap();
 ///
 /// // Decrypt it
@@ -60,7 +68,8 @@ pub fn encrypt_bytes(recipient_key: &[u8], plaintext: &[u8], armor: bool) -> Res
 /// Encrypt bytes to a single recipient using SEIPD v2 (RFC 9580, AEAD).
 ///
 /// Like [`encrypt_bytes`], but uses SEIPD v2 (AES-256-OCB) for AEAD-based
-/// authenticated encryption. Requires recipients with V6 key support.
+/// authenticated encryption. Prefer [`encrypt_bytes`] for general use; it
+/// already selects SEIPD v2 for V6 recipients.
 ///
 /// # Arguments
 /// * `recipient_key` - The recipient's public key (armored or binary)
@@ -78,7 +87,8 @@ pub fn encrypt_bytes_v2(recipient_key: &[u8], plaintext: &[u8], armor: bool) -> 
 /// [`Error::KeyVersionMismatch`] to prevent accidentally producing a message
 /// whose ESK/SEIPD framing is disallowed by RFC 9580 §5.1.2 / §5.3.2.
 ///
-/// Each recipient only needs their own secret key to decrypt.
+/// Each recipient only needs their own secret key to decrypt. If you pass V6
+/// recipients, the output uses SEIPD v2 automatically.
 ///
 /// # Arguments
 /// * `recipient_keys` - Slice of recipient public keys (armored or binary)

@@ -625,7 +625,10 @@ fn extract_key_info(
 ) -> pgp::errors::Result<KeyUploadInfo> {
     match (pub_params, priv_params) {
         // Ed25519 (legacy v4 and modern v6)
-        (PublicParams::EdDSALegacy(ed_pub), PlainSecretParams::Ed25519Legacy(ed_priv)) => {
+        (
+            PublicParams::EdDSALegacy(ed_pub),
+            PlainSecretParams::EdDSALegacy(pgp::crypto::eddsa_legacy::SecretKey::Ed25519(ed_priv)),
+        ) => {
             use pgp::types::EddsaLegacyPublicParams;
             let public_key = match ed_pub {
                 EddsaLegacyPublicParams::Ed25519 { key } => {
@@ -675,7 +678,7 @@ fn extract_key_info(
         (PublicParams::ECDH(ecdh_pub), PlainSecretParams::ECDH(ecdh_priv)) => {
             use pgp::types::EcdhPublicParams;
             match ecdh_pub {
-                EcdhPublicParams::Curve25519 { p, .. } => {
+                EcdhPublicParams::Curve25519Legacy { p, .. } => {
                     // CV25519 scalar: rpgp stores little-endian, card expects big-endian
                     let scalar_le = ecdh_priv.to_bytes();
                     let scalar_be: Vec<u8> = scalar_le.iter().rev().copied().collect();
@@ -877,7 +880,7 @@ mod tests {
         }
     }
 
-    /// Regression test for the legacy `PublicParams::ECDH(EcdhPublicParams::Curve25519)`
+    /// Regression test for the legacy `PublicParams::ECDH(EcdhPublicParams::Curve25519Legacy)`
     /// arm. The V6 tests above cover the raw-packet `PublicParams::Ed25519` /
     /// `PublicParams::X25519` paths; this one drives the older MPI-based
     /// V4 representation used by `CipherSuite::Cv25519` (as opposed to

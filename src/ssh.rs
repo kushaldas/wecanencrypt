@@ -1,8 +1,11 @@
-//! SSH public key conversion and signing functions.
+//! SSH public-key export and raw signing helpers.
 //!
-//! This module provides functions for converting OpenPGP authentication
-//! keys to SSH public key format (RFC 4253) and for performing raw
-//! cryptographic signatures suitable for SSH authentication.
+//! OpenPGP authentication subkeys can also be used for SSH authentication when
+//! their algorithm has an SSH wire representation. This module exports the
+//! authentication subkey as an `authorized_keys` line and produces raw SSH
+//! signatures from the matching secret key. RSA, Ed25519/legacy EdDSA, and NIST
+//! ECDSA authentication keys are supported; ECDH/X25519 encryption keys are not
+//! usable for SSH authentication.
 
 use std::time::SystemTime;
 
@@ -25,10 +28,11 @@ use crate::types::{RsaPublicKey, SigningPublicKey};
 /// SSH public key string (e.g., "ssh-rsa AAAA... comment").
 ///
 /// # Example
-/// ```ignore
-/// // Ignored: illustrative example with placeholder file path
-/// let key = std::fs::read("key.asc")?;
-/// let ssh_key = get_ssh_pubkey(&key, Some("user@example.com"))?;
+/// ```no_run
+/// use wecanencrypt::get_ssh_pubkey;
+///
+/// let key = std::fs::read("key.asc").unwrap();
+/// let ssh_key = get_ssh_pubkey(&key, Some("user@example.com")).unwrap();
 /// println!("{}", ssh_key);
 /// ```
 pub fn get_ssh_pubkey(key_data: &[u8], comment: Option<&str>) -> Result<String> {
@@ -171,7 +175,7 @@ fn convert_params_to_ssh(params: &PublicParams) -> Result<(String, Vec<u8>)> {
 
             // ECDH keys with Curve25519 can be converted for SSH authentication
             match ecdh_params {
-                EcdhPublicParams::Curve25519 { .. } => {
+                EcdhPublicParams::Curve25519Legacy { .. } => {
                     // Note: X25519 is typically used for key exchange, not authentication
                     Err(Error::UnsupportedAlgorithm(
                         "X25519 is for key exchange, not authentication".to_string(),
@@ -460,8 +464,8 @@ fn ssh_raw_sign_with_params(
     hash_alg: SshHashAlgorithm,
 ) -> Result<SshSignResult> {
     match secret_params {
-        // Ed25519 (RFC 9580) or legacy EdDSA
-        PlainSecretParams::Ed25519(sk) | PlainSecretParams::Ed25519Legacy(sk) => {
+        // Ed25519 (RFC 9580)
+        PlainSecretParams::Ed25519(sk) => {
             let key_bytes = sk.as_bytes();
             let signing_key = pgp::crypto::ed25519::SecretKey::try_from_bytes(
                 *key_bytes,
@@ -474,6 +478,25 @@ fn ssh_raw_sign_with_params(
             let signature = dalek_key.sign(data);
             Ok(SshSignResult::Ed25519(signature.to_bytes().to_vec()))
         }
+
+        // Legacy EdDSA uses the same Ed25519 primitive with older OpenPGP packet framing.
+        PlainSecretParams::EdDSALegacy(pgp::crypto::eddsa_legacy::SecretKey::Ed25519(sk)) => {
+            let key_bytes = sk.as_bytes();
+            let signing_key = pgp::crypto::ed25519::SecretKey::try_from_bytes(
+                *key_bytes,
+                pgp::crypto::ed25519::Mode::Ed25519,
+            )
+            .map_err(|e| Error::Crypto(e.to_string()))?;
+            use std::ops::Deref;
+            let dalek_key: &ed25519_dalek::SigningKey = signing_key.deref();
+            use ed25519_dalek::Signer;
+            let signature = dalek_key.sign(data);
+            Ok(SshSignResult::Ed25519(signature.to_bytes().to_vec()))
+        }
+
+        PlainSecretParams::EdDSALegacy(_) => Err(Error::UnsupportedAlgorithm(
+            "Unsupported legacy EdDSA curve for SSH signing".to_string(),
+        )),
 
         // ECDSA - determine curve from pub_params, not scalar length
         PlainSecretParams::ECDSA(ecdsa_sk) => {
