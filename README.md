@@ -1,12 +1,12 @@
 # wecanencrypt
 
 Simple Rust OpenPGP library for encryption, signing, and key management, built
-on top of [rpgp](https://github.com/rpgp/rpgp) (pgp v0.19).
+on top of [rpgp](https://github.com/rpgp/rpgp) (pgp v0.20).
 
 ## Features
 
 - **Key Generation**: Create OpenPGP keys with multiple cipher suites (Cv25519, Cv25519Modern, Cv448Modern, NIST P-256/P-384/P-521, RSA-2048/4096)
-- **Encryption/Decryption**: Encrypt to one or multiple recipients (SEIPD v1 default, SEIPD v2 AEAD available), reject legacy SED by default
+- **Encryption/Decryption**: Encrypt to one or multiple recipients, automatically using SEIPD v1 for V4 recipients and SEIPD v2 AEAD for V6 recipients; reject legacy SED by default
 - **Signing/Verification**: Inline, cleartext, and detached signatures with subkey preference; verification filters to signing-capable subkeys only
 - **Key Merging**: Proper packet-level merge with signature deduplication, following the rpgpie/rsop algorithm
 - **Key Management**: Update expiration (primary and per-subkey), add/revoke UIDs, revoke keys, change passwords, third-party certification (4 levels)
@@ -22,7 +22,7 @@ on top of [rpgp](https://github.com/rpgp/rpgp) (pgp v0.19).
 
 | Suite | Primary Key | Encryption Subkey | Speed |
 |-------|-------------|-------------------|-------|
-| `Cv25519` (default) | EdDSA Legacy | ECDH Curve25519 | Fast |
+| `Cv25519` (default) | EdDSA Legacy | ECDH Curve25519Legacy | Fast |
 | `Cv25519Modern` | Ed25519 (RFC 9580) | X25519 | Fast |
 | `Cv448Modern` | Ed448 (RFC 9580) | X448 | Fast |
 | `NistP256` | ECDSA P-256 | ECDH P-256 | Fast |
@@ -49,10 +49,15 @@ let decrypted = decrypt_bytes(&key.secret_key, &encrypted, "passphrase")?;
 assert_eq!(decrypted, plaintext);
 ```
 
-## SEIPD v2 (AEAD) Encryption
+## V4 and V6 Encryption
 
-The default `encrypt_bytes` uses SEIPD v1 (RFC 4880, integrity-protected with
-MDC). For AEAD-based encryption with V6 key support, use the v2 variants:
+The default `encrypt_bytes` and `encrypt_bytes_to_multiple` helpers inspect the
+recipient certificates. V4 recipient lists use SEIPD v1 (RFC 4880,
+integrity-protected with MDC). V6 recipient lists use SEIPD v2 (RFC 9580 AEAD).
+Mixed V4/V6 recipient lists are rejected.
+
+The explicit v2 helpers remain available when a caller wants to request the V6
+packet shape directly:
 
 ```rust
 use wecanencrypt::encrypt_bytes_v2;
@@ -77,6 +82,11 @@ is based on cryptographic signature bytes, with unhashed subpacket merging
 for signatures that differ only in advisory data.
 
 ## Smart Card Usage
+
+Desktop card discovery uses the `card-pcsc` feature. The lower-level `card`
+feature contains transport-independent OpenPGP-card logic but cannot enumerate
+or acquire a card on its own. Mobile or custom transports should use
+`card-external` and register a backend provider.
 
 ```rust
 use wecanencrypt::card::{
@@ -111,7 +121,7 @@ if is_card_connected() {
 
 ### Multi-card selection
 
-Every card operation that targets a specific card/reader takes a trailing
+With `card-pcsc`, every card operation that targets a specific card/reader takes a trailing
 `ident: Option<&str>` parameter. Pass `None` for the first enumerated card,
 or `Some("MANUFACTURER:SERIAL")` (e.g. `"000F:CB9A5355"` for a Nitrokey 3)
 to target a specific card when several are attached. The enumeration
@@ -177,22 +187,22 @@ Other policy decisions:
 ### Run all tests in the tests/ directory
 
 ```bash
-cargo test --features card --test '*'
+cargo test --features card-pcsc --test '*'
 ```
 
 Or run specific test files:
 
 ```bash
 # Individual test files
-cargo test --features card --test integration_tests
-cargo test --features card --test keystore_tests
-cargo test --features card --test fixture_tests
+cargo test --features card-pcsc --test integration_tests
+cargo test --features card-pcsc --test keystore_tests
+cargo test --features card-pcsc --test fixture_tests
 ```
 
 Or combine them:
 
 ```bash
-cargo test --features card --test integration_tests --test keystore_tests --test fixture_tests
+cargo test --features card-pcsc --test integration_tests --test keystore_tests --test fixture_tests
 ```
 
 ### Smart Card Tests
@@ -200,7 +210,7 @@ cargo test --features card --test integration_tests --test keystore_tests --test
 Smart card tests require a physical YubiKey or compatible OpenPGP smart card. These tests are ignored by default:
 
 ```bash
-cargo test --features card --test card_tests -- --ignored --test-threads=1
+cargo test --features card-pcsc --test card_tests -- --ignored --test-threads=1
 ```
 
 Note: Card tests automatically reset the card to factory defaults before each test.
@@ -209,7 +219,9 @@ Note: Card tests automatically reset the card to factory defaults before each te
 
 - `keystore` (default): SQLite-backed key storage with card-key associations
 - `network` (default): WKD and VKS key fetching
-- `card`: Smart card support (requires `libpcsclite-dev` on Linux)
+- `card`: Transport-agnostic OpenPGP-card logic; no runtime transport by itself
+- `card-pcsc`: Desktop PC/SC smart-card support (requires `libpcsclite-dev` on Linux)
+- `card-external`: Mobile or custom smart-card backend provider
 - `dane`: DNS DANE OPENPGPKEY key discovery (RFC 7929)
 - `draft-pqc`: Post-quantum cryptography support (experimental)
 
@@ -221,8 +233,8 @@ Before tagging a release, run:
 
 ```bash
 cargo fmt --check
-cargo clippy --all-targets --features card -- -D warnings
-cargo test --features card --test '*'
+cargo clippy --all-targets --features card-pcsc -- -D warnings
+cargo test --features card-pcsc --test '*'
 cargo test --features dane --lib
 cargo publish --dry-run
 ```

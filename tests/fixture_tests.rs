@@ -7,7 +7,6 @@ use std::path::PathBuf;
 
 use wecanencrypt::{
     // Key management
-    add_uid,
     bytes_encrypted_for,
     decrypt_bytes,
     // Encryption/Decryption
@@ -726,7 +725,7 @@ mod encryption_fixtures {
 mod keystore_fixtures {
     use super::*;
     use tempfile::tempdir;
-    use wecanencrypt::KeyStore;
+    use wecanencrypt::{add_uid, KeyStore};
 
     const PASSWORD: &str = "redhat";
     const DATA: &str = "Kushal loves 🦀";

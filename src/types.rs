@@ -1,13 +1,21 @@
-//! Public type definitions for the wecanencrypt library.
+//! Public API types.
 //!
-//! This module contains all the data structures used throughout the library
-//! for representing OpenPGP keys and their properties.
+//! These structs and enums are stable summaries of OpenPGP concepts returned by
+//! the functional API. They intentionally avoid exposing rPGP packet internals
+//! for common application tasks such as choosing a cipher suite, displaying key
+//! information, checking subkey availability, and rendering UID certification
+//! metadata.
 
 use chrono::{DateTime, Utc};
 use pgp::types::KeyVersion;
 use zeroize::Zeroizing;
 
 /// Cipher suite options for key generation.
+///
+/// `Cv25519` is the V4-compatible default. For RFC 9580 V6 certificates, use a
+/// V6-compatible suite such as `Cv25519Modern`, `Cv448Modern`, a NIST curve, or
+/// RSA. [`CipherSuite::is_allowed_for_v6`] exposes that policy for callers that
+/// present suite choices in a UI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CipherSuite {
     /// RSA with 2048-bit keys
@@ -511,7 +519,7 @@ impl CipherSuite {
             CipherSuite::Rsa2k => pgp::composed::KeyType::Rsa(2048),
             CipherSuite::Rsa4k => pgp::composed::KeyType::Rsa(4096),
             CipherSuite::Cv25519 => {
-                pgp::composed::KeyType::ECDH(pgp::crypto::ecc_curve::ECCCurve::Curve25519)
+                pgp::composed::KeyType::ECDH(pgp::crypto::ecc_curve::ECCCurve::Curve25519Legacy)
             }
             CipherSuite::Cv25519Modern => pgp::composed::KeyType::X25519,
             CipherSuite::NistP256 => {

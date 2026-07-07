@@ -1,9 +1,10 @@
-//! Smart card connection and management functions.
+//! Smart-card connection and management functions.
 //!
-//! This module provides functions for connecting to and managing OpenPGP smart cards.
-//! All functions accept an optional `ident` parameter to select a specific card
-//! when multiple cards are connected. The ident format is `"MANUFACTURER:SERIAL"`
-//! (e.g. `"0006:00000001"` for a Yubico card). If `None`, the first available card is used.
+//! PC/SC builds can enumerate connected OpenPGP cards and select one by an
+//! optional `ident` string (`"MANUFACTURER:SERIAL"`, for example
+//! `"0006:00000001"`). External-transport builds receive backends from the
+//! registered provider instead, so the application owns session discovery and
+//! may ignore `ident` when only one NFC/USB session is active.
 
 use card_backend::CardBackend;
 #[cfg(feature = "card-pcsc")]
@@ -996,5 +997,5 @@ pub fn find_cards_for_key(key_data: &[u8]) -> Result<Vec<CardKeyMatch>> {
 #[cfg(test)]
 mod tests {
     // Tests require a physical card or virtual card via pcscd
-    // Run with: cargo test --features card -- --ignored
+    // Run with: cargo test --features card-pcsc -- --ignored
 }

@@ -1,7 +1,11 @@
-//! OpenPGP key parsing functions.
+//! OpenPGP key parsing and inspection helpers.
 //!
-//! This module provides functions for parsing OpenPGP keys from
-//! various sources and extracting information from them.
+//! Parsing functions accept a public or secret certificate in ASCII armor or
+//! binary form and return stable, application-facing summaries such as
+//! [`KeyInfo`], [`SubkeyInfo`], and [`KeyCipherDetails`]. The summaries
+//! distinguish public-only material from secret material, expose V4/V6 key
+//! versions, report revoked user IDs/subkeys, and include third-party UID
+//! certifications when present.
 
 use std::path::Path;
 
@@ -28,10 +32,11 @@ use crate::types::{
 /// Key information including user IDs, fingerprint, and subkey details.
 ///
 /// # Example
-/// ```ignore
-/// // Ignored: illustrative example with placeholder file path
-/// let key_data = std::fs::read("key.asc")?;
-/// let info = parse_key_bytes(&key_data, false)?;
+/// ```no_run
+/// use wecanencrypt::parse_key_bytes;
+///
+/// let key_data = std::fs::read("key.asc").unwrap();
+/// let info = parse_key_bytes(&key_data, false).unwrap();
 /// println!("Fingerprint: {}", info.fingerprint);
 /// ```
 pub fn parse_key_bytes(data: &[u8], allow_expired: bool) -> Result<KeyInfo> {

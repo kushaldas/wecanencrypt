@@ -1,7 +1,9 @@
-//! Verification functions.
+//! OpenPGP signature verification helpers.
 //!
-//! This module provides functions for verifying OpenPGP signatures
-//! on messages and files.
+//! The verification functions accept armored or binary public certificate bytes
+//! and verify inline, cleartext, detached, and file signatures. Revoked signing
+//! keys and revoked signing subkeys are ignored. Expired keys may still verify
+//! signatures made while the key was valid, matching OpenPGP's usual semantics.
 
 use std::io::Cursor;
 use std::path::Path;
@@ -29,11 +31,13 @@ use crate::internal::{
 /// `true` if the signature is valid, `false` otherwise.
 ///
 /// # Example
-/// ```ignore
-/// // Ignored: illustrative example with placeholder file paths
-/// let public_key = std::fs::read("signer.asc")?;
-/// let signed_msg = std::fs::read("message.asc")?;
-/// let valid = verify_bytes(&public_key, &signed_msg)?;
+/// ```no_run
+/// use wecanencrypt::verify_bytes;
+///
+/// let public_key = std::fs::read("signer.asc").unwrap();
+/// let signed_msg = std::fs::read("message.asc").unwrap();
+/// let valid = verify_bytes(&public_key, &signed_msg).unwrap();
+/// assert!(valid);
 /// ```
 pub fn verify_bytes(signer_key: &[u8], signed_message: &[u8]) -> Result<bool> {
     let public_key = parse_public_key(signer_key)?;

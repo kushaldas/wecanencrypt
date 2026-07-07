@@ -1,7 +1,13 @@
-//! Decryption functions.
+//! OpenPGP decryption helpers.
 //!
-//! This module provides functions for decrypting OpenPGP encrypted messages
-//! using secret key material.
+//! [`decrypt_bytes`] is the normal entry point for messages encrypted with
+//! [`crate::encrypt_bytes`] or another OpenPGP implementation. It accepts
+//! armored or binary ciphertext plus the recipient's armored or binary secret
+//! certificate bytes.
+//!
+//! Integrity-protected packets are required by default. Historical SED packets
+//! without MDC/AEAD integrity protection are rejected unless callers explicitly
+//! choose [`decrypt_bytes_legacy`].
 
 use std::io::{Cursor, Read};
 use std::path::Path;
@@ -14,8 +20,9 @@ use crate::internal::parse_secret_key;
 
 /// Decrypt bytes using a secret key.
 ///
-/// Decrypts an OpenPGP encrypted message using the recipient's secret key.
-/// The message must have been encrypted to this key.
+/// Decrypts an OpenPGP encrypted message using the recipient's secret key. The
+/// message must have been encrypted to this key or one of its encryption
+/// subkeys.
 ///
 /// Only decrypts integrity-protected messages (SEIPDv1 with MDC, SEIPDv2 with AEAD).
 /// Legacy SED packets (no integrity protection) are rejected by default.

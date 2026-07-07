@@ -1,6 +1,6 @@
 [package]
 name = "wecanencrypt"
-version = "0.16.2"
+version = "0.16.3"
 edition = "2021"
 license = "MIT"
 description = "Simple Rust OpenPGP library for encryption, signing, and key management."
@@ -60,7 +60,7 @@ draft-pqc = ["pgp/draft-pqc"]
 
 [dependencies]
 # OpenPGP implementation (rpgp)
-pgp = { version = "0.19", default-features = false, features = ["bzip2"] }
+pgp = { version = "0.20", default-features = false, features = ["bzip2"] }
 
 # SSH key format handling
 sshkeys = "0.3"
@@ -129,4 +129,8 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [[example]]
 name = "upexp"
-required-features = ["card"]
+required-features = ["card-pcsc"]
+
+[[example]]
+name = "fetch_key"
+required-features = ["network"]

@@ -1,7 +1,13 @@
-//! Key generation and management functions.
+//! OpenPGP key generation and key-management helpers.
 //!
-//! This module provides functions for generating new OpenPGP keys
-//! and managing existing keys (expiry, UIDs, etc.).
+//! [`create_key_simple`] creates the default V4 certificate for broad
+//! compatibility. [`create_key_v6_simple`] creates an RFC 9580 V6 certificate
+//! and requires a V6-compatible [`CipherSuite`], such as
+//! [`CipherSuite::Cv25519Modern`] or [`CipherSuite::Cv448Modern`].
+//!
+//! Management helpers operate on armored or binary key bytes. They preserve the
+//! original key packet version when adding or revoking user IDs, updating
+//! expiration, changing passwords, and merging public/secret key material.
 
 use chrono::{DateTime, Utc};
 use pgp::composed::{

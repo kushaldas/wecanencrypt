@@ -1,7 +1,13 @@
-//! Network key fetching (WKD, keyserver, and DANE support).
+//! Network key discovery helpers.
 //!
-//! This module provides functions for fetching OpenPGP keys from the network
-//! using Web Key Directory (WKD), HKP keyservers, and DNS DANE (OPENPGPKEY records).
+//! With the `network` feature, this module can fetch public certificates via
+//! Web Key Directory (WKD) and common keyserver endpoints. With the `dane`
+//! feature, it can query DNS OPENPGPKEY records. Returned bytes are parsed
+//! before success is reported, so callers receive data that rPGP accepts as an
+//! OpenPGP certificate.
+//!
+//! These functions perform blocking network I/O. Use them from a blocking
+//! worker thread when integrating with async applications.
 
 use crate::error::{Error, Result};
 use crate::internal::parse_key;
@@ -9,6 +15,7 @@ use crate::internal::parse_key;
 use crate::internal::{fingerprint_to_hex, keyid_to_hex};
 
 /// Maximum response size for key fetches (10 MB).
+#[cfg(feature = "network")]
 const MAX_KEY_RESPONSE_SIZE: u64 = 10 * 1024 * 1024;
 
 /// Fetch a key from Web Key Directory (WKD) by email address.
@@ -23,9 +30,11 @@ const MAX_KEY_RESPONSE_SIZE: u64 = 10 * 1024 * 1024;
 /// The key data if found.
 ///
 /// # Example
-/// ```ignore
-/// // Ignored: requires network access to WKD servers
-/// let key = fetch_key_by_email("user@example.com")?;
+/// ```no_run
+/// use wecanencrypt::fetch_key_by_email;
+///
+/// let key = fetch_key_by_email("user@example.com").unwrap();
+/// println!("Fetched {} bytes", key.len());
 /// ```
 #[cfg(feature = "network")]
 pub fn fetch_key_by_email(email: &str) -> Result<Vec<u8>> {
@@ -76,12 +85,14 @@ pub fn fetch_key_by_email(email: &str) -> Result<Vec<u8>> {
 /// The key data if found.
 ///
 /// # Example
-/// ```ignore
-/// // Ignored: requires network access to keyservers
+/// ```no_run
+/// use wecanencrypt::fetch_key_by_fingerprint;
+///
 /// let key = fetch_key_by_fingerprint(
 ///     "A4F388BBB194925AE301F844C52B42177857DD79",
 ///     None,
-/// )?;
+/// ).unwrap();
+/// println!("Fetched {} bytes", key.len());
 /// ```
 #[cfg(feature = "network")]
 pub fn fetch_key_by_fingerprint(fingerprint: &str, keyserver: Option<&str>) -> Result<Vec<u8>> {
@@ -192,9 +203,11 @@ pub fn fetch_key_by_keyid(key_id: &str, keyserver: Option<&str>) -> Result<Vec<u
 /// The key data if found.
 ///
 /// # Example
-/// ```ignore
-/// // Ignored: requires network access to keyservers
-/// let key = fetch_key_by_email_from_keyserver("user@example.com", None)?;
+/// ```no_run
+/// use wecanencrypt::fetch_key_by_email_from_keyserver;
+///
+/// let key = fetch_key_by_email_from_keyserver("user@example.com", None).unwrap();
+/// println!("Fetched {} bytes", key.len());
 /// ```
 #[cfg(feature = "network")]
 pub fn fetch_key_by_email_from_keyserver(email: &str, keyserver: Option<&str>) -> Result<Vec<u8>> {
@@ -584,15 +597,14 @@ fn dns_query_tcp(name: &str, resolver: &str, wire: &[u8]) -> Result<Vec<u8>> {
 ///
 /// # Example
 ///
-/// ```ignore
-/// // Ignored: requires network access and a domain with OPENPGPKEY records
+/// ```no_run
 /// use wecanencrypt::fetch_key_by_email_from_dane;
 ///
 /// // Use system DNS resolver
-/// let key = fetch_key_by_email_from_dane("user@example.com", None)?;
+/// let key = fetch_key_by_email_from_dane("user@example.com", None).unwrap();
 ///
 /// // Use a specific DNS resolver
-/// let key = fetch_key_by_email_from_dane("user@example.com", Some("8.8.8.8:53"))?;
+/// let key = fetch_key_by_email_from_dane("user@example.com", Some("8.8.8.8:53")).unwrap();
 /// ```
 #[cfg(feature = "dane")]
 pub fn fetch_key_by_email_from_dane(email: &str, dns_resolver: Option<&str>) -> Result<Vec<u8>> {
@@ -614,7 +626,7 @@ pub fn fetch_key_by_email_from_dane(email: &str, dns_resolver: Option<&str>) -> 
 
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "network")]
+    #[cfg(any(feature = "network", feature = "dane"))]
     use super::*;
 
     #[test]

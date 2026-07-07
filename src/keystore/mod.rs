@@ -1,80 +1,76 @@
 //! SQLite-backed key storage.
 //!
-//! This module provides persistent storage for OpenPGP keys
-//! using SQLite. Keys are stored with their fingerprints, user IDs,
-//! and subkey information for efficient lookup.
+//! Enabled by the `keystore` feature, this module stores OpenPGP public and
+//! secret certificates in SQLite and indexes their fingerprints, key IDs, user
+//! IDs, email addresses, subkeys, key versions, and revocation state. It is a
+//! convenience layer over the functional API: stored keys are exported and then
+//! passed to the same encrypt/decrypt/sign/verify helpers used elsewhere.
 //!
-//! # Features
-//!
-//! - **Persistent storage**: Keys survive application restarts
-//! - **Search**: Find keys by fingerprint, email, or user ID
-//! - **Separate secret/public**: Track which keys have secret material
-//! - **Crypto operations**: Encrypt, decrypt, sign, verify using stored keys
+//! Public certificates and secret certificates are tracked separately, so an
+//! application can distinguish keys it owns from keys it only encrypts to or
+//! verifies against.
 //!
 //! # Basic Usage
 //!
 //! ```no_run
-//! use wecanencrypt::{KeyStore, create_key_simple};
+//! use wecanencrypt::{create_key_simple, KeyStore};
 //!
-//! // Open or create a keystore
-//! let store = KeyStore::open("~/.myapp/keys.db").unwrap();
+//! let store = KeyStore::open("keys.db").unwrap();
 //!
-//! // Generate and import a key
 //! let key = create_key_simple("password", &["Alice <alice@example.com>"]).unwrap();
 //! let fingerprint = store.import_key(&key.secret_key).unwrap();
 //!
-//! println!("Imported key: {}", fingerprint);
-//!
-//! // List all keys
 //! for key in store.list_keys().unwrap() {
-//!     println!("  {} - {:?}", key.fingerprint, key.user_ids);
+//!     println!("{} {:?}", key.fingerprint, key.user_ids);
 //! }
 //! ```
 //!
 //! # Encryption with KeyStore
 //!
 //! ```no_run
-//! use wecanencrypt::{KeyStore, encrypt_bytes_from_store, decrypt_bytes_from_store};
+//! use wecanencrypt::{
+//!     create_key_simple, decrypt_bytes_from_store, encrypt_bytes_from_store, KeyStore,
+//! };
 //!
-//! let store = KeyStore::open("keys.db").unwrap();
+//! let store = KeyStore::open_in_memory().unwrap();
+//! let alice = create_key_simple("password", &["Alice <alice@example.com>"]).unwrap();
+//! let alice_fp = store.import_key(&alice.secret_key).unwrap();
 //!
-//! // Encrypt to a recipient by fingerprint
-//! let recipient_fp = "ABCD1234...";
 //! let ciphertext = encrypt_bytes_from_store(
 //!     &store,
-//!     recipient_fp,
+//!     &alice_fp,
 //!     b"Secret message",
-//!     true,  // armor
+//!     true,
 //! ).unwrap();
 //!
-//! // Decrypt using your secret key
-//! let my_fp = "1234ABCD...";
 //! let plaintext = decrypt_bytes_from_store(
 //!     &store,
-//!     my_fp,
+//!     &alice_fp,
 //!     &ciphertext,
-//!     "my_password",
+//!     "password",
 //! ).unwrap();
+//! assert_eq!(plaintext, b"Secret message");
 //! ```
 //!
 //! # Signing with KeyStore
 //!
 //! ```no_run
-//! use wecanencrypt::{KeyStore, sign_bytes_from_store, verify_bytes_from_store};
+//! use wecanencrypt::{
+//!     create_key_simple, sign_bytes_from_store, verify_bytes_from_store, KeyStore,
+//! };
 //!
-//! let store = KeyStore::open("keys.db").unwrap();
-//! let my_fp = "1234ABCD...";
+//! let store = KeyStore::open_in_memory().unwrap();
+//! let alice = create_key_simple("password", &["Alice <alice@example.com>"]).unwrap();
+//! let alice_fp = store.import_key(&alice.secret_key).unwrap();
 //!
-//! // Sign a message
 //! let signed = sign_bytes_from_store(
 //!     &store,
-//!     my_fp,
+//!     &alice_fp,
 //!     b"Important announcement",
-//!     "my_password",
+//!     "password",
 //! ).unwrap();
 //!
-//! // Verify the signature
-//! let valid = verify_bytes_from_store(&store, my_fp, &signed).unwrap();
+//! let valid = verify_bytes_from_store(&store, &alice_fp, &signed).unwrap();
 //! assert!(valid);
 //! ```
 //!

@@ -1,7 +1,9 @@
-//! Keyring file operations.
+//! OpenPGP keyring file operations.
 //!
-//! This module provides functions for reading and writing OpenPGP
-//! keyring files that contain multiple keys.
+//! These helpers read and write concatenated OpenPGP certificate streams such
+//! as `pubring.gpg` style files. Each parsed key is returned with both its
+//! [`KeyInfo`] summary and its serialized key bytes, which lets applications
+//! inspect the keyring and then import or store selected entries unchanged.
 
 use std::io::Cursor;
 use std::path::Path;
@@ -30,11 +32,14 @@ use crate::types::KeyInfo;
 /// A list of (KeyInfo, raw_bytes) for each key in the keyring.
 ///
 /// # Example
-/// ```ignore
-/// // Ignored: illustrative example with placeholder file path
-/// let keys = parse_keyring_file("pubring.gpg")?;
-/// for (info, bytes) in keys {
-///     println!("Key: {} - {}", info.fingerprint, info.user_ids.first().unwrap_or(&"".to_string()));
+/// ```no_run
+/// use wecanencrypt::parse_keyring_file;
+///
+/// let keys = parse_keyring_file("pubring.gpg").unwrap();
+/// for (info, _bytes) in keys {
+///     if let Some(uid) = info.user_ids.first() {
+///         println!("{} {}", info.fingerprint, uid.value);
+///     }
 /// }
 /// ```
 pub fn parse_keyring_file(path: impl AsRef<Path>) -> Result<Vec<(KeyInfo, Vec<u8>)>> {
@@ -81,11 +86,12 @@ pub fn parse_keyring_bytes(data: &[u8]) -> Result<Vec<(KeyInfo, Vec<u8>)>> {
 /// * `output` - Path to write the keyring file
 ///
 /// # Example
-/// ```ignore
-/// // Ignored: illustrative example with placeholder file paths
-/// let key1 = std::fs::read("key1.asc")?;
-/// let key2 = std::fs::read("key2.asc")?;
-/// export_keyring_file(&[&key1, &key2], "combined.gpg")?;
+/// ```no_run
+/// use wecanencrypt::export_keyring_file;
+///
+/// let key1 = std::fs::read("alice.asc").unwrap();
+/// let key2 = std::fs::read("bob.asc").unwrap();
+/// export_keyring_file(&[&key1, &key2], "combined.gpg").unwrap();
 /// ```
 pub fn export_keyring_file(keys: &[&[u8]], output: impl AsRef<Path>) -> Result<()> {
     let mut keyring_data = Vec::new();
