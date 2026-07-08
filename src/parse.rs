@@ -15,8 +15,9 @@ use pgp::types::KeyDetails;
 use crate::error::Result;
 use crate::internal::{
     classify_key_algorithm, fingerprint_to_hex, get_algorithm_name, get_key_bit_size,
-    is_subkey_revoked, is_subkey_valid, keyid_to_hex, most_recent_binding_sig, parse_key,
-    system_time_to_datetime, verified_primary_revocation, verified_user_id_revocation,
+    is_subkey_revoked, keyid_to_hex, most_recent_verified_binding_sig, parse_key,
+    subkey_binding_expiration_time, system_time_to_datetime, verified_primary_revocation,
+    verified_usable_subkey_binding, verified_user_id_revocation,
 };
 use crate::types::{
     AvailableSubkey, KeyCipherDetails, KeyInfo, KeyType, SubkeyInfo, UIDCertification, UserIDInfo,
@@ -223,21 +224,29 @@ fn extract_subkey_info(public_key: &SignedPublicKey, allow_expired: bool) -> Vec
         let fingerprint = fingerprint_to_hex(&subkey.key);
         let creation_time = system_time_to_datetime(subkey.key.created_at().into());
 
-        // Read expiration from the MOST RECENT subkey-binding signature
+        // Read metadata from the most recent verified subkey-binding signature
         // (RFC 4880 §11.1: the latest binding sig is authoritative for
         // the binding's properties). `signatures.first()` returns
         // whatever happens to be first in the packet stream, which after
         // a `merge_signatures` re-import is the OLDEST binding (existing
         // sigs are kept first, new sigs appended) — making a renewed key
         // look as if its original (long-since-expired) binding still
-        // governs the subkey. Aligns with `is_subkey_valid` which
-        // already uses the most-recent-binding rule.
-        let expiration_time = most_recent_binding_sig(subkey).and_then(|sig| {
-            sig.key_expiration_time().map(|validity| {
-                let creation: std::time::SystemTime = subkey.key.created_at().into();
-                system_time_to_datetime(creation + validity.into())
-            })
-        });
+        // governs the subkey. Aligns with `verified_usable_subkey_binding`
+        // which already uses the most-recent-binding rule.
+        let binding = if allow_expired {
+            most_recent_verified_binding_sig(&public_key.primary_key, subkey)
+        } else {
+            verified_usable_subkey_binding(&public_key.primary_key, subkey, false)
+        };
+
+        // Only include if valid or allowing expired.
+        if !allow_expired && binding.is_none() {
+            continue;
+        }
+
+        let expiration_time = binding
+            .and_then(|sig| subkey_binding_expiration_time(sig, subkey))
+            .map(system_time_to_datetime);
 
         let is_revoked = is_subkey_revoked(&public_key.primary_key, subkey);
         let algorithm = get_algorithm_name(&subkey.key);
@@ -245,37 +254,34 @@ fn extract_subkey_info(public_key: &SignedPublicKey, allow_expired: bool) -> Vec
         let bit_length = get_key_bit_size(&subkey.key);
 
         // Determine key type based on key flags
-        let key_type = determine_key_type(subkey);
+        let key_type = determine_key_type(binding);
 
         let key_version = subkey.key.version();
 
-        // Only include if valid or allowing expired
-        if allow_expired || is_subkey_valid(&public_key.primary_key, subkey, false) {
-            subkeys.push(SubkeyInfo {
-                key_id,
-                fingerprint,
-                creation_time,
-                expiration_time,
-                key_type,
-                is_revoked,
-                algorithm,
-                algorithm_detail,
-                bit_length,
-                key_version,
-            });
-        }
+        subkeys.push(SubkeyInfo {
+            key_id,
+            fingerprint,
+            creation_time,
+            expiration_time,
+            key_type,
+            is_revoked,
+            algorithm,
+            algorithm_detail,
+            bit_length,
+            key_version,
+        });
     }
 
     subkeys
 }
 
 /// Determine the key type from subkey binding signature.
-fn determine_key_type(subkey: &pgp::composed::SignedPublicSubKey) -> KeyType {
+fn determine_key_type(binding: Option<&pgp::packet::Signature>) -> KeyType {
     // RFC 4880 §11.1: the most recent binding signature is authoritative
     // for subkey key flags. Iterating every sig and returning on the
     // first match accepts capabilities that may have been stripped by
     // a re-binding.
-    if let Some(sig) = most_recent_binding_sig(subkey) {
+    if let Some(sig) = binding {
         let flags = sig.key_flags();
         if flags.encrypt_comms() || flags.encrypt_storage() {
             return KeyType::Encryption;
@@ -345,38 +351,26 @@ where
     let mut available = Vec::new();
 
     for subkey in &public_key.public_subkeys {
-        // Skip revoked keys
-        if is_subkey_revoked(&public_key.primary_key, subkey) {
+        // Verify the binding once. It is then reused for validity, key flags,
+        // and expiration instead of repeating the public-key operation.
+        let Some(binding) = verified_usable_subkey_binding(&public_key.primary_key, subkey, false)
+        else {
             continue;
-        }
+        };
 
-        // Skip invalid/expired keys
-        if !is_subkey_valid(&public_key.primary_key, subkey, false) {
-            continue;
-        }
-
-        // Check key flags on the MOST RECENT binding signature (RFC
-        // 4880 §11.1). OR-ing flags across every sig would accept a
-        // capability that's been stripped on re-binding.
-        let binding = most_recent_binding_sig(subkey);
-        let matches_predicate = binding
-            .map(|sig| predicate(&sig.key_flags()))
-            .unwrap_or(false);
+        let flags = binding.key_flags();
+        let matches_predicate = predicate(&flags);
 
         if !matches_predicate {
             continue;
         }
 
-        let key_type = determine_key_type(subkey);
+        let key_type = determine_key_type(Some(binding));
 
         // Same most-recent-binding rule for the expiration. See
         // `extract_subkey_info` for the reasoning.
-        let expiration_time = binding.and_then(|sig| {
-            sig.key_expiration_time().map(|validity| {
-                let creation: std::time::SystemTime = subkey.key.created_at().into();
-                system_time_to_datetime(creation + validity.into())
-            })
-        });
+        let expiration_time =
+            subkey_binding_expiration_time(binding, subkey).map(system_time_to_datetime);
 
         available.push(AvailableSubkey {
             fingerprint: fingerprint_to_hex(&subkey.key),

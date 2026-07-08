@@ -9,8 +9,8 @@ use pgp::types::KeyDetails;
 use crate::error::{Error, Result};
 use crate::internal::{
     extract_uid_email, fingerprint_to_hex, get_algorithm_name, get_key_bit_size,
-    get_key_expiration, keyid_to_hex, parse_key, public_key_to_armored, system_time_to_datetime,
-    verified_primary_revocation,
+    get_key_expiration, keyid_to_hex, most_recent_verified_binding_sig, parse_key,
+    public_key_to_armored, system_time_to_datetime, verified_primary_revocation,
 };
 use crate::parse::parse_key_bytes;
 use crate::types::{KeyInfo, KeySummary, SubkeySummary, UserIdSummary};
@@ -264,23 +264,15 @@ impl KeyStore {
             let subkey_fp = fingerprint_to_hex(&subkey.key);
             let key_id = keyid_to_hex(&subkey.key);
 
-            // Determine key type from flags
-            let key_type = subkey
-                .signatures
-                .iter()
-                .find_map(|sig| {
-                    let flags = sig.key_flags();
-                    if flags.encrypt_comms() || flags.encrypt_storage() {
-                        Some("encryption")
-                    } else if flags.sign() {
-                        Some("signing")
-                    } else if flags.authentication() {
-                        Some("authentication")
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or("unknown");
+            // Determine key type from the most recent verified binding.
+            let key_type = match most_recent_verified_binding_sig(&public_key.primary_key, subkey)
+                .map(|sig| sig.key_flags())
+            {
+                Some(flags) if flags.encrypt_comms() || flags.encrypt_storage() => "encryption",
+                Some(flags) if flags.sign() => "signing",
+                Some(flags) if flags.authentication() => "authentication",
+                _ => "unknown",
+            };
 
             let algorithm = get_algorithm_name(&subkey.key);
             let bit_length = get_key_bit_size(&subkey.key) as i64;

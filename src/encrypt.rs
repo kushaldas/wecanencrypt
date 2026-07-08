@@ -23,8 +23,8 @@ use rand::thread_rng;
 
 use crate::error::{Error, Result};
 use crate::internal::{
-    can_details_sign, can_subkey_encrypt, is_subkey_valid, parse_public_key, parse_secret_key,
-    validate_secret_signing_usage, SigningKeyUsage,
+    can_details_sign, parse_public_key, parse_secret_key, subkey_binding_can_encrypt,
+    validate_secret_signing_usage, verified_usable_subkey_binding, SigningKeyUsage,
 };
 use crate::sign::{find_signing_subkey, select_hash_for_params};
 
@@ -874,13 +874,12 @@ fn find_valid_encryption_subkeys(
             continue;
         }
 
-        // Check key flags in most recent binding signature (RFC 4880 §5.2.3.3)
-        if !can_subkey_encrypt(subkey) {
+        // Verify the binding once, then use it for both validity and key flags.
+        let Some(binding) = verified_usable_subkey_binding(&key.primary_key, subkey, false) else {
             continue;
-        }
+        };
 
-        // Check if subkey is valid (not revoked, not expired)
-        if !is_subkey_valid(&key.primary_key, subkey, false) {
+        if !subkey_binding_can_encrypt(binding) {
             continue;
         }
 

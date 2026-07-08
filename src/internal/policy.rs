@@ -98,74 +98,132 @@ pub(crate) fn is_secret_subkey_revoked(
     any_verified_subkey_revocation(primary, &subkey.signatures, subkey.key.public_key())
 }
 
-/// Check if a subkey has the signing capability flag in its most recent
-/// binding signature.
-///
-/// Per RFC 4880 §5.2.3.3, the most recent binding signature is
-/// authoritative for subkey key flags.
-pub(crate) fn can_subkey_sign(subkey: &SignedPublicSubKey) -> bool {
-    most_recent_binding_sig(subkey)
-        .map(|sig| sig.key_flags().sign())
-        .unwrap_or(false)
-}
-
-/// Find the most recent binding signature for a subkey.
-pub(crate) fn most_recent_binding_sig(
-    subkey: &SignedPublicSubKey,
-) -> Option<&pgp::packet::Signature> {
+/// Find the most recent cryptographically verified binding signature for a
+/// public subkey.
+pub(crate) fn most_recent_verified_binding_sig<'a>(
+    primary: &pgp::packet::PublicKey,
+    subkey: &'a SignedPublicSubKey,
+) -> Option<&'a pgp::packet::Signature> {
     subkey
         .signatures
         .iter()
         .filter(|sig| sig.typ() == Some(SignatureType::SubkeyBinding))
+        .filter(|sig| sig.verify_subkey_binding(primary, &subkey.key).is_ok())
         .max_by_key(|sig| sig.created().map(|t| t.as_secs()).unwrap_or(0))
 }
 
-/// Check if a subkey has the encryption capability flag in its most recent
-/// binding signature.
-///
-/// Per RFC 4880 §5.2.3.3, the most recent binding signature is
-/// authoritative for subkey key flags.
-pub(crate) fn can_subkey_encrypt(subkey: &SignedPublicSubKey) -> bool {
-    most_recent_binding_sig(subkey)
-        .map(|sig| {
-            let flags = sig.key_flags();
-            flags.encrypt_comms() || flags.encrypt_storage()
+/// Find the most recent cryptographically verified binding signature for a
+/// secret subkey.
+pub(crate) fn most_recent_verified_secret_binding_sig<'a>(
+    primary: &pgp::packet::PublicKey,
+    subkey: &'a SignedSecretSubKey,
+) -> Option<&'a pgp::packet::Signature> {
+    subkey
+        .signatures
+        .iter()
+        .filter(|sig| sig.typ() == Some(SignatureType::SubkeyBinding))
+        .filter(|sig| {
+            sig.verify_subkey_binding(primary, subkey.key.public_key())
+                .is_ok()
         })
+        .max_by_key(|sig| sig.created().map(|t| t.as_secs()).unwrap_or(0))
+}
+
+/// Check whether a verified subkey binding signature grants signing use.
+pub(crate) fn subkey_binding_can_sign(binding: &Signature) -> bool {
+    binding.key_flags().sign()
+}
+
+/// Check whether a verified subkey binding signature grants encryption use.
+pub(crate) fn subkey_binding_can_encrypt(binding: &Signature) -> bool {
+    let flags = binding.key_flags();
+    flags.encrypt_comms() || flags.encrypt_storage()
+}
+
+/// Compute the expiration time described by a verified subkey binding.
+pub(crate) fn subkey_binding_expiration_time(
+    binding: &Signature,
+    subkey: &SignedPublicSubKey,
+) -> Option<SystemTime> {
+    let creation_time: SystemTime = subkey.key.created_at().into();
+    subkey_binding_expiration_from_creation(binding, creation_time)
+}
+
+fn subkey_binding_expiration_from_creation(
+    binding: &Signature,
+    creation_time: SystemTime,
+) -> Option<SystemTime> {
+    binding.key_expiration_time().and_then(|validity| {
+        if validity.as_secs() == 0 {
+            None
+        } else {
+            Some(creation_time + validity.into())
+        }
+    })
+}
+
+fn subkey_binding_is_expired_from_creation(binding: &Signature, creation_time: SystemTime) -> bool {
+    binding
+        .key_expiration_time()
+        .map(|validity| is_key_expired(creation_time, Some(validity.as_secs() as u64)))
         .unwrap_or(false)
 }
 
-/// Check if a subkey is valid for use (not revoked by a verified
-/// self-signature, and optionally not expired).
-pub(crate) fn is_subkey_valid(
+/// Return the most recent verified binding only if the subkey is usable
+/// under the current revocation and expiration policy.
+pub(crate) fn verified_usable_subkey_binding<'a>(
+    primary: &pgp::packet::PublicKey,
+    subkey: &'a SignedPublicSubKey,
+    allow_expired: bool,
+) -> Option<&'a Signature> {
+    let binding = most_recent_verified_binding_sig(primary, subkey)?;
+
+    if is_subkey_revoked(primary, subkey) {
+        return None;
+    }
+
+    let creation_time: SystemTime = subkey.key.created_at().into();
+    if !allow_expired && subkey_binding_is_expired_from_creation(binding, creation_time) {
+        return None;
+    }
+
+    Some(binding)
+}
+
+/// Return the most recent verified binding only if the secret subkey is usable
+/// under the current revocation and expiration policy.
+pub(crate) fn verified_usable_secret_subkey_binding<'a>(
+    primary: &pgp::packet::PublicKey,
+    subkey: &'a SignedSecretSubKey,
+    allow_expired: bool,
+) -> Option<&'a Signature> {
+    let binding = most_recent_verified_secret_binding_sig(primary, subkey)?;
+
+    if is_secret_subkey_revoked(primary, subkey) {
+        return None;
+    }
+
+    let creation_time: SystemTime = subkey.key.created_at().into();
+    if !allow_expired && subkey_binding_is_expired_from_creation(binding, creation_time) {
+        return None;
+    }
+
+    Some(binding)
+}
+
+/// Check if a subkey has the signing capability flag in its most recent
+/// verified binding signature.
+///
+/// Per RFC 4880 §5.2.3.3, the most recent binding signature is
+/// authoritative for subkey key flags. The binding signature must verify
+/// against the primary key before its flags are trusted.
+pub(crate) fn can_subkey_sign(
     primary: &pgp::packet::PublicKey,
     subkey: &SignedPublicSubKey,
-    allow_expired: bool,
 ) -> bool {
-    if is_subkey_revoked(primary, subkey) {
-        return false;
-    }
-
-    // Check expiration if not allowing expired.
-    // Use the most recent binding signature by creation time (per RFC 4880 §5.2.3.3),
-    // not the last one in packet order — renewed keys have multiple binding signatures
-    // and older ones may have expired even though the latest renewal is still valid.
-    if !allow_expired {
-        let most_recent_sig = subkey
-            .signatures
-            .iter()
-            .filter(|sig| sig.key_expiration_time().is_some())
-            .max_by_key(|sig| sig.created().map(|t| t.as_secs()).unwrap_or(0));
-        if let Some(sig) = most_recent_sig {
-            if let Some(validity) = sig.key_expiration_time() {
-                let creation_time: SystemTime = subkey.key.created_at().into();
-                if is_key_expired(creation_time, Some(validity.as_secs() as u64)) {
-                    return false;
-                }
-            }
-        }
-    }
-
-    true
+    most_recent_verified_binding_sig(primary, subkey)
+        .map(subkey_binding_can_sign)
+        .unwrap_or(false)
 }
 
 /// Find the most recent self-signature for a user ID.
