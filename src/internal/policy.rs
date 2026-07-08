@@ -153,9 +153,13 @@ fn subkey_binding_expiration_from_creation(
     binding: &Signature,
     creation_time: SystemTime,
 ) -> Option<SystemTime> {
-    binding
-        .key_expiration_time()
-        .map(|validity| creation_time + validity.into())
+    binding.key_expiration_time().and_then(|validity| {
+        if validity.as_secs() == 0 {
+            None
+        } else {
+            Some(creation_time + validity.into())
+        }
+    })
 }
 
 fn subkey_binding_is_expired_from_creation(binding: &Signature, creation_time: SystemTime) -> bool {

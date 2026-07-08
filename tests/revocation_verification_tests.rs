@@ -80,6 +80,55 @@ fn forge_subkey_revocation(
         .expect("sign subkey revocation")
 }
 
+/// Build a genuine SubkeyBinding with an explicit zero-second expiration.
+/// OpenPGP defines that value as "does not expire".
+fn subkey_binding_with_zero_expiration(
+    signer: &SignedSecretKey,
+    signer_pw: &str,
+    subkey: &SignedSecretSubKey,
+) -> packet::Signature {
+    let mut rng = thread_rng();
+    let mut config =
+        SignatureConfig::from_key(&mut rng, &signer.primary_key, SignatureType::SubkeyBinding)
+            .expect("config");
+    let flags = subkey
+        .signatures
+        .iter()
+        .find(|sig| sig.typ() == Some(SignatureType::SubkeyBinding))
+        .map(|sig| sig.key_flags())
+        .expect("test subkey has a binding with key flags");
+    config.hashed_subpackets = vec![
+        Subpacket::regular(SubpacketData::SignatureCreationTime(Timestamp::from_secs(
+            subkey.key.created_at().as_secs() + 2,
+        )))
+        .unwrap(),
+        Subpacket::regular(SubpacketData::IssuerFingerprint(
+            signer.primary_key.fingerprint(),
+        ))
+        .unwrap(),
+        Subpacket::regular(SubpacketData::KeyFlags(flags)).unwrap(),
+        Subpacket::regular(SubpacketData::KeyExpirationTime(
+            pgp::types::Duration::from_secs(0),
+        ))
+        .unwrap(),
+    ];
+    if signer.primary_key.version() <= KeyVersion::V4 {
+        config.unhashed_subpackets = vec![Subpacket::regular(SubpacketData::IssuerKeyId(
+            signer.primary_key.legacy_key_id(),
+        ))
+        .unwrap()];
+    }
+
+    config
+        .sign_subkey_binding(
+            &signer.primary_key,
+            signer.primary_key.public_key(),
+            &Password::from(signer_pw),
+            subkey.key.public_key(),
+        )
+        .expect("sign zero-expiration subkey binding")
+}
+
 /// Build a CertRevocation signature over `user` issued by `signer`.
 fn forge_cert_revocation(
     signer: &SignedSecretKey,
@@ -279,6 +328,31 @@ fn unverified_public_subkey_binding_is_not_available() {
             Err(wecanencrypt::Error::NoSigningSubkey)
         ),
         "unverified signing subkeys must not be exported as signing keys"
+    );
+}
+
+#[test]
+fn zero_second_subkey_expiration_means_no_expiration() {
+    let key = create_key_simple("pw", &["Alice <alice@example.com>"]).unwrap();
+    let sec = parse_secret(&key.secret_key);
+    let target = sec
+        .secret_subkeys
+        .first()
+        .expect("generated key has a subkey");
+    let target_fp = hex::encode_upper(target.key.fingerprint().as_bytes());
+
+    let binding = subkey_binding_with_zero_expiration(&sec, "pw", target);
+    let rebound = splice_into_subkey_fp(&sec, &target.key.fingerprint(), binding);
+
+    let info = parse_key_bytes(&rebound, false).expect("parse rebound key");
+    let subkey = info
+        .subkeys
+        .iter()
+        .find(|sk| sk.fingerprint == target_fp)
+        .expect("subkey with zero-second expiration remains valid");
+    assert!(
+        subkey.expiration_time.is_none(),
+        "KeyExpirationTime(0) must be reported as no expiration"
     );
 }
 

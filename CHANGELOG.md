@@ -18,7 +18,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   share the verified-binding policy. Regression tests cover both
   tampered-certificate cases and positive controls for legitimate
   encryption and signature verification.
+- Card key upload auto-selection now applies the same verified usable
+  secret-subkey policy before selecting signing or decryption key
+  material for upload. Revoked or expired subkeys are skipped instead
+  of being provisioned onto a card and later rejected by the rest of
+  the library. Regression tests cover expired signing and encryption
+  subkeys.
 
+### Fixed
+
+- A subkey binding `KeyExpirationTime` value of zero seconds is now
+  treated as "does not expire" instead of being reported as an
+  expiration at the subkey creation time. Regression tests cover a
+  verified binding with an explicit zero-second expiration.
 
 ## [0.16.2] — 2026-06-22
 

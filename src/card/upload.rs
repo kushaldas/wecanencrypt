@@ -31,7 +31,7 @@ use zeroize::Zeroizing;
 
 use crate::error::{Error, Result};
 use crate::internal::{
-    most_recent_verified_secret_binding_sig, subkey_binding_can_encrypt, subkey_binding_can_sign,
+    subkey_binding_can_encrypt, subkey_binding_can_sign, verified_usable_secret_subkey_binding,
 };
 use pgp::composed::{Deserializable, SignedSecretKey};
 use pgp::types::{KeyDetails, Password, PlainSecretParams, PublicParams};
@@ -491,9 +491,11 @@ fn find_signing_key(secret_key: &SignedSecretKey, password: &Password) -> Result
         if !is_signing_algorithm(pub_params) {
             continue;
         }
-        let Some(binding) =
-            most_recent_verified_secret_binding_sig(secret_key.primary_key.public_key(), subkey)
-        else {
+        let Some(binding) = verified_usable_secret_subkey_binding(
+            secret_key.primary_key.public_key(),
+            subkey,
+            false,
+        ) else {
             continue;
         };
         if !subkey_binding_can_sign(binding) {
@@ -537,9 +539,11 @@ fn find_encryption_key(secret_key: &SignedSecretKey, password: &Password) -> Res
         if !is_encryption_algorithm(pub_params) {
             continue;
         }
-        let Some(binding) =
-            most_recent_verified_secret_binding_sig(secret_key.primary_key.public_key(), subkey)
-        else {
+        let Some(binding) = verified_usable_secret_subkey_binding(
+            secret_key.primary_key.public_key(),
+            subkey,
+            false,
+        ) else {
             continue;
         };
         if !subkey_binding_can_encrypt(binding) {
@@ -835,6 +839,32 @@ fn extract_key_info(
 mod tests {
     use super::*;
 
+    const TEST_PASSWORD: &str = "card-upload-test";
+
+    fn dt(year: i32, month: u32, day: u32) -> chrono::DateTime<chrono::Utc> {
+        chrono::NaiveDate::from_ymd_opt(year, month, day)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc()
+    }
+
+    fn expired_subkey_secret_key() -> SignedSecretKey {
+        let key = crate::create_key(
+            TEST_PASSWORD,
+            &["Card Upload <card-upload@example.com>"],
+            crate::CipherSuite::Cv25519,
+            Some(dt(2010, 1, 1)),
+            None,
+            Some(dt(2011, 1, 1)),
+            crate::SubkeyFlags::all(),
+            false,
+            true,
+        )
+        .expect("create key with expired subkeys");
+        parse_secret_key(&key.secret_key).expect("parse generated secret key")
+    }
+
     fn v6_fixture_secret_key() -> SignedSecretKey {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/v6/alice_v6_cv25519modern_sec.asc");
@@ -918,6 +948,40 @@ mod tests {
             }
             KeyMaterial::Rsa { .. } => panic!("expected ECC key material"),
         }
+    }
+
+    #[test]
+    fn auto_upload_decryption_skips_expired_encryption_subkey() {
+        let secret_key = expired_subkey_secret_key();
+        let password = Password::from(TEST_PASSWORD);
+
+        let err = match find_encryption_key(&secret_key, &password) {
+            Ok(_) => panic!("expired encryption subkey was selected for upload"),
+            Err(err) => err,
+        };
+        assert!(
+            matches!(err, Error::Crypto(ref msg) if msg.contains("No encryption-capable key found")),
+            "expired encryption subkey must not be selected for upload: {err:?}"
+        );
+    }
+
+    #[test]
+    fn auto_upload_signing_skips_expired_signing_subkey() {
+        let secret_key = expired_subkey_secret_key();
+        let password = Password::from(TEST_PASSWORD);
+        let expired_signing_fp = secret_key
+            .secret_subkeys
+            .iter()
+            .find(|subkey| subkey.signatures.iter().any(|sig| sig.key_flags().sign()))
+            .map(|subkey| subkey.key.fingerprint().as_bytes().to_vec())
+            .expect("generated key has a signing subkey");
+
+        let key_info = find_signing_key(&secret_key, &password).expect("extract signing key");
+
+        assert_ne!(
+            key_info.fingerprint, expired_signing_fp,
+            "expired signing subkey must not be selected for upload"
+        );
     }
 
     /// The validator rejects inputs that are not exactly 32 raw bytes or
