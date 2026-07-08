@@ -7,14 +7,13 @@
 //! ECDSA authentication keys are supported; ECDH/X25519 encryption keys are not
 //! usable for SSH authentication.
 
-use std::time::SystemTime;
-
 use pgp::types::{KeyDetails, Password, PlainSecretParams, PublicParams};
 use zeroize::Zeroizing;
 
 use crate::error::{Error, Result};
 use crate::internal::{
-    is_key_expired, is_secret_subkey_revoked, is_subkey_valid, parse_public_key, parse_secret_key,
+    can_primary_sign, parse_public_key, parse_secret_key, subkey_binding_can_sign,
+    verified_usable_secret_subkey_binding, verified_usable_subkey_binding,
 };
 use crate::types::{RsaPublicKey, SigningPublicKey};
 
@@ -40,13 +39,11 @@ pub fn get_ssh_pubkey(key_data: &[u8], comment: Option<&str>) -> Result<String> 
 
     // Find an authentication-capable subkey
     let auth_subkey = public_key.public_subkeys.iter().find(|sk| {
-        // Check if valid and has authentication flag
-        if !is_subkey_valid(&public_key.primary_key, sk, false) {
+        let Some(binding) = verified_usable_subkey_binding(&public_key.primary_key, sk, false)
+        else {
             return false;
-        }
-        sk.signatures
-            .iter()
-            .any(|sig| sig.key_flags().authentication())
+        };
+        binding.key_flags().authentication()
     });
 
     let params = match auth_subkey {
@@ -238,18 +235,13 @@ pub fn get_signing_pubkey(key_data: &[u8]) -> Result<SigningPublicKey> {
 
     // Find a signing-capable subkey
     let sign_subkey = public_key.public_subkeys.iter().find(|sk| {
-        if !is_subkey_valid(&public_key.primary_key, sk, false) {
-            return false;
-        }
-        sk.signatures.iter().any(|sig| sig.key_flags().sign())
+        verified_usable_subkey_binding(&public_key.primary_key, sk, false)
+            .map(subkey_binding_can_sign)
+            .unwrap_or(false)
     });
 
     // Check if primary can sign
-    let primary_can_sign = public_key
-        .details
-        .users
-        .iter()
-        .any(|user| user.signatures.iter().any(|sig| sig.key_flags().sign()));
+    let primary_can_sign = can_primary_sign(&public_key);
 
     // Get the public params from the appropriate key
     let params = if let Some(sk) = sign_subkey {
@@ -412,28 +404,15 @@ pub fn ssh_sign_raw(
 
     // Find the authentication subkey
     for subkey in &secret_key.secret_subkeys {
-        let is_auth = subkey
-            .signatures
-            .iter()
-            .any(|sig| sig.key_flags().authentication());
-
-        if !is_auth {
+        let Some(binding) = verified_usable_secret_subkey_binding(
+            secret_key.primary_key.public_key(),
+            subkey,
+            false,
+        ) else {
             continue;
-        }
-
-        // Check the subkey isn't revoked by a verified self-signature
-        if is_secret_subkey_revoked(secret_key.primary_key.public_key(), subkey) {
+        };
+        if !binding.key_flags().authentication() {
             continue;
-        }
-
-        // Check the subkey isn't expired
-        if let Some(sig) = subkey.signatures.last() {
-            if let Some(validity) = sig.key_expiration_time() {
-                let creation_time: SystemTime = subkey.key.created_at().into();
-                if is_key_expired(creation_time, Some(validity.as_secs() as u64)) {
-                    continue;
-                }
-            }
         }
 
         // Unlock the subkey and perform raw signing

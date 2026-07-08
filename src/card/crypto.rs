@@ -15,8 +15,9 @@ use super::get_card_backend;
 use super::types::CardError;
 use crate::error::{Error, Result};
 use crate::internal::{
-    can_primary_certify, can_primary_sign, can_subkey_sign, is_subkey_valid, parse_public_key,
-    validate_primary_key_signing_usage, SigningKeyUsage,
+    can_primary_certify, can_primary_sign, parse_public_key, subkey_binding_can_encrypt,
+    subkey_binding_can_sign, validate_primary_key_signing_usage, verified_usable_subkey_binding,
+    SigningKeyUsage,
 };
 use pgp::composed::{
     CleartextSignedMessage, DetachedSignature, Esk, Message, MessageBuilder, PlainSessionKey,
@@ -140,27 +141,29 @@ fn get_signing_key_info(
     for subkey in &public_key.public_subkeys {
         let key = &subkey.key;
         let subkey_fp = hex::encode(key.fingerprint().as_bytes());
-        let has_sign_flag = subkey.signatures.iter().any(|sig| sig.key_flags().sign());
-        let subkey_usable = match usage {
-            SigningKeyUsage::DataSignature => {
-                is_subkey_valid(&public_key.primary_key, subkey, false)
-            }
-            SigningKeyUsage::KeyMaintenance => {
-                is_subkey_valid(&public_key.primary_key, subkey, true)
-            }
-        };
-
-        if subkey_fp == card_fp && can_sign(key.public_params()) && has_sign_flag && subkey_usable {
-            let params = key.public_params();
-            let hash_alg = select_hash_for_params(params);
-            return Ok(SigningKeyInfo {
-                algorithm: key.algorithm(),
-                public_params: params.clone(),
-                fingerprint: key.fingerprint(),
-                key_id: key.legacy_key_id(),
-                hash_alg,
-            });
+        if subkey_fp != card_fp || !can_sign(key.public_params()) {
+            continue;
         }
+
+        let allow_expired = matches!(usage, SigningKeyUsage::KeyMaintenance);
+        let Some(binding) =
+            verified_usable_subkey_binding(&public_key.primary_key, subkey, allow_expired)
+        else {
+            continue;
+        };
+        if !subkey_binding_can_sign(binding) {
+            continue;
+        }
+
+        let params = key.public_params();
+        let hash_alg = select_hash_for_params(params);
+        return Ok(SigningKeyInfo {
+            algorithm: key.algorithm(),
+            public_params: params.clone(),
+            fingerprint: key.fingerprint(),
+            key_id: key.legacy_key_id(),
+            hash_alg,
+        });
     }
 
     Err(Error::Crypto(format!(
@@ -620,18 +623,19 @@ fn get_encryption_key_info(public_key: &SignedPublicKey) -> Result<EncryptionKey
         if !can_encrypt_algorithm(key.public_params()) {
             continue;
         }
-        // Check if binding signature has encryption flags
-        let has_encryption_flags = subkey.signatures.iter().any(|sig| {
-            let flags = sig.key_flags();
-            flags.encrypt_comms() || flags.encrypt_storage()
-        });
-        if has_encryption_flags {
-            return Ok(EncryptionKeyInfo {
-                public_params: key.public_params().clone(),
-                fingerprint: key.fingerprint(),
-                key_id: key.legacy_key_id(),
-            });
+        let Some(binding) = verified_usable_subkey_binding(&public_key.primary_key, subkey, false)
+        else {
+            continue;
+        };
+        if !subkey_binding_can_encrypt(binding) {
+            continue;
         }
+
+        return Ok(EncryptionKeyInfo {
+            public_params: key.public_params().clone(),
+            fingerprint: key.fingerprint(),
+            key_id: key.legacy_key_id(),
+        });
     }
 
     // Fall back to primary key if it can encrypt
@@ -1603,18 +1607,13 @@ fn get_card_signing_key<'a>(
         if !can_sign(key.public_params()) {
             continue;
         }
-        if !can_subkey_sign(&public_key.primary_key, subkey) {
+        let allow_expired = matches!(usage, SigningKeyUsage::KeyMaintenance);
+        let Some(binding) =
+            verified_usable_subkey_binding(&public_key.primary_key, subkey, allow_expired)
+        else {
             continue;
-        }
-        let subkey_usable = match usage {
-            SigningKeyUsage::DataSignature => {
-                is_subkey_valid(&public_key.primary_key, subkey, false)
-            }
-            SigningKeyUsage::KeyMaintenance => {
-                is_subkey_valid(&public_key.primary_key, subkey, true)
-            }
         };
-        if !subkey_usable {
+        if !subkey_binding_can_sign(binding) {
             continue;
         }
 

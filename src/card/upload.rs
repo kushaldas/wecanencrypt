@@ -30,6 +30,9 @@ use secrecy::SecretString;
 use zeroize::Zeroizing;
 
 use crate::error::{Error, Result};
+use crate::internal::{
+    most_recent_verified_secret_binding_sig, subkey_binding_can_encrypt, subkey_binding_can_sign,
+};
 use pgp::composed::{Deserializable, SignedSecretKey};
 use pgp::types::{KeyDetails, Password, PlainSecretParams, PublicParams};
 
@@ -488,8 +491,12 @@ fn find_signing_key(secret_key: &SignedSecretKey, password: &Password) -> Result
         if !is_signing_algorithm(pub_params) {
             continue;
         }
-        let has_signing_flag = subkey.signatures.iter().any(|sig| sig.key_flags().sign());
-        if !has_signing_flag {
+        let Some(binding) =
+            most_recent_verified_secret_binding_sig(secret_key.primary_key.public_key(), subkey)
+        else {
+            continue;
+        };
+        if !subkey_binding_can_sign(binding) {
             continue;
         }
 
@@ -530,11 +537,12 @@ fn find_encryption_key(secret_key: &SignedSecretKey, password: &Password) -> Res
         if !is_encryption_algorithm(pub_params) {
             continue;
         }
-        let has_encryption_flags = subkey.signatures.iter().any(|sig| {
-            let flags = sig.key_flags();
-            flags.encrypt_comms() || flags.encrypt_storage()
-        });
-        if !has_encryption_flags {
+        let Some(binding) =
+            most_recent_verified_secret_binding_sig(secret_key.primary_key.public_key(), subkey)
+        else {
+            continue;
+        };
+        if !subkey_binding_can_encrypt(binding) {
             continue;
         }
 

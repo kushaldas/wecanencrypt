@@ -25,8 +25,10 @@ use rand::thread_rng;
 
 use pgp::composed::DetachedSignature;
 use wecanencrypt::{
-    create_key_simple, decrypt_bytes, encrypt_bytes, parse_key_bytes, revoke_uid, sign_bytes,
-    sign_bytes_detached, verify_bytes, verify_bytes_detached,
+    create_key_simple, decrypt_bytes, encrypt_bytes, get_all_available_subkeys,
+    get_available_authentication_subkeys, get_available_encryption_subkeys,
+    get_available_signing_subkeys, get_signing_pubkey, get_ssh_pubkey, parse_key_bytes, revoke_uid,
+    sign_bytes, sign_bytes_detached, verify_bytes, verify_bytes_detached,
 };
 
 fn parse_secret(bytes: &[u8]) -> SignedSecretKey {
@@ -191,6 +193,20 @@ fn public_with_victim_primary_and_attacker_subkeys(
     tampered.to_bytes().expect("serialize tampered public key")
 }
 
+fn secret_with_victim_primary_and_attacker_subkeys(
+    victim: &SignedSecretKey,
+    attacker: &SignedSecretKey,
+) -> Vec<u8> {
+    let attacker_public = attacker.to_public_key();
+    let tampered = SignedSecretKey::new(
+        victim.primary_key.clone(),
+        victim.details.clone(),
+        attacker_public.public_subkeys.clone(),
+        attacker.secret_subkeys.clone(),
+    );
+    tampered.to_bytes().expect("serialize tampered secret key")
+}
+
 #[test]
 fn unverified_public_encryption_subkey_binding_is_rejected() {
     let victim = create_key_simple("victim-pw", &["Victim <victim@example.com>"]).unwrap();
@@ -218,6 +234,52 @@ fn unverified_public_encryption_subkey_binding_is_rejected() {
     let plaintext =
         decrypt_bytes(&victim.secret_key, &legitimate, "victim-pw").expect("victim decrypts");
     assert_eq!(plaintext, b"normal message");
+}
+
+#[test]
+fn unverified_public_subkey_binding_is_not_available() {
+    let victim = create_key_simple("victim-pw", &["Victim <victim@example.com>"]).unwrap();
+    let attacker = create_key_simple("attacker-pw", &["Attacker <attacker@example.com>"]).unwrap();
+
+    let victim_sec = parse_secret(&victim.secret_key);
+    let attacker_sec = parse_secret(&attacker.secret_key);
+    let tampered = public_with_victim_primary_and_attacker_subkeys(&victim_sec, &attacker_sec);
+
+    assert!(
+        get_all_available_subkeys(&tampered).unwrap().is_empty(),
+        "unverified attacker subkeys must not be listed as generally available"
+    );
+    assert!(
+        get_available_encryption_subkeys(&tampered)
+            .unwrap()
+            .is_empty(),
+        "unverified attacker subkeys must not be listed for encryption"
+    );
+    assert!(
+        get_available_signing_subkeys(&tampered).unwrap().is_empty(),
+        "unverified attacker subkeys must not be listed for signing"
+    );
+    assert!(
+        get_available_authentication_subkeys(&tampered)
+            .unwrap()
+            .is_empty(),
+        "unverified attacker subkeys must not be listed for authentication"
+    );
+
+    assert!(
+        matches!(
+            get_ssh_pubkey(&tampered, None),
+            Err(wecanencrypt::Error::NoAuthenticationSubkey)
+        ),
+        "unverified authentication subkeys must not be exported for SSH"
+    );
+    assert!(
+        matches!(
+            get_signing_pubkey(&tampered),
+            Err(wecanencrypt::Error::NoSigningSubkey)
+        ),
+        "unverified signing subkeys must not be exported as signing keys"
+    );
 }
 
 #[test]
@@ -253,6 +315,22 @@ fn unverified_public_signing_subkey_binding_is_rejected() {
         )
         .expect("verify legitimate victim signature"),
         "legitimate signatures from valid subkeys must still verify"
+    );
+}
+
+#[test]
+fn unverified_secret_signing_subkey_binding_is_rejected() {
+    let victim = create_key_simple("victim-pw", &["Victim <victim@example.com>"]).unwrap();
+    let attacker = create_key_simple("attacker-pw", &["Attacker <attacker@example.com>"]).unwrap();
+
+    let victim_sec = parse_secret(&victim.secret_key);
+    let attacker_sec = parse_secret(&attacker.secret_key);
+    let tampered = secret_with_victim_primary_and_attacker_subkeys(&victim_sec, &attacker_sec);
+
+    let err = sign_bytes_detached(&tampered, b"forged secret subkey", "victim-pw").unwrap_err();
+    assert!(
+        matches!(err, wecanencrypt::Error::NoSigningSubkey),
+        "unverified attacker secret subkeys must not be used for signing: {err:?}"
     );
 }
 

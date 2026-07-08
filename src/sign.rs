@@ -22,8 +22,8 @@ use rand::thread_rng;
 
 use crate::error::{Error, Result};
 use crate::internal::{
-    can_details_sign, is_key_expired, is_secret_subkey_revoked, parse_secret_key,
-    validate_secret_signing_usage, SigningKeyUsage,
+    can_details_sign, parse_secret_key, subkey_binding_can_sign, validate_secret_signing_usage,
+    verified_usable_secret_subkey_binding, SigningKeyUsage,
 };
 
 /// Select appropriate hash algorithm based on public key params.
@@ -55,28 +55,15 @@ pub(crate) fn find_signing_subkey(secret_key: &SignedSecretKey) -> Option<&Signe
     let mut best: Option<&SignedSecretSubKey> = None;
 
     for subkey in &secret_key.secret_subkeys {
-        let has_sign_flag = subkey.signatures.iter().any(|sig| sig.key_flags().sign());
-        if !has_sign_flag {
+        let Some(binding) = verified_usable_secret_subkey_binding(
+            secret_key.primary_key.public_key(),
+            subkey,
+            false,
+        ) else {
             continue;
-        }
-
-        if is_secret_subkey_revoked(secret_key.primary_key.public_key(), subkey) {
+        };
+        if !subkey_binding_can_sign(binding) {
             continue;
-        }
-
-        // Check expiration using the most recent binding signature
-        let most_recent_sig = subkey
-            .signatures
-            .iter()
-            .filter(|sig| sig.key_expiration_time().is_some())
-            .max_by_key(|sig| sig.created().map(|t| t.as_secs()).unwrap_or(0));
-        if let Some(sig) = most_recent_sig {
-            if let Some(validity) = sig.key_expiration_time() {
-                let creation_time: std::time::SystemTime = subkey.key.created_at().into();
-                if is_key_expired(creation_time, Some(validity.as_secs() as u64)) {
-                    continue;
-                }
-            }
         }
 
         // Prefer the most recently created signing subkey
