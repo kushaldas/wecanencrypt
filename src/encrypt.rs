@@ -875,7 +875,7 @@ fn find_valid_encryption_subkeys(
         }
 
         // Check key flags in most recent binding signature (RFC 4880 §5.2.3.3)
-        if !can_subkey_encrypt(subkey) {
+        if !can_subkey_encrypt(&key.primary_key, subkey) {
             continue;
         }
 

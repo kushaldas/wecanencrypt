@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Public subkey binding signatures are now cryptographically verified
+  against the certificate primary key before their key flags or
+  expiration metadata are trusted. This prevents attacker-spliced
+  encryption subkeys from receiving ciphertext and prevents attacker
+  signing subkeys from verifying as the victim certificate. Encryption,
+  verification, available-subkey summaries, and card signing lookup now
+  share the verified-binding policy. Regression tests cover both
+  tampered-certificate cases and positive controls for legitimate
+  encryption and signature verification.
+
 
 ## [0.16.2] — 2026-06-22
 

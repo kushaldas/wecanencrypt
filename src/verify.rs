@@ -110,7 +110,7 @@ pub fn verify_bytes_detached(signer_key: &[u8], data: &[u8], signature: &[u8]) -
 
     // Try verifying against non-revoked subkeys only
     for subkey in &public_key.public_subkeys {
-        if can_subkey_sign(subkey)
+        if can_subkey_sign(&public_key.primary_key, subkey)
             && !is_subkey_revoked(&public_key.primary_key, subkey)
             && sig.verify(&subkey.key, data).is_ok()
         {
@@ -185,7 +185,7 @@ fn verify_cleartext(public_key: &SignedPublicKey, signed_message: &[u8]) -> Resu
 
     // Try verifying against non-revoked subkeys only
     for subkey in &public_key.public_subkeys {
-        if can_subkey_sign(subkey)
+        if can_subkey_sign(&public_key.primary_key, subkey)
             && !is_subkey_revoked(&public_key.primary_key, subkey)
             && msg.verify(&subkey.key).is_ok()
         {
@@ -222,7 +222,7 @@ fn extract_cleartext(
 
     // Try verifying against non-revoked subkeys only
     for subkey in &public_key.public_subkeys {
-        if can_subkey_sign(subkey)
+        if can_subkey_sign(&public_key.primary_key, subkey)
             && !is_subkey_revoked(&public_key.primary_key, subkey)
             && msg.verify(&subkey.key).is_ok()
         {
@@ -268,7 +268,7 @@ fn verify_inline_signed(public_key: &SignedPublicKey, signed_message: &[u8]) -> 
 
     // Try verifying against non-revoked subkeys only
     for subkey in &public_key.public_subkeys {
-        if can_subkey_sign(subkey)
+        if can_subkey_sign(&public_key.primary_key, subkey)
             && !is_subkey_revoked(&public_key.primary_key, subkey)
             && message.verify(&subkey.key).is_ok()
         {
@@ -308,7 +308,7 @@ fn extract_inline_signed(public_key: &SignedPublicKey, signed_message: &[u8]) ->
 
     // Try verifying against non-revoked subkeys only
     for subkey in &public_key.public_subkeys {
-        if can_subkey_sign(subkey)
+        if can_subkey_sign(&public_key.primary_key, subkey)
             && !is_subkey_revoked(&public_key.primary_key, subkey)
             && message.verify(&subkey.key).is_ok()
         {

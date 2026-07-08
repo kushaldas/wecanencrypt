@@ -15,7 +15,8 @@
 //! the packet-type tag.
 
 use pgp::composed::{
-    Deserializable, SignedKeyDetails, SignedPublicSubKey, SignedSecretKey, SignedSecretSubKey,
+    Deserializable, SignedKeyDetails, SignedPublicKey, SignedPublicSubKey, SignedSecretKey,
+    SignedSecretSubKey,
 };
 use pgp::packet::{self, SignatureConfig, SignatureType, Subpacket, SubpacketData};
 use pgp::ser::Serialize;
@@ -24,7 +25,8 @@ use rand::thread_rng;
 
 use pgp::composed::DetachedSignature;
 use wecanencrypt::{
-    create_key_simple, parse_key_bytes, revoke_uid, sign_bytes, sign_bytes_detached, verify_bytes,
+    create_key_simple, decrypt_bytes, encrypt_bytes, parse_key_bytes, revoke_uid, sign_bytes,
+    sign_bytes_detached, verify_bytes, verify_bytes_detached,
 };
 
 fn parse_secret(bytes: &[u8]) -> SignedSecretKey {
@@ -174,6 +176,84 @@ fn splice_into_uid(victim: &SignedSecretKey, extra_sig: packet::Signature) -> Ve
         victim.secret_subkeys.clone(),
     );
     rebuilt.to_bytes().expect("serialize tampered key")
+}
+
+fn public_with_victim_primary_and_attacker_subkeys(
+    victim: &SignedSecretKey,
+    attacker: &SignedSecretKey,
+) -> Vec<u8> {
+    let attacker_public = attacker.to_public_key();
+    let tampered = SignedPublicKey {
+        primary_key: victim.primary_key.public_key().clone(),
+        details: victim.details.clone(),
+        public_subkeys: attacker_public.public_subkeys.clone(),
+    };
+    tampered.to_bytes().expect("serialize tampered public key")
+}
+
+#[test]
+fn unverified_public_encryption_subkey_binding_is_rejected() {
+    let victim = create_key_simple("victim-pw", &["Victim <victim@example.com>"]).unwrap();
+    let attacker = create_key_simple("attacker-pw", &["Attacker <attacker@example.com>"]).unwrap();
+
+    let victim_sec = parse_secret(&victim.secret_key);
+    let attacker_sec = parse_secret(&attacker.secret_key);
+    let tampered = public_with_victim_primary_and_attacker_subkeys(&victim_sec, &attacker_sec);
+
+    let info = parse_key_bytes(&tampered, false).expect("parse tampered public key");
+    assert_eq!(info.fingerprint, victim.fingerprint);
+    assert!(
+        info.subkeys.is_empty(),
+        "unverified attacker subkeys must not be listed as available"
+    );
+
+    let err = encrypt_bytes(&tampered, b"stolen session", false).unwrap_err();
+    assert!(
+        matches!(err, wecanencrypt::Error::NoEncryptionSubkey),
+        "unverified attacker subkeys must not be usable for encryption: {err:?}"
+    );
+
+    let legitimate = encrypt_bytes(victim.public_key.as_bytes(), b"normal message", false)
+        .expect("encrypt to legitimate victim key");
+    let plaintext =
+        decrypt_bytes(&victim.secret_key, &legitimate, "victim-pw").expect("victim decrypts");
+    assert_eq!(plaintext, b"normal message");
+}
+
+#[test]
+fn unverified_public_signing_subkey_binding_is_rejected() {
+    let victim = create_key_simple("victim-pw", &["Victim <victim@example.com>"]).unwrap();
+    let attacker = create_key_simple("attacker-pw", &["Attacker <attacker@example.com>"]).unwrap();
+
+    let victim_sec = parse_secret(&victim.secret_key);
+    let attacker_sec = parse_secret(&attacker.secret_key);
+    let tampered = public_with_victim_primary_and_attacker_subkeys(&victim_sec, &attacker_sec);
+
+    let signed = sign_bytes(&attacker.secret_key, b"forged auth", "attacker-pw").unwrap();
+    assert!(
+        !verify_bytes(&tampered, &signed).expect("verify inline with tampered public key"),
+        "attacker signature must not verify under victim primary with unverified subkey binding"
+    );
+
+    let detached = sign_bytes_detached(&attacker.secret_key, b"forged auth", "attacker-pw")
+        .expect("attacker signs detached");
+    assert!(
+        !verify_bytes_detached(&tampered, b"forged auth", detached.as_bytes())
+            .expect("verify detached with tampered public key"),
+        "attacker detached signature must not verify under victim primary"
+    );
+
+    let legitimate = sign_bytes_detached(&victim.secret_key, b"legitimate", "victim-pw")
+        .expect("victim signs detached");
+    assert!(
+        verify_bytes_detached(
+            victim.public_key.as_bytes(),
+            b"legitimate",
+            legitimate.as_bytes(),
+        )
+        .expect("verify legitimate victim signature"),
+        "legitimate signatures from valid subkeys must still verify"
+    );
 }
 
 /// A SubkeyRevocation signed by an *unrelated* key must NOT mark the

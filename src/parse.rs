@@ -15,7 +15,7 @@ use pgp::types::KeyDetails;
 use crate::error::Result;
 use crate::internal::{
     classify_key_algorithm, fingerprint_to_hex, get_algorithm_name, get_key_bit_size,
-    is_subkey_revoked, is_subkey_valid, keyid_to_hex, most_recent_binding_sig, parse_key,
+    is_subkey_revoked, is_subkey_valid, keyid_to_hex, most_recent_verified_binding_sig, parse_key,
     system_time_to_datetime, verified_primary_revocation, verified_user_id_revocation,
 };
 use crate::types::{
@@ -232,7 +232,8 @@ fn extract_subkey_info(public_key: &SignedPublicKey, allow_expired: bool) -> Vec
         // look as if its original (long-since-expired) binding still
         // governs the subkey. Aligns with `is_subkey_valid` which
         // already uses the most-recent-binding rule.
-        let expiration_time = most_recent_binding_sig(subkey).and_then(|sig| {
+        let binding = most_recent_verified_binding_sig(&public_key.primary_key, subkey);
+        let expiration_time = binding.and_then(|sig| {
             sig.key_expiration_time().map(|validity| {
                 let creation: std::time::SystemTime = subkey.key.created_at().into();
                 system_time_to_datetime(creation + validity.into())
@@ -245,7 +246,7 @@ fn extract_subkey_info(public_key: &SignedPublicKey, allow_expired: bool) -> Vec
         let bit_length = get_key_bit_size(&subkey.key);
 
         // Determine key type based on key flags
-        let key_type = determine_key_type(subkey);
+        let key_type = determine_key_type(binding);
 
         let key_version = subkey.key.version();
 
@@ -270,12 +271,12 @@ fn extract_subkey_info(public_key: &SignedPublicKey, allow_expired: bool) -> Vec
 }
 
 /// Determine the key type from subkey binding signature.
-fn determine_key_type(subkey: &pgp::composed::SignedPublicSubKey) -> KeyType {
+fn determine_key_type(binding: Option<&pgp::packet::Signature>) -> KeyType {
     // RFC 4880 §11.1: the most recent binding signature is authoritative
     // for subkey key flags. Iterating every sig and returning on the
     // first match accepts capabilities that may have been stripped by
     // a re-binding.
-    if let Some(sig) = most_recent_binding_sig(subkey) {
+    if let Some(sig) = binding {
         let flags = sig.key_flags();
         if flags.encrypt_comms() || flags.encrypt_storage() {
             return KeyType::Encryption;
@@ -358,7 +359,7 @@ where
         // Check key flags on the MOST RECENT binding signature (RFC
         // 4880 §11.1). OR-ing flags across every sig would accept a
         // capability that's been stripped on re-binding.
-        let binding = most_recent_binding_sig(subkey);
+        let binding = most_recent_verified_binding_sig(&public_key.primary_key, subkey);
         let matches_predicate = binding
             .map(|sig| predicate(&sig.key_flags()))
             .unwrap_or(false);
@@ -367,7 +368,7 @@ where
             continue;
         }
 
-        let key_type = determine_key_type(subkey);
+        let key_type = determine_key_type(binding);
 
         // Same most-recent-binding rule for the expiration. See
         // `extract_subkey_info` for the reasoning.

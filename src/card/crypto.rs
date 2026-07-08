@@ -1603,7 +1603,7 @@ fn get_card_signing_key<'a>(
         if !can_sign(key.public_params()) {
             continue;
         }
-        if !can_subkey_sign(subkey) {
+        if !can_subkey_sign(&public_key.primary_key, subkey) {
             continue;
         }
         let subkey_usable = match usage {
