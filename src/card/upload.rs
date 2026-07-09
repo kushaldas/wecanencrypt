@@ -15,7 +15,7 @@
 //! APDU is sent. This is a card-spec limitation, not a wecanencrypt bug.
 //!
 //! The V6 unit tests in this module's `tests` submodule therefore only
-//! drive `extract_key_info` in isolation — they prove the key-material
+//! drive `extract_key_info` in isolation - they prove the key-material
 //! extraction side is correct, so that when the card spec eventually
 //! gains a V6 fingerprint DO only the guard and the `[u8; 20]` type
 //! will need revisiting. See `future_todo.md`.
@@ -415,7 +415,7 @@ fn upload_via_openpgp_card(
         .transaction()
         .map_err(|e| Error::Card(CardError::CommunicationError(e.to_string())))?;
 
-    // Verify admin PIN and get admin card — zeroize the intermediate String
+    // Verify admin PIN and get admin card - zeroize the intermediate String
     let pin_str = std::str::from_utf8(admin_pin).map_err(|_| {
         Error::Card(CardError::InvalidData(
             "Admin PIN must be valid UTF-8".to_string(),
@@ -922,7 +922,7 @@ mod tests {
     /// arm. The V6 tests above cover the raw-packet `PublicParams::Ed25519` /
     /// `PublicParams::X25519` paths; this one drives the older MPI-based
     /// V4 representation used by `CipherSuite::Cv25519` (as opposed to
-    /// `Cv25519Modern`). The 0x40 prefix fix must apply here too —
+    /// `Cv25519Modern`). The 0x40 prefix fix must apply here too -
     /// otherwise strict firmware (opcard-rs >= 1.5) rejects the import.
     #[test]
     fn v4_cv25519_legacy_encryption_subkey_is_prefixed() {

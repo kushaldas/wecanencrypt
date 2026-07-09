@@ -2,7 +2,7 @@
 //!
 //! These tests load committed V6 artifacts from `tests/fixtures/v6/` and
 //! verify the library can parse, verify, and decrypt them. The fixture
-//! contract is owned by `examples/gen_v6_fixtures.rs` — run that to
+//! contract is owned by `examples/gen_v6_fixtures.rs` - run that to
 //! regenerate if the contract changes.
 
 use std::path::PathBuf;

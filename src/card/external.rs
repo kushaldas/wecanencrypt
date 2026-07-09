@@ -7,11 +7,11 @@
 //! bridge APDU I/O to native Android/iOS code over an IPC channel (for
 //! example libtumpa's `MobileCardBackend`, which routes through the
 //! `tauri-plugin-tumpa-card` plugin and ultimately speaks to the
-//! smartcard over NFC or USB via generic ISO-DEP / ISO 7816-4 APIs —
+//! smartcard over NFC or USB via generic ISO-DEP / ISO 7816-4 APIs -
 //! working with any OpenPGP v3 compliant card, not just YubiKey).
 //!
 //! Enumeration (`is_card_connected`, `list_all_cards`, `find_cards_for_key`)
-//! is *not* exposed here — on mobile there is typically at most one
+//! is *not* exposed here - on mobile there is typically at most one
 //! active card session at a time (NFC tap / plugged-in USB reader) and
 //! session acquisition is explicit in the UI. Callers that want
 //! "is a card available?" semantics should model that at the app layer.
@@ -25,7 +25,7 @@ use crate::error::{Error, Result};
 /// A card backend provider.
 ///
 /// Called each time `wecanencrypt::card` needs a fresh backend (for a
-/// single operation — a PIN verify, a signature, a key upload). The
+/// single operation - a PIN verify, a signature, a key upload). The
 /// provider is responsible for: starting a card session on the
 /// underlying transport (NFC tap / USB plug), selecting the OpenPGP
 /// applet (AID `D2760001240103040000000000000000`), and returning a

@@ -193,7 +193,7 @@ pub struct DecryptVerifyResult {
 /// identifiers extracted from that signature (uppercase hex; both 40-char
 /// fingerprints and 16-char key IDs may appear in the slice). Return
 /// `Some(cert_bytes)` (armored or binary OpenPGP public key, or a secret
-/// key — only the public material is used) for a candidate signer, or
+/// key - only the public material is used) for a candidate signer, or
 /// `None` if the issuer is unknown.
 ///
 /// PGP/MIME `multipart/encrypted` messages from clients that sign-then-
@@ -201,7 +201,7 @@ pub struct DecryptVerifyResult {
 /// encrypt-only messages return `Unsigned`.
 ///
 /// The caller is responsible for checking that the resolved signer key is
-/// not revoked or expired *before* trusting the `Good` outcome — this
+/// not revoked or expired *before* trusting the `Good` outcome - this
 /// function only checks the cryptographic signature, not key validity.
 ///
 /// Only integrity-protected messages (SEIPDv1 with MDC, SEIPDv2 with
@@ -292,7 +292,7 @@ where
 {
     let reader = match message {
         Message::Signed { reader, .. } => reader,
-        // Literal-only or other shapes mean encrypt-only — no inner sig.
+        // Literal-only or other shapes mean encrypt-only - no inner sig.
         _ => return Ok(DecryptVerifySignature::Unsigned),
     };
 
@@ -473,7 +473,7 @@ mod tests {
     fn decrypt_and_verify_encrypt_only_is_unsigned() {
         let alice = create_key_simple("pw", &["Alice <a@example.com>"]).unwrap();
 
-        // Encrypt-only — no signer.
+        // Encrypt-only - no signer.
         let ct = encrypt_bytes_to_multiple(&[alice.public_key.as_bytes()], b"hello world", true)
             .unwrap();
 
@@ -567,7 +567,7 @@ mod tests {
 
     /// If the resolver returns the WRONG key (well-formed but not the
     /// actual signer), the signature must fail to verify and we must
-    /// report Bad — never Good.
+    /// report Bad - never Good.
     #[test]
     fn decrypt_and_verify_wrong_signer_key_is_bad() {
         let alice = create_key_simple("pw", &["Alice <a@example.com>"]).unwrap();

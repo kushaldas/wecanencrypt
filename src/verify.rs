@@ -23,7 +23,7 @@ use crate::internal::{
 ///
 /// Checks key revocation before verifying the signature.
 /// Returns `false` if the signing key is revoked. Expired keys can
-/// still verify old signatures — expiry only prevents new signatures.
+/// still verify old signatures - expiry only prevents new signatures.
 ///
 /// # Arguments
 /// * `signer_key` - The signer's public key (armored or binary)

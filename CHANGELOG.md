@@ -60,7 +60,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   network lookup, SSH helpers, key management, keystore operations, and
   smart-card helpers.
 
-## [0.16.2] — 2026-06-22
+## [0.16.2] - 2026-06-22
 
 A single data-integrity fix: re-importing an already-stored key no
 longer destroys that key's hardware-card associations.
@@ -75,12 +75,12 @@ longer destroys that key's hardware-card associations.
   key's card linkage on every re-import. `user_ids` and `subkeys`
   were unaffected only because `import_key` explicitly rebuilds them;
   `card_keys` has no such rebuild and was the casualty. Reported as
-  tumpa-cli#32 — `tcli card link` followed by
-  `gpg --export | tcli import -` (even on the "Unchanged — no new
+  tumpa-cli#32 - `tcli card link` followed by
+  `gpg --export | tcli import -` (even on the "Unchanged - no new
   data" path) lost the association and forced a re-link. Pinned with
   `test_reimport_preserves_card_keys`. See ADR 0005.
 
-## [0.16.1] — 2026-05-25
+## [0.16.1] - 2026-05-25
 
 Two outgoing-mail primitives the Tumpa Mail extension needs (Autocrypt
 minimised public-key export + throw-keyid recipients for Bcc), plus a
@@ -153,7 +153,7 @@ when PW1 is blocked.
   `change_user_pin` with the admin PIN as `old_pin` quietly blocks
   PW1 after three attempts.
 
-## [0.15.0] — 2026-05-02
+## [0.15.0] - 2026-05-02
 
 Pre-op passphrase verification primitive for daemons that broker
 secrets into `wecanencrypt` (the tumpa-cli agent and Tumpa Mail XPC
@@ -163,16 +163,16 @@ round-trip.
 
 ### Added
 
-- `verify_software_passphrase(secret_key, password)` — parses the
+- `verify_software_passphrase(secret_key, password)` - parses the
   secret-key bytes and runs `SignedSecretKey::primary_key.unlock`
   with a no-op closure. Returns `Ok(())` when the passphrase decrypts
   the primary secret packet; `Error::Parse` for non-OpenPGP input,
   `Error::Crypto` for a wrong passphrase or a corrupted key. The S2K
-  KDF and secret-packet decryption do run — they're what proves the
-  passphrase correct — but no signature is produced and no message
+  KDF and secret-packet decryption do run - they're what proves the
+  passphrase correct - but no signature is produced and no message
   data is decrypted.
 
-## [0.14.2] — 2026-04-27
+## [0.14.2] - 2026-04-27
 
 Mail-extension Phase 0: primitives the upcoming `Tumpa Mail.app` macOS
 extension needs to handle PGP/MIME outgoing and incoming mail.
@@ -180,19 +180,19 @@ extension needs to handle PGP/MIME outgoing and incoming mail.
 ### Added
 
 - `decrypt_and_verify(secret_key, ciphertext, password, resolve_signer)`
-  — single-pass decrypt + inner-signature verify for sign-then-encrypt
+  - single-pass decrypt + inner-signature verify for sign-then-encrypt
   payloads. The `resolve_signer` closure receives uppercase-hex issuer
   ids (40-char fingerprints and/or 16-char key ids) and returns
   optional signer cert bytes. Result variants
   (`DecryptVerifySignature::Unsigned / Good / Bad / UnknownKey`) map
   cleanly to PGP/MIME UI states.
 - `sign_bytes_detached_with_hash(secret_key, data, password, hash_algo)`
-  — detached sign with optional hash override. Returns
+  - detached sign with optional hash override. Returns
   `DetachedSignOutput { armored, hash_algorithm }`. Callers building
   `multipart/signed` parts use `hash_algorithm` to fill the `micalg`
   parameter (RFC 3156).
 - `sign_and_encrypt_to_multiple(signer_secret, signer_password,
-  recipient_keys, plaintext, armor)` — single-pass sign-then-encrypt
+  recipient_keys, plaintext, armor)` - single-pass sign-then-encrypt
   to one or more recipients. Auto-routes to SEIPDv1 (V4) or SEIPDv2
   (V6) recipients, matching `encrypt_bytes_to_multiple`.
 - `HashAlgorithm` re-exported at the crate root.
@@ -202,10 +202,10 @@ extension needs to handle PGP/MIME outgoing and incoming mail.
 - `sign_bytes_detached` and `sign_bytes_detached_with_primary_key`
   delegate to `sign_bytes_detached_with_hash` with `hash_algo = None`;
   behavior unchanged.
-- Detached signing does not normalize line endings — CRLF input is
+- Detached signing does not normalize line endings - CRLF input is
   signed verbatim, as required by RFC 3156. Regression test added.
 
-## [0.10.0] — 2026-04-16
+## [0.10.0] - 2026-04-16
 
 First release since `0.9.0`. Major theme: make terminology unambiguous
 and harden the key-merge logic so re-importing secret keys no longer
@@ -250,7 +250,7 @@ a UID or subkey.
   - Existing v1 / v2 keystores auto-migrate on open. Downgrade is
     one-way and requires manual SQL. Any legacy johnnycanencrypt
     `keys` table (and its `uid*` helpers) is dropped during
-    migration — nothing in this codebase read it.
+    migration - nothing in this codebase read it.
 
 ### Fixed
 

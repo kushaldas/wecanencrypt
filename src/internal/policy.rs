@@ -57,7 +57,7 @@ pub(crate) fn is_key_expired(creation_time: SystemTime, validity_seconds: Option
 ///
 /// Works for both `SignedPublicSubKey` and `SignedSecretSubKey` because
 /// `verify_subkey_binding` only needs the subkey to implement
-/// `KeyDetails + Serialize` — both `PublicSubkey` and `SecretSubkey` do.
+/// `KeyDetails + Serialize` - both `PublicSubkey` and `SecretSubkey` do.
 fn any_verified_subkey_revocation<V, K>(
     primary: &V,
     signatures: &[Signature],
@@ -90,7 +90,7 @@ pub(crate) fn is_subkey_revoked(
 /// `Serialize` impls for `PublicSubkey` and `SecretSubkey` produce
 /// different byte streams, so passing `&subkey.key` directly would
 /// always fail verification against a signature computed by any
-/// conforming implementation — including rpgp's own signing paths.
+/// conforming implementation - including rpgp's own signing paths.
 pub(crate) fn is_secret_subkey_revoked(
     primary: &pgp::packet::PublicKey,
     subkey: &SignedSecretSubKey,
@@ -335,7 +335,7 @@ pub(crate) fn is_primary_secret_key_revoked(key: &SignedSecretKey) -> bool {
 /// Check if the primary key is valid for verification (not revoked).
 ///
 /// Note: Expiry is NOT checked here because expired keys should still
-/// verify old signatures — expiry means "don't create new signatures",
+/// verify old signatures - expiry means "don't create new signatures",
 /// not "existing signatures are invalid".
 pub(crate) fn is_primary_key_valid_for_verification(key: &SignedPublicKey) -> bool {
     !is_primary_key_revoked(key)
@@ -458,7 +458,7 @@ pub(crate) fn get_key_expiration(key: &SignedPublicKey) -> Option<SystemTime> {
 /// rpgp's parser accepts any packet tagged `KeyRevocation` into
 /// `SignedKeyDetails::revocation_signatures` without verifying it (see
 /// `composed/signed_key/key_parser.rs`). Callers that need a trustworthy
-/// revocation verdict must verify the signature themselves — which is what
+/// revocation verdict must verify the signature themselves - which is what
 /// this helper does: it filters `revocation_signatures` to `KeyRevocation`
 /// packets, then calls `Signature::verify_key` against the primary key and
 /// returns the first one that passes.

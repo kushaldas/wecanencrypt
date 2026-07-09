@@ -451,7 +451,7 @@ pub fn sign_and_encrypt_to_multiple(
 /// This is the primitive that PGP/MIME mail clients use to deliver
 /// "Bcc with encryption" without leaking Bcc identities to the To/Cc
 /// recipients. The full ciphertext is still a single OpenPGP message
-/// (efficient on the wire); every recipient — visible or hidden — sees the
+/// (efficient on the wire); every recipient - visible or hidden - sees the
 /// same plaintext after decryption.
 ///
 /// At least one recipient (visible OR hidden) must be supplied; both
@@ -672,7 +672,7 @@ pub fn encrypt_bytes_to_multiple_with_hidden(
 ///
 /// At least one of the two lists must be non-empty; an empty-empty call
 /// is rejected with [`Error::InvalidInput`]. A mixed V4/V6 split between
-/// the two sides surfaces as [`Error::KeyVersionMismatch`] — RFC 9580
+/// the two sides surfaces as [`Error::KeyVersionMismatch`] - RFC 9580
 /// forbids V6 ESK packets preceding a V1 SEIPD and vice versa, so the
 /// caller could not route the message down a single SEIPD path.
 pub(crate) fn collect_visible_and_hidden_keys(
@@ -1052,7 +1052,7 @@ mod tests {
     /// Walk every PKESK packet in a (possibly armored) ciphertext and
     /// return the parsed enum values. Unlike [`bytes_encrypted_for`],
     /// which formats and drops anonymous V6 PKESKs, this helper preserves
-    /// every PKESK so tests can match on the exact variant shape — in
+    /// every PKESK so tests can match on the exact variant shape - in
     /// particular `V6 { fingerprint: None, .. }` for V6 hidden recipients.
     fn parse_pkesks(ciphertext: &[u8]) -> Vec<PublicKeyEncryptedSessionKey> {
         let data = if ciphertext.starts_with(b"-----BEGIN PGP") {
@@ -1071,7 +1071,7 @@ mod tests {
             match packet_result {
                 Ok(Packet::PublicKeyEncryptedSessionKey(pkesk)) => out.push(pkesk),
                 Ok(_) => {}
-                // Stop walking at the first parse error — usually the
+                // Stop walking at the first parse error - usually the
                 // ciphertext body, which we can't decode without the key.
                 Err(_) => break,
             }
@@ -1114,7 +1114,7 @@ mod tests {
         // PKESK enumeration: at least one wildcard (Carol, hidden) and at
         // least one non-wildcard (Bob, visible). Note: `bytes_encrypted_for`
         // emits the wildcard key id for V3 PKESK anonymous recipients and
-        // *skips* V6 PKESK anonymous recipients — these tests use V4 keys
+        // *skips* V6 PKESK anonymous recipients - these tests use V4 keys
         // (the default of `create_key_simple`) so the wildcard form is
         // what shows up.
         let key_ids = bytes_encrypted_for(&ct).expect("enumerate PKESKs");
@@ -1142,7 +1142,7 @@ mod tests {
     /// wildcard-PKESK behaviour, same dual decryptability.
     ///
     /// Assertions are presence-based (at least one wildcard + at least
-    /// one non-wildcard PKESK), not count-based — see the sibling test
+    /// one non-wildcard PKESK), not count-based - see the sibling test
     /// above for the rationale.
     #[test]
     fn encrypt_only_with_hidden_emits_wildcard_keyid_for_hidden_recipients() {
@@ -1183,7 +1183,7 @@ mod tests {
         );
     }
 
-    /// At least one recipient must be supplied across the two lists —
+    /// At least one recipient must be supplied across the two lists -
     /// both empty is rejected. Prevents accidentally producing a
     /// "header-only" OpenPGP message that no-one can decrypt.
     #[test]
@@ -1240,7 +1240,7 @@ mod tests {
         assert_eq!(pt, b"hidden-only");
     }
 
-    /// V6 keys exercise the SEIPD-v2 / `encrypt_to_key_anonymous` path —
+    /// V6 keys exercise the SEIPD-v2 / `encrypt_to_key_anonymous` path -
     /// hidden recipients receive a V6 PKESK whose optional `fingerprint`
     /// field is `None` (RFC 9580 §5.1.2). Pin both the packet shape and
     /// that both recipients still decrypt to the same plaintext.
@@ -1441,7 +1441,7 @@ mod tests {
         );
 
         // sign_and_encrypt_to_multiple_with_hidden: V6 visible + V4 hidden
-        // (swap the two sides — the guard must fire either way).
+        // (swap the two sides - the guard must fire either way).
         assert_mismatch(
             sign_and_encrypt_to_multiple_with_hidden(
                 &alice_v4.secret_key,

@@ -20,7 +20,7 @@ use crate::error::{Error, Result};
 /// Check if an OpenPGP smart card is connected.
 ///
 /// **PCSC-only.** Enumeration is a desktop / PC/SC concept; mobile
-/// (`card-external`) builds don't expose this function — they establish
+/// (`card-external`) builds don't expose this function - they establish
 /// card sessions explicitly via their registered backend provider.
 ///
 /// # Returns
@@ -109,9 +109,9 @@ pub fn list_all_cards() -> Result<Vec<CardSummary>> {
 ///
 /// The implementation dispatches on Cargo features:
 ///
-/// - With `card-pcsc` — enumerate via PC/SC and box the selected
+/// - With `card-pcsc` - enumerate via PC/SC and box the selected
 ///   [`PcscBackend`] as [`Box<dyn CardBackend + Send + Sync>`].
-/// - With `card-external` (and without `card-pcsc`) — call the provider
+/// - With `card-external` (and without `card-pcsc`) - call the provider
 ///   callback registered via
 ///   [`super::external::set_backend_provider`].
 ///
@@ -130,7 +130,7 @@ pub(crate) fn get_card_backend(ident: Option<&str>) -> Result<Box<dyn CardBacken
     {
         let _ = ident;
         Err(Error::Card(CardError::CommunicationError(
-            "no card transport enabled — build wecanencrypt with either \
+            "no card transport enabled - build wecanencrypt with either \
              `card-pcsc` (desktop) or `card-external` (mobile) feature"
                 .to_string(),
         )))
@@ -142,7 +142,7 @@ pub(crate) fn get_card_backend(ident: Option<&str>) -> Result<Box<dyn CardBacken
 ///
 /// Multi-card filtering is implemented in two passes. `PcscBackend` consumes
 /// the backend when `Card::new` is called, so there's no way to keep the
-/// probed backend open and return it — dropping the `Card` releases the
+/// probed backend open and return it - dropping the `Card` releases the
 /// reader, and the next enumeration returns a fresh (different) backend.
 /// We therefore record the **index** of the matching card in pass 1 and
 /// re-enumerate in pass 2 to return the backend at that index. Enumeration
@@ -198,7 +198,7 @@ fn get_card_backend_pcsc(ident: Option<&str>) -> Result<PcscBackend> {
     })?;
 
     // Pass 2: re-enumerate and return the backend at that index. Surface
-    // the underlying PC/SC error if reopening fails — silently swallowing
+    // the underlying PC/SC error if reopening fails - silently swallowing
     // it would mask real "reader busy" / "permission denied" cases under
     // a misleading "Card disappeared" message.
     let mut cards2 = PcscBackend::cards(None)

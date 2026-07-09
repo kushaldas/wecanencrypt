@@ -113,7 +113,7 @@ fn encrypt_to_v6_primary_with_v4_subkey_rejected() {
     // terminal error. The belt-and-braces `KeyVersionMismatch` check in
     // `collect_encryption_keys` would fire first if rpgp ever loosened its
     // parser. Either outcome proves the library refuses to encrypt to a
-    // mismatched keyring — accept both.
+    // mismatched keyring - accept both.
     match err {
         Error::Parse(_) => { /* rpgp rejected the splice at parse time */ }
         Error::KeyVersionMismatch { existing, incoming } => {
@@ -134,7 +134,7 @@ fn encrypt_to_v6_primary_with_v4_subkey_rejected() {
 #[test]
 fn merge_same_v6_key_twice_succeeds() {
     // Round-tripping the same V6 key through merge should leave it unchanged
-    // in version and preserve the fingerprint — ensures the new guard does not
+    // in version and preserve the fingerprint - ensures the new guard does not
     // false-positive on a legitimate same-version merge.
     let v6 = v6_key();
     let v6_pub = get_pub_key(&v6).unwrap();
@@ -173,7 +173,7 @@ mod keystore {
     #[test]
     fn keystore_import_v4_then_v6_independent_fingerprints() {
         // V4 and V6 primary keys never share a fingerprint because the hash
-        // structure differs, so these coexist as separate rows — no mismatch
+        // structure differs, so these coexist as separate rows - no mismatch
         // error should fire.
         let store = KeyStore::open_in_memory().unwrap();
 

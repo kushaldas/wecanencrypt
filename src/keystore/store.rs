@@ -1084,8 +1084,8 @@ impl KeyStore {
     ///
     /// Equivalent to calling [`KeyStore::get_card_keys`] for every key in
     /// the store, but uses one SQL round-trip instead of N. Intended
-    /// for callers that need a fingerprint→cards map — e.g. the
-    /// desktop key-list view — so they avoid the N+1 pattern that
+    /// for callers that need a fingerprint→cards map - e.g. the
+    /// desktop key-list view - so they avoid the N+1 pattern that
     /// otherwise falls out of per-key lookups.
     ///
     /// # Example
@@ -1363,7 +1363,7 @@ impl KeyStore {
 }
 
 /// Parse an RFC 3339 timestamp string into a UTC `DateTime`. Returns
-/// `None` on parse failure — v4-backfilled rows should always produce
+/// `None` on parse failure - v4-backfilled rows should always produce
 /// valid timestamps, but a defensive None keeps one bad cache entry
 /// from corrupting the whole list.
 fn parse_rfc3339_utc(s: String) -> Option<chrono::DateTime<chrono::Utc>> {
@@ -1955,7 +1955,7 @@ mod tests {
         );
         assert_eq!(extract_uid_email("Just a Name"), None);
         // Bracketed form with incidental whitespace around the address
-        // must trim — otherwise the value won't match against the
+        // must trim - otherwise the value won't match against the
         // address that lands in the autocrypt header.
         assert_eq!(
             extract_uid_email("Alice < alice@example.com >"),
@@ -1974,14 +1974,14 @@ mod tests {
             extract_uid_email("A>lice <alice@example.com>"),
             Some("alice@example.com".to_string())
         );
-        // Brackets containing a non-email token must NOT be returned —
+        // Brackets containing a non-email token must NOT be returned -
         // otherwise the keystore email index and Autocrypt address
         // comparisons would accept garbage like "Name <not_an_email>"
         // or "Name <addr with space>".
         assert_eq!(extract_uid_email("Name <not_an_email>"), None);
         assert_eq!(extract_uid_email("Name <addr with space>"), None);
         // Non-space whitespace inside the address (tab, newline, NBSP)
-        // is also rejected — an addr-spec can't contain any of these,
+        // is also rejected - an addr-spec can't contain any of these,
         // and they'd otherwise pollute the keystore email index.
         assert_eq!(extract_uid_email("Name <alice@\texample.com>"), None);
         assert_eq!(extract_uid_email("Name <alice@\nexample.com>"), None);
@@ -2027,7 +2027,7 @@ mod tests {
 
     /// `list_keys_summary` must return the same set of fingerprints
     /// as `list_keys`, and for each key carry the creation time, at
-    /// least one UID, and at least one subkey — all without parsing
+    /// least one UID, and at least one subkey - all without parsing
     /// the OpenPGP blob.
     #[test]
     fn test_list_keys_summary_matches_list_keys() {
@@ -2131,7 +2131,7 @@ mod tests {
             .unwrap();
         assert_eq!(store.get_card_keys(&fp).unwrap().len(), 1);
 
-        // Re-import the very same cert (the "Unchanged — no new data" path in
+        // Re-import the very same cert (the "Unchanged - no new data" path in
         // tcli always calls import_key). The card linkage must persist.
         let fp2 = store.import_key(&key.secret_key).unwrap();
         assert_eq!(fp2, fp);
@@ -2160,10 +2160,9 @@ mod tests {
         assert!(result.is_err());
     }
 
-    /// Import a key that carries a cryptographically valid self-revocation
-    /// — the cached `is_revoked` flag must be set and `revocation_time`
-    /// populated. This is the positive half of the verified-revocation
-    /// contract: valid revocations still land in the cache.
+    /// Import a key that carries a cryptographically valid self-revocation.
+    /// The cached `is_revoked` flag must be set and `revocation_time`
+    /// populated, proving that valid revocations still land in the cache.
     #[test]
     fn test_import_revoked_key_caches_is_revoked() {
         use crate::{create_key_simple, revoke_key};
@@ -2185,7 +2184,7 @@ mod tests {
     }
 
     /// A KeyRevocation packet whose signature was produced by a different
-    /// key is NOT a real revocation. The keystore must ignore it — if it
+    /// key is NOT a real revocation. The keystore must ignore it - if it
     /// trusted the packet-type tag alone, an attacker who slipped a
     /// forged revocation into a stored or transmitted key could trick
     /// the UI into refusing to use a valid key.
@@ -2199,9 +2198,9 @@ mod tests {
         use pgp::types::{KeyDetails as _, KeyVersion, Password, Timestamp};
         use rand::thread_rng;
 
-        // Victim key — the one we want to falsely mark as revoked.
+        // Victim key - the one we want to falsely mark as revoked.
         let victim = create_key_simple("pw_v", &["Victim <v@example.com>"]).unwrap();
-        // Attacker key — signs a bogus revocation over the victim.
+        // Attacker key - signs a bogus revocation over the victim.
         let attacker = create_key_simple("pw_a", &["Attacker <a@example.com>"]).unwrap();
 
         // Parse victim as secret key (so we can reserialize it with the
@@ -2229,7 +2228,7 @@ mod tests {
         };
 
         // Forge: attacker signs a KeyRevocation packet. The content of
-        // the signature doesn't matter — what matters is that the
+        // the signature doesn't matter - what matters is that the
         // issuer is the *attacker's* primary key, so verifying it
         // against the *victim's* primary key will fail.
         let mut rng = thread_rng();
@@ -2280,7 +2279,7 @@ mod tests {
 
         // Sanity: rpgp's parser did accept the forged packet into
         // `revocation_signatures` (this is the vulnerability we're
-        // defending against — the unverified find() would have set
+        // defending against - the unverified find() would have set
         // `is_revoked = 1`).
         let (parsed, _) = parse_key(&tampered_bytes).unwrap();
         assert!(
@@ -2288,7 +2287,7 @@ mod tests {
             "forged KeyRevocation packet must be present in revocation_signatures"
         );
 
-        // Import — the cache must NOT flag this as revoked, because
+        // Import - the cache must NOT flag this as revoked, because
         // the forged signature does not verify against the victim's
         // primary key.
         let store = KeyStore::open_in_memory().unwrap();
@@ -2305,7 +2304,7 @@ mod tests {
     }
 
     /// When a key in the store is later replaced with a revoked version
-    /// via `update_key`, the cached `is_revoked` column must refresh —
+    /// via `update_key`, the cached `is_revoked` column must refresh -
     /// otherwise a user who revokes a key would still see it as live
     /// in the summary view.
     #[test]

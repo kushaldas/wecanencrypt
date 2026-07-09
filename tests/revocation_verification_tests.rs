@@ -207,7 +207,7 @@ fn forge_cert_revocation(
 
 /// Reassemble `victim` with `extra_sig` appended to the signatures
 /// of the secret subkey whose fingerprint matches `target_fp`.
-/// The signature is *not* cryptographically verified during parse —
+/// The signature is *not* cryptographically verified during parse -
 /// rpgp stores any packet with matching type.
 fn splice_into_subkey_fp(
     victim: &SignedSecretKey,
@@ -468,7 +468,7 @@ fn forged_subkey_revocation_is_ignored() {
     let forged = forge_subkey_revocation(&attacker_sec, "pw_a", victim_subkey);
     let tampered = splice_into_subkey(&victim_sec, forged);
 
-    // Sanity: the packet landed in the parsed key — rpgp accepts it.
+    // Sanity: the packet landed in the parsed key - rpgp accepts it.
     let parsed = SignedSecretKey::from_bytes(&tampered[..]).expect("reparse");
     assert!(
         parsed.secret_subkeys[0]
@@ -491,7 +491,7 @@ fn forged_subkey_revocation_is_ignored() {
 }
 
 /// A genuine self-signed SubkeyRevocation must be honored. This is
-/// the positive control — without it, a too-strict verifier could
+/// the positive control - without it, a too-strict verifier could
 /// reject all SubkeyRevocations including legitimate ones.
 #[test]
 fn genuine_subkey_revocation_is_honored() {
@@ -710,7 +710,7 @@ fn revoked_primary_rejects_signing_subkey_signatures_across_verify_apis() {
 /// A genuine self-signed SubkeyRevocation must prevent
 /// `sign_bytes_detached` from producing a signature issued by the
 /// revoked subkey. This exercises `is_secret_subkey_revoked` in
-/// `sign.rs::find_signing_subkey` — a path distinct from the
+/// `sign.rs::find_signing_subkey` - a path distinct from the
 /// public-key paths the other tests cover.
 ///
 /// Regression test for a bug caught in review (PR #18 Copilot
@@ -743,9 +743,9 @@ fn genuine_subkey_revocation_blocks_signing_from_that_subkey() {
 
     // Two acceptable outcomes after a genuine revocation of the only
     // signing subkey:
-    //   (a) sign_bytes_detached returns NoSigningSubkey — the subkey
+    //   (a) sign_bytes_detached returns NoSigningSubkey - the subkey
     //       was filtered and no fallback is available
-    //   (b) sign_bytes_detached succeeds via a different key — the
+    //   (b) sign_bytes_detached succeeds via a different key - the
     //       signature's issuer must not be the revoked subkey
     // Both prove `is_secret_subkey_revoked` returned true. The old
     // bug would produce (c): a signature issued BY the revoked subkey.

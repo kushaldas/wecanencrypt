@@ -1027,7 +1027,7 @@ fn test_keystore_save_and_get_card_keys() {
     let card_keys = store.get_card_keys(&fp).unwrap();
     assert_eq!(card_keys.len(), 3);
 
-    // Results ordered by card_ident, slot — "encryption" < "signature" alphabetically
+    // Results ordered by card_ident, slot - "encryption" < "signature" alphabetically
     let first = &card_keys[0];
     assert_eq!(first.card_ident, "0006:12345678");
     assert_eq!(first.card_serial, "12345678");
@@ -1056,7 +1056,7 @@ fn test_keystore_card_keys_replace_on_duplicate() {
         )
         .unwrap();
 
-    // Save again with same card_ident+slot — should replace
+    // Save again with same card_ident+slot - should replace
     store
         .save_card_key(
             &fp,
@@ -1139,7 +1139,7 @@ fn test_keystore_card_keys_cascade_delete() {
         )
         .unwrap();
 
-    // Delete the certificate — card_keys should cascade
+    // Delete the certificate - card_keys should cascade
     store.delete_key(&fp).unwrap();
 
     // Re-import the key and check card_keys are gone
@@ -1156,7 +1156,7 @@ fn test_keystore_card_keys_empty_result() {
     let key_data = read_file(&key_path);
     let fp = store.import_key(&key_data).unwrap();
 
-    // No card keys saved — should return empty
+    // No card keys saved - should return empty
     let card_keys = store.get_card_keys(&fp).unwrap();
     assert!(card_keys.is_empty());
 }

@@ -247,7 +247,7 @@ fn extract_subkey_info(public_key: &SignedPublicKey, allow_expired: bool) -> Vec
         // the binding's properties). `signatures.first()` returns
         // whatever happens to be first in the packet stream, which after
         // a `merge_signatures` re-import is the OLDEST binding (existing
-        // sigs are kept first, new sigs appended) — making a renewed key
+        // sigs are kept first, new sigs appended) - making a renewed key
         // look as if its original (long-since-expired) binding still
         // governs the subkey. Aligns with `verified_usable_subkey_binding`
         // which already uses the most-recent-binding rule.

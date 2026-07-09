@@ -100,7 +100,7 @@ if is_card_connected() {
     println!("Card serial: {}", info.serial_number);
 
     // Upload a key to the signing slot (last arg selects a specific card;
-    // `None` picks the first enumerated card — see "Multi-card selection").
+    // `None` picks the first enumerated card - see "Multi-card selection").
     let secret_key = std::fs::read("secret.asc")?;
     upload_key_to_card(&secret_key, b"password", CardKeySlot::Signing, b"12345678", None)?;
 

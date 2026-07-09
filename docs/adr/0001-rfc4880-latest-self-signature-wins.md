@@ -20,8 +20,8 @@ The wecanencrypt library already followed this rule for key expiration
 (via `primary_expiration_from_details`) and subkey expiration (via
 `is_subkey_valid`), but key flag checks (`can_details_sign`,
 `can_primary_certify`, `can_subkey_sign`) used a permissive `any()`
-pattern that returned `true` if *any* self-signature — regardless of
-age — had the flag set.
+pattern that returned `true` if *any* self-signature - regardless of
+age - had the flag set.
 
 This mismatch created a correctness problem: if a key owner issued a
 newer self-signature removing the signing capability (e.g., converting
@@ -112,5 +112,5 @@ approach which keeps all signatures and evaluates at read time, and
   multiple self-signatures on the same object may resolve the conflict
   by accepting the most recent self-signature."
 - RFC 9580, section 5.2.3.5 (same semantics, updated section number)
-- rpgpie `merge.rs` — reference merge implementation
-- rpgpie `signature.rs:merge_signatures` — signature deduplication
+- rpgpie `merge.rs` - reference merge implementation
+- rpgpie `signature.rs:merge_signatures` - signature deduplication

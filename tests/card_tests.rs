@@ -50,7 +50,7 @@
 //! WARNING: These tests will RESET your card and ERASE all existing keys!
 
 // These tests require a live PC/SC-attached smartcard, so they're
-// gated on `card-pcsc` — the `card` feature alone no longer pulls in
+// gated on `card-pcsc` - the `card` feature alone no longer pulls in
 // the enumeration APIs (`is_card_connected`, `find_cards_for_key`)
 // they rely on. Run with:
 //

@@ -311,7 +311,7 @@ fn merge_secret_key(orig: &mut SignedSecretKey, source: SecretMergeSource) {
             } else {
                 // A new secret subkey we didn't have. Verify the
                 // binding signature against our primary before
-                // accepting it — otherwise a crafted update could
+                // accepting it - otherwise a crafted update could
                 // inject a subkey whose "binding" was never actually
                 // signed by the primary. On verification failure the
                 // subkey is dropped; the rest of the merge proceeds.
@@ -327,7 +327,7 @@ fn merge_secret_key(orig: &mut SignedSecretKey, source: SecretMergeSource) {
                 // form, it carries signatures we've already accumulated
                 // (revocations, third-party certifications, historical
                 // binding sigs). Merge them into the incoming secret
-                // subkey before promoting — otherwise they would be
+                // subkey before promoting - otherwise they would be
                 // silently dropped when we retain() the public entry.
                 let prior_sigs: Vec<_> = orig
                     .public_subkeys

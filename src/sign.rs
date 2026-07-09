@@ -82,7 +82,7 @@ pub(crate) fn find_signing_subkey(secret_key: &SignedSecretKey) -> Option<&Signe
 /// performing a sign or decrypt round-trip.
 ///
 /// The S2K KDF and the secret-key-packet decryption do run as part of
-/// `unlock` — those are the cheapest crypto bits and are exactly what
+/// `unlock` - those are the cheapest crypto bits and are exactly what
 /// proves the passphrase correct. What this function explicitly skips
 /// is producing a signature or decrypting message data with the
 /// unlocked key.
@@ -718,7 +718,7 @@ mod tests {
             sign_bytes_detached_with_hash(&key.secret_key, crlf, "pw", Some(HashAlgorithm::Sha256))
                 .unwrap();
 
-        // Verify against the EXACT CRLF bytes — succeeds only if the
+        // Verify against the EXACT CRLF bytes - succeeds only if the
         // signer hashed the CRLF form, not an LF-normalized version.
         let valid =
             crate::verify_bytes_detached(key.public_key.as_bytes(), crlf, out.armored.as_bytes())

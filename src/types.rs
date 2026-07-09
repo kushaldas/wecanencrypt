@@ -74,8 +74,8 @@ impl CipherSuite {
     ///
     /// RFC 9580 §9.2 forbids `Ed25519Legacy` and `ECDH(Curve25519)` under V6, so
     /// the legacy [`CipherSuite::Cv25519`] variant (which maps to those types) is
-    /// rejected. All other suites — RSA, NIST curves, `Cv25519Modern`, and
-    /// `Cv448Modern` — are allowed under V6.
+    /// rejected. All other suites - RSA, NIST curves, `Cv25519Modern`, and
+    /// `Cv448Modern` - are allowed under V6.
     ///
     /// # Example
     ///
@@ -124,12 +124,12 @@ impl CipherSuite {
 /// | `Rsa`               | RSA / RSAEncrypt / RSASign                        |
 /// | `Dsa`               | DSA                                               |
 /// | `Elgamal`           | Elgamal                                           |
-/// | `EdDsaLegacy`       | EdDSALegacy — v4 Ed25519 (`CipherSuite::Cv25519`) |
-/// | `Ed25519`           | Ed25519 — RFC 9580 (`CipherSuite::Cv25519Modern`) |
-/// | `Ed448`             | Ed448 — RFC 9580 (`CipherSuite::Cv448Modern`)     |
+/// | `EdDsaLegacy`       | EdDSALegacy - v4 Ed25519 (`CipherSuite::Cv25519`) |
+/// | `Ed25519`           | Ed25519 - RFC 9580 (`CipherSuite::Cv25519Modern`) |
+/// | `Ed448`             | Ed448 - RFC 9580 (`CipherSuite::Cv448Modern`)     |
 /// | `EcdhCurve25519`    | ECDH over Curve25519 (`CipherSuite::Cv25519`)     |
-/// | `X25519`            | X25519 — RFC 9580 (`CipherSuite::Cv25519Modern`)  |
-/// | `X448`              | X448 — RFC 9580 (`CipherSuite::Cv448Modern`)      |
+/// | `X25519`            | X25519 - RFC 9580 (`CipherSuite::Cv25519Modern`)  |
+/// | `X448`              | X448 - RFC 9580 (`CipherSuite::Cv448Modern`)      |
 /// | `EcdhNist`          | ECDH over NIST P-256 / P-384 / P-521              |
 /// | `EcdhBrainpool`     | ECDH over Brainpool 256 / 384 / 512               |
 /// | `Ecdsa`             | ECDSA over any NIST / secp256k1 / brainpool curve |
@@ -443,7 +443,7 @@ pub struct KeySummary {
 }
 
 /// One UID in a [`KeySummary`]. This is deliberately thinner than
-/// [`UserIDInfo`] — it carries only what the SQL `user_ids` table
+/// [`UserIDInfo`] - it carries only what the SQL `user_ids` table
 /// caches (no revocation status, no third-party certifications),
 /// because callers who need those details already know to call
 /// [`crate::KeyStore::get_key_info`] / [`crate::KeyStore::get_key`].

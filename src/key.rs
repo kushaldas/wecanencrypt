@@ -71,7 +71,7 @@ fn create_key_internal(
     // the combo up front so the error message points at the mistake.
     if key_version == KeyVersion::V6 && !cipher.is_allowed_for_v6() {
         return Err(Error::InvalidInput(format!(
-            "Cipher suite {} is not permitted for V6 keys — use Cv25519Modern or Cv448Modern",
+            "Cipher suite {} is not permitted for V6 keys - use Cv25519Modern or Cv448Modern",
             cipher.name()
         )));
     }
@@ -397,7 +397,7 @@ pub fn create_key_simple(password: &str, user_ids: &[&str]) -> Result<GeneratedK
 ///
 /// Convenience wrapper around [`create_key`] that produces a V6 key with all
 /// subkeys and no expiration. Unlike [`create_key_simple`], V6 cannot use the
-/// legacy [`CipherSuite::Cv25519`] suite — callers must pick one of the modern
+/// legacy [`CipherSuite::Cv25519`] suite - callers must pick one of the modern
 /// suites. The default here is [`CipherSuite::Cv25519Modern`] (Ed25519 + X25519).
 ///
 /// # Arguments
@@ -466,16 +466,16 @@ pub fn get_pub_key(key_data: &[u8]) -> Result<String> {
 /// Export an Autocrypt-Level-1-compliant transferable public key (binary).
 ///
 /// Returns the binary OpenPGP bytes the caller should base64-encode into the
-/// `keydata=` attribute of the `Autocrypt:` mail header (RFC-ish — see
+/// `keydata=` attribute of the `Autocrypt:` mail header (RFC-ish - see
 /// <https://autocrypt.org/level1.html#openpgp-based-key-data>). The bytes are
 /// a minimised transferable public key per Autocrypt §5.2:
 ///
 /// - the primary public-key packet
 /// - **exactly one** User ID packet whose email address matches `addr`
-///   (other UIDs and User Attribute packets are stripped — Autocrypt is
+///   (other UIDs and User Attribute packets are stripped - Autocrypt is
 ///   per-address, and every mail carries this header, so size matters)
 /// - the subkey packets, each followed only by its **self**-signatures
-/// - no third-party certifications anywhere — including no third-party
+/// - no third-party certifications anywhere - including no third-party
 ///   key-revocation signatures from a designated revoker (RFC 4880
 ///   §5.2.3.15); only self-revocations from the primary are kept
 ///
@@ -490,7 +490,7 @@ pub fn get_pub_key(key_data: &[u8]) -> Result<String> {
 /// otherwise the first matching UID in packet order. Checking
 /// `PrimaryUserId` only on verified signatures means an attacker who can
 /// splice packets cannot force selection by adding a forged "primary"
-/// flag — the flag is meaningless unless the signature it sits in
+/// flag - the flag is meaningless unless the signature it sits in
 /// actually verifies. This also keeps the on-the-wire bytes stable
 /// across export calls and avoids leaking an alternate display name
 /// into every outbound message.
@@ -507,7 +507,7 @@ pub fn get_pub_key(key_data: &[u8]) -> Result<String> {
 /// - `addr` doesn't match any UID on the key, or
 /// - the matching UID has no cryptographically valid self-signature
 ///   (RFC 4880 §11.1 requires at least one signature after each UID
-///   packet — producing a UID with zero self-sigs would emit
+///   packet - producing a UID with zero self-sigs would emit
 ///   structurally-invalid Autocrypt keydata that every receiving MUA
 ///   would reject).
 ///
@@ -536,15 +536,15 @@ pub fn export_public_for_autocrypt(key_data: &[u8], addr: &str) -> Result<Vec<u8
     let addr_lc = addr.trim().to_ascii_lowercase();
 
     // Pick exactly ONE UID matching `addr` (Autocrypt §2.1.1: "exactly one
-    // user id packet"). Multiple UIDs can carry the same email address —
+    // user id packet"). Multiple UIDs can carry the same email address -
     // an extra UID with a different display name, an `add_uid` mistake,
-    // etc. — so select deterministically among UIDs that have at least
+    // etc. - so select deterministically among UIDs that have at least
     // one cryptographically valid self-cert:
     //   1. prefer a matching UID where a verified self-cert carries the
     //      PrimaryUserId subpacket (RFC 4880 §5.2.3.19);
     //   2. otherwise the first matching UID in packet order.
     // The PrimaryUserId flag is only meaningful when it appears on a
-    // signature the primary actually issued — an attacker who can splice
+    // signature the primary actually issued - an attacker who can splice
     // packets could otherwise force selection of a UID with no usable
     // self-cert by marking it "primary" via a forged signature. Verifying
     // first defeats that.
@@ -604,7 +604,7 @@ pub fn export_public_for_autocrypt(key_data: &[u8], addr: &str) -> Result<Vec<u8
     // Subkey binding/revocation signatures: keep sigs that verify against
     // the primary, and DROP any subkey that ends up with no verified
     // SubkeyBinding (0x18). RFC 4880 §11.1 requires a binding signature
-    // after each subkey packet — a subkey without one isn't part of the
+    // after each subkey packet - a subkey without one isn't part of the
     // transferable public key and any receiving MUA would either ignore
     // it or reject the whole import. Autocrypt is fine with signing
     // subkeys present, and downstream MUAs may need them to verify the
@@ -663,7 +663,7 @@ pub fn export_public_for_autocrypt(key_data: &[u8], addr: &str) -> Result<Vec<u8
             direct_sigs,
             matching_users,
             // User Attributes (notably image packets) are large and not
-            // useful per-message — Autocrypt strips them.
+            // useful per-message - Autocrypt strips them.
             Vec::new(),
         ),
         public_subkeys: stripped_subkeys,
@@ -1745,7 +1745,7 @@ mod tests {
     }
 
     /// Multi-UID keys: only the UID matching `addr` is kept, and the others
-    /// are stripped — this is the per-address invariant Autocrypt §2.1.1
+    /// are stripped - this is the per-address invariant Autocrypt §2.1.1
     /// requires, and the size win that justifies sending the header at all.
     #[test]
     fn autocrypt_export_strips_non_matching_uids() {
@@ -1762,7 +1762,7 @@ mod tests {
         assert_eq!(info.user_ids[0].value, "Alice <alice@example.com>");
     }
 
-    /// Address match is case-insensitive on both local and domain parts —
+    /// Address match is case-insensitive on both local and domain parts -
     /// users routinely type Mixed-Case addresses, and RFC 5321 §2.3.11
     /// says the domain part is case-insensitive anyway.
     #[test]
@@ -1793,7 +1793,7 @@ mod tests {
     }
 
     /// Secret-key input should produce the same minimised PUBLIC bytes as
-    /// public-key input. Callers (libtumpa) pass whatever the keystore has —
+    /// public-key input. Callers (libtumpa) pass whatever the keystore has -
     /// we mustn't leak secret packets either way.
     #[test]
     fn autocrypt_export_extracts_public_from_secret_input() {
@@ -1854,7 +1854,7 @@ mod tests {
     }
 
     /// Two UIDs sharing the same email address (different display names)
-    /// must collapse to exactly ONE UID in the autocrypt output — Autocrypt
+    /// must collapse to exactly ONE UID in the autocrypt output - Autocrypt
     /// §2.1.1 says "exactly one user id packet", and emitting both would
     /// (a) violate that, (b) leak the alternate display name into every
     /// outbound mail, and (c) make the on-the-wire bytes depend on packet
@@ -1881,7 +1881,7 @@ mod tests {
     }
 
     /// Third-party key-revocation signatures (RFC 4880 §5.2.3.15:
-    /// designated revoker) MUST NOT leak into the autocrypt header — the
+    /// designated revoker) MUST NOT leak into the autocrypt header - the
     /// receiving MUA can't verify the revoker's authority from the
     /// keydata alone, and the docstring promises "no third-party
     /// certifications anywhere".
@@ -1901,7 +1901,7 @@ mod tests {
         let bob = crate::create_key_simple("pw", &["Bob <bob@example.com>"]).unwrap();
 
         // Build a tampered alice key whose `revocation_signatures` slot
-        // contains a bona-fide signature from BOB — a stand-in for a
+        // contains a bona-fide signature from BOB - a stand-in for a
         // designated-revoker KeyRevocation that Bob would have issued.
         // We borrow Bob's UID self-cert (which is signed by Bob's primary,
         // so verifying it against Alice's primary fails) and splice it in.
@@ -1943,7 +1943,7 @@ mod tests {
         assert_eq!(
             from_tampered, from_clean,
             "third-party signatures in the revocation_signatures slot must be \
-             stripped — the minimised export should be identical with or \
+             stripped - the minimised export should be identical with or \
              without them"
         );
     }
@@ -1994,7 +1994,7 @@ mod tests {
         // Build a tampered key where UID2's signature list ALSO contains
         // UID1's self-cert. The spliced sig was genuinely issued by the
         // primary (issuer fingerprint subpacket would have pointed at it),
-        // but its hash input is UID1's text, not UID2's — so it cannot
+        // but its hash input is UID1's text, not UID2's - so it cannot
         // verify as a self-cert of UID2 and must be dropped.
         let mut uid2_sigs = uid2.signatures.clone();
         uid2_sigs.push(uid1_self_cert);
@@ -2030,7 +2030,7 @@ mod tests {
         assert_eq!(
             from_tampered, from_clean,
             "a signature issued by the primary but over the WRONG hash \
-             input must be rejected — the minimised export must be \
+             input must be rejected - the minimised export must be \
              byte-identical with and without the spliced signature"
         );
     }
@@ -2043,7 +2043,7 @@ mod tests {
     /// MUA rejects, and worse, the failure would surface only on the
     /// recipient side.
     /// We can't construct this scenario by stripping signatures and
-    /// re-parsing — rpgp itself enforces §11.1 and refuses to parse a
+    /// re-parsing - rpgp itself enforces §11.1 and refuses to parse a
     /// UID with no following signature. So we substitute Bob's UID
     /// self-cert in place of Alice's: the packet parses fine (claims to
     /// be a CertPositive, has all the right subpackets), but it was
@@ -2179,12 +2179,12 @@ mod tests {
     /// signature the primary actually issued. Otherwise an attacker who
     /// can splice packets could mark a UID with no usable self-cert as
     /// "primary" via a forged signature and force the picker to land on
-    /// it — making the export error out for keys that have a perfectly
+    /// it - making the export error out for keys that have a perfectly
     /// good sibling UID with valid self-sigs.
     ///
     /// Setup: two UIDs share the same address. UID1 has a genuine
     /// verified self-cert (no PrimaryUserId flag). UID2's only signature
-    /// is Bob's UID self-cert — which carries Bob's `is_primary()` flag
+    /// is Bob's UID self-cert - which carries Bob's `is_primary()` flag
     /// (rpgp marks the first UID of a generated key as primary) but
     /// fails to verify against Alice's primary. The new picker MUST
     /// land on UID1; the old metadata-only picker would have grabbed
@@ -2249,7 +2249,7 @@ mod tests {
         };
         let tampered_bytes = tampered.to_bytes().expect("serialize tampered");
 
-        // Should succeed (not error) — UID1 has a verified self-cert
+        // Should succeed (not error) - UID1 has a verified self-cert
         // and the picker must skip the falsely-flagged "primary" UID2.
         let autocrypt = super::export_public_for_autocrypt(&tampered_bytes, "alice@example.com")
             .expect("picker should land on UID1, not UID2");
