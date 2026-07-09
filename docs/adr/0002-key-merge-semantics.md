@@ -18,7 +18,7 @@ keyserver / WKD / file-delivered update into a stored key.
 
 Three concerns collide in this function:
 
-1. **Correctness of the public-side merge** — accumulating new
+1. **Correctness of the public-side merge** - accumulating new
    signatures, UIDs, user attributes, and subkeys without dropping
    existing ones. This was solved in ADR 0001 (latest self-signature
    wins) and supporting code.
@@ -37,19 +37,19 @@ Three concerns collide in this function:
    carries a secret subkey whose fingerprint we have not seen before,
    accepting it blindly lets a crafted update inject an arbitrary
    "secret subkey" under a primary fingerprint the victim already
-   trusts. RFC 9580 defines no merge policy here — implementations
+   trusts. RFC 9580 defines no merge policy here - implementations
    must decide.
 
 Neither RFC 4880 nor RFC 9580 specifies merge semantics; the spec only
 says that Transferable Key packet sequences "may be concatenated." We
 therefore align with the two de-facto references:
 
-- **Sequoia-PGP** — `Cert::merge_public` (public-only, used by key
+- **Sequoia-PGP** - `Cert::merge_public` (public-only, used by key
   servers; always strips the incoming secret material) vs
   `Cert::merge_public_and_secret` (prefers any variant that carries
   secret material).
 - **rpgpie** (the rsop SOP implementation, on the same rpgp stack we
-  use) — `Certificate::merge` for public keys and `Tsk::merge` for
+  use) - `Certificate::merge` for public keys and `Tsk::merge` for
   secret-aware merging.
 
 Both split API surface into a public-only path and a secret-aware
@@ -72,7 +72,7 @@ is_secret: bool)`):
 | public  | secret   | incoming secret becomes the base; orig's public key folded in → secret bytes       |
 | secret  | secret   | orig's secret is the base; update's secret subkeys merged by FP → secret bytes     |
 | secret  | public   | orig's secret is the base; update's public signatures/components folded in         |
-| FP mismatch on primary | — | **`Error::InvalidInput`**, always — no override                          |
+| FP mismatch on primary | - | **`Error::InvalidInput`**, always - no override                          |
 
 All secret-bearing outputs are wrapped in `Zeroizing<Vec<u8>>` so the
 serialized secret bytes are scrubbed on drop.
@@ -126,7 +126,7 @@ In all examples below, "FP" is the 40-hex primary-key fingerprint and
 "K1"/"K2"/… are subkey fingerprints. The code path indicated is the
 match arm in `merge_keys`.
 
-#### 5.1 Public + public — keyserver refresh (unchanged behaviour)
+#### 5.1 Public + public - keyserver refresh (unchanged behaviour)
 
 Stored: Bob's public key `FP=ABCD…`, with UID and binding sigs on K1, K2.
 Update: the same key fetched from keys.openpgp.org, now carrying a
@@ -142,7 +142,7 @@ Dispatch: `(false, false)` → `merge_public_key` → `merge_details` dedups
 self-sig by signature bytes, appends Carol's cert-sig. Serialized as
 `SignedPublicKey`. Result is public-only.
 
-#### 5.2 Public + secret — you imported your public key earlier, now you have the secret
+#### 5.2 Public + secret - you imported your public key earlier, now you have the secret
 
 Stored: Bob's public key, no secret material.
 Update: Bob's `.sec` file from his old laptop, same FP.
@@ -164,7 +164,7 @@ social data we had accumulated.
 Before this ADR: this scenario silently dropped the secret material
 because `merge_keys` serialized as `SignedPublicKey`.
 
-#### 5.3 Secret + secret — re-importing, or merging two backups
+#### 5.3 Secret + secret - re-importing, or merging two backups
 
 Stored: Bob's secret key with subkeys K1 (signing) and K2 (enc).
 Update: Bob's secret key again, this time with an additional new
@@ -173,7 +173,7 @@ freshly generated subkey K3 (auth).
 
 Dispatch: `(true, true)` → `merge_secret_key` with
 `SecretMergeSource::Secret`. For `src_pub_subkeys` (empty in the
-typical case — all subkeys in a fresh export live on the secret side)
+typical case - all subkeys in a fresh export live on the secret side)
 the public loop is a no-op. For `src_sec_subkeys`:
 
 - K1, K2 fingerprints match existing entries → sigs deduped via
@@ -187,7 +187,7 @@ Result: one key carrying K1, K2, K3 as secret subkeys and the new UID
 self-sig merged alongside the old one (latest-wins resolution happens
 later at read time per ADR 0001).
 
-#### 5.4 Secret + public — key-signing workflow
+#### 5.4 Secret + public - key-signing workflow
 
 Stored: Bob's secret key.
 Update: Bob's public key returned from Carol after she signed his
@@ -211,7 +211,7 @@ key with Carol's attestation attached.
 
 Before this ADR: this also silently dropped Bob's secret material.
 
-#### 5.5 Fingerprint mismatch — refused
+#### 5.5 Fingerprint mismatch - refused
 
 Stored: key `FP=ABCD…`.
 Update: key `FP=DEAD…`.
@@ -223,7 +223,7 @@ Error::InvalidInput("Key fingerprints do not match: ABCD… vs DEAD…")
 No override. If the caller genuinely wants to add DEAD… to the store,
 they should `import_key(update_data)` directly.
 
-#### 5.6 Tampered secret subkey — rejected with warning
+#### 5.6 Tampered secret subkey - rejected with warning
 
 Stored: Alice's secret key `FP=ABCD…`.
 Update: a crafted secret key that advertises Alice's primary (FP
@@ -241,11 +241,11 @@ Warning: dropping secret subkey <K_bad FP> with invalid binding: …
 
 K_bad is not inserted. Alice's legitimate subkeys remain untouched.
 
-#### 5.7 Demoted-then-promoted subkey — prior signatures preserved
+#### 5.7 Demoted-then-promoted subkey - prior signatures preserved
 
 Stored: Bob's secret key. K1 is in `public_subkeys` carrying both its
 original binding signature and a subkey revocation signature Bob
-issued last month (but the secret packet is absent — for example,
+issued last month (but the secret packet is absent - for example,
 this key was produced earlier via
 `gpg --export-secret-subkeys` with K1 excluded).
 
@@ -257,7 +257,7 @@ Dispatch: `(true, true)` → `merge_secret_key` with
 `SecretMergeSource::Secret`.
 
 - K1 is not in `orig.secret_subkeys` → else-branch.
-- `verify_bindings(&primary_pub)` passes — the incoming binding sig
+- `verify_bindings(&primary_pub)` passes - the incoming binding sig
   is legitimate.
 - Preservation splice: collect K1's signatures from
   `orig.public_subkeys` (original binding + revocation), merge them
@@ -269,7 +269,7 @@ Dispatch: `(true, true)` → `merge_secret_key` with
 Result: K1 on the secret side carrying the new binding sig AND the
 original binding sig AND the revocation sig. Whoever later evaluates
 K1's validity (via ADR 0001's latest-self-sig-wins policy) will see
-all three and act on the revocation — exactly as they would have
+all three and act on the revocation - exactly as they would have
 before the secret promotion.
 
 Without the preservation splice, the original binding sig and the
@@ -297,7 +297,7 @@ other byte slices keep working.
 - Subkey injection attacks via crafted secret-key updates are
   blocked at the merge layer, not only at a hypothetical downstream
   `verify_bindings()` call that no current consumer makes.
-- FP mismatch is unconditionally rejected — safer default than the
+- FP mismatch is unconditionally rejected - safer default than the
   previous `force=true` escape hatch.
 - Secret-bearing output is zeroized on drop. `merge_keys` now fits
   the codebase's secret-handling idiom.
@@ -313,7 +313,7 @@ other byte slices keep working.
   when new secret subkeys arrive.
 - Third-party subkey revocation signatures with issuers other than
   the primary will fail `verify_bindings`. In the current codebase
-  this is acceptable — third-party subkey revocations are vanishingly
+  this is acceptable - third-party subkey revocations are vanishingly
   rare outside explicit revocation-key workflows, which we do not
   support today.
 
@@ -368,7 +368,7 @@ acceptable cost.
 ### Drop public-side signatures during subkey promotion
 
 The simpler implementation of promotion is just
-`public_subkeys.retain(…); secret_subkeys.push(sk_update);` — two
+`public_subkeys.retain(…); secret_subkeys.push(sk_update);` - two
 lines, no signature accounting. Rejected because it silently discards
 subkey revocation signatures, third-party subkey certifications, and
 historical binding sigs that were attached to the public-form entry.
@@ -379,13 +379,13 @@ signature bytes) close that hole.
 
 ## References
 
-- RFC 9580 §10.1 "Transferable Public Keys" — concatenation grammar
+- RFC 9580 §10.1 "Transferable Public Keys" - concatenation grammar
   with no merge semantics defined
-- Sequoia `Cert::merge_public` / `Cert::merge_public_and_secret` —
+- Sequoia `Cert::merge_public` / `Cert::merge_public_and_secret` -
   <https://docs.rs/sequoia-openpgp/latest/sequoia_openpgp/cert/struct.Cert.html>
 - rpgpie `src/merge.rs::Certificate::merge` / `Tsk::merge`
 - GnuPG `g10/import.c::merge_keysig` / `merge_sigs`
-- Hagrid (keys.openpgp.org) `database/src/lib.rs::merge` — always
+- Hagrid (keys.openpgp.org) `database/src/lib.rs::merge` - always
   `merge_public`, strict no-secret-material policy
 - ADR 0001: RFC 4880 "latest self-signature wins" for key flags
 - Commit `1644d9f`: "security: apply zeroize to secret key material

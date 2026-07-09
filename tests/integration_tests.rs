@@ -1135,7 +1135,7 @@ mod key_flag_policy {
             flags.set_certify(certify_flag);
             flags.set_sign(sign_flag);
 
-            // Build subpackets — use a creation time slightly in the future to
+            // Build subpackets - use a creation time slightly in the future to
             // ensure this self-sig is "newer" than the original one.
             let hashed_subpackets = vec![
                 Subpacket::regular(SubpacketData::SignatureCreationTime(Timestamp::now())).unwrap(),
@@ -1172,7 +1172,7 @@ mod key_flag_policy {
                 .unwrap();
 
             // Keep ALL existing signatures (including old self-sigs) + add new one.
-            // This simulates accumulation after a merge — multiple self-sigs coexist.
+            // This simulates accumulation after a merge - multiple self-sigs coexist.
             let mut combined_sigs = signed_user.signatures.clone();
             combined_sigs.push(sig);
             new_users.push(SignedUser::new(signed_user.id.clone(), combined_sigs));
@@ -1450,7 +1450,7 @@ mod key_flag_policy {
             "Certify-only key should not have sign capability"
         );
 
-        // Update the expiry — this creates a new self-sig that copies flags
+        // Update the expiry - this creates a new self-sig that copies flags
         // from the existing sig (should preserve certify-only).
         let exp = chrono::Utc::now() + chrono::Duration::days(365);
         let updated =
@@ -1792,7 +1792,7 @@ mod merge_secret_dispatch {
         );
         assert_eq!(info.fingerprint, key.fingerprint);
 
-        // The new self-sig from the update should have been merged in —
+        // The new self-sig from the update should have been merged in -
         // the merged cert should have at least 2 self-signatures on the
         // UID (original + updated).
         let merged_sec = parse_sec(&merged);
@@ -1955,7 +1955,7 @@ mod merge_secret_dispatch {
         // Attack: craft an update that advertises A's primary but
         // smuggles a secret subkey whose binding signature was made by
         // a *different* primary (key B). merge_keys must refuse that
-        // subkey — otherwise anyone who can get a victim to import
+        // subkey - otherwise anyone who can get a victim to import
         // their "updated" secret cert can inject an arbitrary subkey.
         let key_a = fresh_key();
         let key_b = fresh_key();
@@ -2032,7 +2032,7 @@ mod merge_secret_dispatch {
     fn test_merge_promotion_preserves_public_side_signatures() {
         // orig has K2 in public_subkeys (say, because a previous import
         // dropped its secret material while keeping the binding sig).
-        // update has K2 back as a full secret subkey — with a *renewed*
+        // update has K2 back as a full secret subkey - with a *renewed*
         // binding sig (fresh timestamp, different bytes). Merge must
         // promote K2 into secret_subkeys AND keep both sigs.
         let key = fresh_key();
@@ -2095,7 +2095,7 @@ mod merge_secret_dispatch {
     #[test]
     fn test_merge_promotion_dedups_identical_binding_sig() {
         // Same subkey on both sides, with the SAME binding sig on both.
-        // The preservation splice must dedup via merge_signatures — no
+        // The preservation splice must dedup via merge_signatures - no
         // double-entry of the identical sig.
         let key = fresh_key();
         let full_sec = parse_sec(&key.secret_key);
@@ -2116,7 +2116,7 @@ mod merge_secret_dispatch {
             .find(|sk| sk.key.fingerprint() == victim_fp)
             .expect("K2 promoted");
 
-        // Only one copy of each distinct signature — duplicates must be
+        // Only one copy of each distinct signature - duplicates must be
         // collapsed by merge_signatures' signature_bytes_eq dedup.
         let original_sig_count = full_sec
             .secret_subkeys
@@ -2164,7 +2164,7 @@ mod merge_secret_dispatch {
             .expect("K2 should be absorbed");
 
         // Signature count must match what the update originally carried
-        // — nothing spliced in (because there was no public-form entry).
+        // - nothing spliced in (because there was no public-form entry).
         let update_sig_count = full_sec
             .secret_subkeys
             .iter()
@@ -2297,7 +2297,7 @@ mod v6_keys {
             assert_eq!(sk.fingerprint.len(), 64);
         }
 
-        // Round-trip encryption — auto-dispatch should pick SEIPDv2 for V6.
+        // Round-trip encryption - auto-dispatch should pick SEIPDv2 for V6.
         let pub_key = get_pub_key(&key.secret_key).unwrap();
         let ciphertext = encrypt_bytes(pub_key.as_bytes(), b"v6 secret", true).unwrap();
         let plaintext = decrypt_bytes(&key.secret_key, &ciphertext, TEST_PASSWORD).unwrap();

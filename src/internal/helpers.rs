@@ -47,7 +47,7 @@ pub(crate) fn parse_public_key(data: &[u8]) -> Result<SignedPublicKey> {
     Err(Error::Parse("no matching packet found".to_string()))
 }
 
-/// Parse an OpenPGP key from bytes — tries secret key first, then public.
+/// Parse an OpenPGP key from bytes - tries secret key first, then public.
 /// Returns (public_key, is_secret).
 pub(crate) fn parse_key(data: &[u8]) -> Result<(SignedPublicKey, bool)> {
     // Try as secret key first
@@ -87,12 +87,12 @@ pub(crate) fn fingerprint_to_hex(key: &impl KeyDetails) -> String {
 /// with no address (so callers don't silently pick a UID with no email).
 ///
 /// Shared between the keystore email-index population and the Autocrypt
-/// minimised-key export — keeping the two in sync matters because the
+/// minimised-key export - keeping the two in sync matters because the
 /// keystore's per-UID `email` column is what tools use to look up keys for
 /// the address that's about to go into an `Autocrypt:` header, and the
 /// export then has to match on the same address.
 pub(crate) fn extract_uid_email(uid: &str) -> Option<String> {
-    // Bracketed form: `Name <addr@host>` — trim whitespace inside the
+    // Bracketed form: `Name <addr@host>` - trim whitespace inside the
     // angle brackets. Some UIDs in the wild include incidental spaces
     // around the address (e.g. "Alice < alice@example.com >"); without
     // trimming we'd return " alice@example.com " and miss the match
@@ -124,7 +124,7 @@ pub(crate) fn extract_uid_email(uid: &str) -> Option<String> {
         }
     }
     // Bare-address form: the whole UID is the address. Strip outer
-    // whitespace before checking for embedded whitespace — that's how
+    // whitespace before checking for embedded whitespace - that's how
     // "alice@example.com\n" or "  alice@example.com  " still classifies
     // as a bare email, while "Just A Name" with internal spaces does not.
     let trimmed = uid.trim();

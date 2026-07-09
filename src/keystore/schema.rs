@@ -166,7 +166,7 @@ fn migrate_v2(conn: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
-/// Migration to version 3 (2026-04-16) — rename `certificates` table
+/// Migration to version 3 (2026-04-16) - rename `certificates` table
 /// to `keys` and its `cert_data` column to `key_data`. The term
 /// "certificate" in this codebase used to be a synonym for an OpenPGP
 /// key bundle; now "key" is used consistently and "certification"
@@ -175,7 +175,7 @@ fn migrate_v2(conn: &Connection) -> rusqlite::Result<()> {
 ///
 /// A pre-existing `keys` table may be present from the legacy
 /// johnnycanencrypt schema (carried across the v0→v1 migration as
-/// dead weight — nothing in this codebase ever reads it). That
+/// dead weight - nothing in this codebase ever reads it). That
 /// legacy table, identified by its `keyvalue` column, is dropped
 /// along with its old UID helper tables before the rename.
 ///
@@ -224,7 +224,7 @@ fn migrate_v3(conn: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
-/// Migration to version 4 (2026-04-21) — cache summary-view fields so
+/// Migration to version 4 (2026-04-21) - cache summary-view fields so
 /// callers that only need the list view can avoid re-parsing the
 /// OpenPGP blob for every key.
 ///
@@ -242,7 +242,7 @@ fn migrate_v3(conn: &Connection) -> rusqlite::Result<()> {
 ///
 /// Backfill: for each existing row, parse the blob once and populate
 /// the new columns. If a row fails to parse (corrupt blob, unknown
-/// algorithm, etc.) we skip it — the columns stay NULL/default, and
+/// algorithm, etc.) we skip it - the columns stay NULL/default, and
 /// downstream summary readers should treat NULL as "unknown" rather
 /// than bailing. This keeps the migration from turning a cold app
 /// start into a hard failure because of one bad key.
@@ -330,7 +330,7 @@ fn backfill_v4(conn: &Connection) -> rusqlite::Result<()> {
             .map(system_time_to_datetime)
             .map(|dt| dt.to_rfc3339());
 
-        // Verify the revocation signature cryptographically — rpgp parses
+        // Verify the revocation signature cryptographically - rpgp parses
         // KeyRevocation packets into `revocation_signatures` without
         // verifying them, so a forged packet in a stored blob would
         // otherwise flip `is_revoked` to 1 on backfill.
@@ -589,7 +589,7 @@ mod tests {
     /// `expiration_time`, `cert_created_at` on `keys`; `algorithm`,
     /// `bit_length` on `subkeys`). The migration must add the columns
     /// on top of a pre-existing v3 database AND backfill every row
-    /// that was imported before v4 existed — otherwise the summary
+    /// that was imported before v4 existed - otherwise the summary
     /// reader would see NULL columns for legacy rows.
     #[test]
     fn test_migrate_v4_adds_columns_and_backfills() {
@@ -616,7 +616,7 @@ mod tests {
         )
         .unwrap();
 
-        // Insert a legacy key via the raw SQL path — mimicking a row
+        // Insert a legacy key via the raw SQL path - mimicking a row
         // that was written by an older binary before v4 existed, so
         // the new columns are NULL/default.
         let generated = create_key_simple("testpass", &["Alice <alice@example.com>"]).unwrap();
@@ -648,7 +648,7 @@ mod tests {
             .unwrap();
         }
 
-        // Run the full migration machinery — it should see v3 and run
+        // Run the full migration machinery - it should see v3 and run
         // v4 forward without re-running v1/v2/v3.
         init_schema(&conn).unwrap();
 
@@ -727,7 +727,7 @@ mod tests {
         assert_eq!(is_revoked, 0);
         assert!(cert_created_at.is_some());
         // `create_key_simple` produces a non-expiring key, so this
-        // should be None — but the column just needs to exist.
+        // should be None - but the column just needs to exist.
         let _ = expiration_time;
 
         // Subkey rows.
@@ -760,7 +760,7 @@ mod tests {
         init_schema(&conn).unwrap();
 
         // INSERT into the renamed `keys` table, then into child tables
-        // — the FKs must resolve to `keys(fingerprint)`.
+        // - the FKs must resolve to `keys(fingerprint)`.
         conn.execute(
             "INSERT INTO keys (fingerprint, key_data, is_secret, primary_uid)
              VALUES ('FEED', x'BEEF', 0, 'bob')",

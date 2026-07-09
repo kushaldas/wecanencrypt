@@ -296,7 +296,7 @@ fn create_card_signature(
 /// Log the inputs the card-sign path is about to hash.
 ///
 /// Cheap, non-secret diagnostic. Output appears at `debug` level under the
-/// `wecanencrypt::card::sign` target — enable with
+/// `wecanencrypt::card::sign` target - enable with
 /// `RUST_LOG=wecanencrypt::card::sign=debug` (or just `wecanencrypt=debug`).
 fn log_card_sign_diag(
     site: &str,
@@ -1480,6 +1480,19 @@ pub fn update_subkeys_expiry_on_card(
 /// # Returns
 ///
 /// The raw signature bytes from the card.
+///
+/// # Example
+///
+/// ```no_run
+/// use wecanencrypt::card::ssh_authenticate_on_card;
+///
+/// let signature = ssh_authenticate_on_card(
+///     b"ssh session identifier and request",
+///     b"123456",
+///     None,
+/// ).unwrap();
+/// println!("card returned {} signature bytes", signature.len());
+/// ```
 pub fn ssh_authenticate_on_card(data: &[u8], pin: &[u8], ident: Option<&str>) -> Result<Vec<u8>> {
     let backend = get_card_backend(ident)?;
     let mut card = Card::new(backend)
@@ -1488,7 +1501,7 @@ pub fn ssh_authenticate_on_card(data: &[u8], pin: &[u8], ident: Option<&str>) ->
         .transaction()
         .map_err(|e| Error::Card(CardError::CommunicationError(e.to_string())))?;
 
-    // Verify user PIN — zeroize the intermediate String
+    // Verify user PIN - zeroize the intermediate String
     let pin_utf8 = std::str::from_utf8(pin)
         .map_err(|_| Error::Card(CardError::InvalidData("PIN is not valid UTF-8".into())))?;
     let mut pin_owned = pin_utf8.to_string();
@@ -1526,6 +1539,16 @@ pub fn ssh_authenticate_on_card(data: &[u8], pin: &[u8], ident: Option<&str>) ->
 /// # Returns
 ///
 /// The raw RSA signature bytes.
+///
+/// # Example
+///
+/// ```no_run
+/// use wecanencrypt::card::{ssh_authenticate_for_hash_on_card, CardHash};
+///
+/// let digest = CardHash::SHA256([0u8; 32]);
+/// let signature = ssh_authenticate_for_hash_on_card(digest, b"123456", None).unwrap();
+/// println!("RSA signature length: {}", signature.len());
+/// ```
 pub fn ssh_authenticate_for_hash_on_card(
     hash: Hash,
     pin: &[u8],
@@ -1538,7 +1561,7 @@ pub fn ssh_authenticate_for_hash_on_card(
         .transaction()
         .map_err(|e| Error::Card(CardError::CommunicationError(e.to_string())))?;
 
-    // Verify user PIN — zeroize the intermediate String
+    // Verify user PIN - zeroize the intermediate String
     let pin_utf8 = std::str::from_utf8(pin)
         .map_err(|_| Error::Card(CardError::InvalidData("PIN is not valid UTF-8".into())))?;
     let mut pin_owned = pin_utf8.to_string();
@@ -1660,6 +1683,25 @@ fn get_card_signing_key<'a>(
 /// * `recipient_keys` - Slice of recipient public keys (armored or binary).
 /// * `plaintext` - The data to sign and encrypt.
 /// * `armor` - If true, output ASCII-armored; otherwise binary.
+///
+/// # Example
+///
+/// ```no_run
+/// use wecanencrypt::card::sign_and_encrypt_to_multiple_on_card;
+///
+/// let signer_public = std::fs::read("card-signer.asc").unwrap();
+/// let recipient_public = std::fs::read("recipient.asc").unwrap();
+///
+/// let ciphertext = sign_and_encrypt_to_multiple_on_card(
+///     &signer_public,
+///     b"123456",
+///     None,
+///     &[&recipient_public],
+///     b"signed on card",
+///     true,
+/// ).unwrap();
+/// assert!(!ciphertext.is_empty());
+/// ```
 pub fn sign_and_encrypt_to_multiple_on_card(
     signer_public_key: &[u8],
     pin: &[u8],
@@ -1680,7 +1722,7 @@ pub fn sign_and_encrypt_to_multiple_on_card(
 
     let mut rng = thread_rng();
     // CardSigningKey ignores the password (PIN flows through self.pin), but
-    // MessageBuilder::sign still requires a Password — pass an empty one.
+    // MessageBuilder::sign still requires a Password - pass an empty one.
     let empty_pwd: Password = "".into();
     let hash_alg = card_signing_key.hash_alg;
 
@@ -1731,8 +1773,8 @@ pub fn sign_and_encrypt_to_multiple_on_card(
 
 /// Card-backed sign-and-encrypt to a mixed visible/hidden recipient set.
 ///
-/// Sibling of [`crate::encrypt::sign_and_encrypt_to_multiple_with_hidden`]
-/// — same shape, with the signer key living on a smartcard. Hidden
+/// Sibling of [`crate::sign_and_encrypt_to_multiple_with_hidden`],
+/// with the signer key living on a smartcard. Hidden
 /// recipients receive a PKESK whose recipient identifier is suppressed:
 ///
 /// * V3 PKESK (used with V4 recipient keys): the 8-byte recipient key-id
@@ -1742,6 +1784,39 @@ pub fn sign_and_encrypt_to_multiple_on_card(
 ///
 /// Either form leaks no identifier for the recipient (RFC 4880
 /// `throw-keyid` / `--hidden-recipient`).
+///
+/// # Arguments
+/// * `signer_public_key` - The signer's public key; must match the card's
+///   signing slot fingerprint.
+/// * `pin` - The user PIN for the card (UTF-8).
+/// * `ident` - Optional card ident (`"MANUFACTURER:SERIAL"`).
+/// * `visible_recipient_keys` - Recipient public keys whose identifiers are
+///   visible in PKESK packets.
+/// * `hidden_recipient_keys` - Recipient public keys whose PKESK identifiers
+///   are suppressed.
+/// * `plaintext` - The data to sign and encrypt.
+/// * `armor` - If true, output ASCII-armored; otherwise binary.
+///
+/// # Example
+///
+/// ```no_run
+/// use wecanencrypt::card::sign_and_encrypt_to_multiple_on_card_with_hidden;
+///
+/// let signer_public = std::fs::read("card-signer.asc").unwrap();
+/// let visible_public = std::fs::read("visible-recipient.asc").unwrap();
+/// let hidden_public = std::fs::read("hidden-recipient.asc").unwrap();
+///
+/// let ciphertext = sign_and_encrypt_to_multiple_on_card_with_hidden(
+///     &signer_public,
+///     b"123456",
+///     None,
+///     &[&visible_public],
+///     &[&hidden_public],
+///     b"bcc body",
+///     true,
+/// ).unwrap();
+/// assert!(!ciphertext.is_empty());
+/// ```
 pub fn sign_and_encrypt_to_multiple_on_card_with_hidden(
     signer_public_key: &[u8],
     pin: &[u8],
@@ -1836,6 +1911,21 @@ pub fn sign_and_encrypt_to_multiple_on_card_with_hidden(
 ///
 /// `text` is treated as UTF-8 with lossy conversion (matching the software
 /// path); pass actual text content, not arbitrary binary.
+///
+/// # Example
+///
+/// ```no_run
+/// use wecanencrypt::card::sign_text_cleartext_on_card;
+///
+/// let signer_public = std::fs::read("card-signer.asc").unwrap();
+/// let signed = sign_text_cleartext_on_card(
+///     b"release notes\n",
+///     &signer_public,
+///     b"123456",
+///     None,
+/// ).unwrap();
+/// assert!(signed.starts_with(b"-----BEGIN PGP SIGNED MESSAGE-----"));
+/// ```
 pub fn sign_text_cleartext_on_card(
     text: &[u8],
     signer_public_key: &[u8],
@@ -1862,16 +1952,37 @@ pub fn sign_text_cleartext_on_card(
 /// encrypted, verify the signature against a caller-supplied resolver.
 ///
 /// Card-backed counterpart to [`crate::decrypt_and_verify`]. The session
-/// key is decrypted on the card (via [`decrypt_session_key_on_card`]), the
-/// rest of the message is parsed and decompressed in software, and the
-/// inner signature classification reuses [`crate::decrypt::inspect_inner_signatures`]
-/// so callers see the same `Good`/`Bad`/`Unsigned`/`UnknownKey` outcomes as
-/// the software path.
+/// key is decrypted on the card, the rest of the message is parsed and
+/// decompressed in software, and the inner signature classification follows
+/// the same `Good`/`Bad`/`Unsigned`/`UnknownKey` semantics as the software
+/// path.
 ///
-/// `signer_public_key` is the recipient's own public key (whose decryption
+/// `public_key` is the recipient's own public key (whose decryption
 /// subkey lives on the card). `resolve_signer` is called to look up the
 /// inner signature's signer (a *different* key, the sender's public key);
 /// it gets the issuer ids extracted from each inner signature.
+///
+/// # Example
+///
+/// ```no_run
+/// use wecanencrypt::{card::decrypt_and_verify_on_card, DecryptVerifySignature};
+///
+/// let recipient_public = std::fs::read("card-recipient.asc").unwrap();
+/// let sender_public = std::fs::read("sender.asc").unwrap();
+/// let ciphertext = std::fs::read("message.pgp").unwrap();
+///
+/// let result = decrypt_and_verify_on_card(
+///     &ciphertext,
+///     &recipient_public,
+///     b"123456",
+///     None,
+///     |_issuer_ids| Some(sender_public.clone()),
+/// ).unwrap();
+///
+/// if let DecryptVerifySignature::Good { verifier_fingerprint } = result.signature {
+///     println!("verified sender {}", verifier_fingerprint);
+/// }
+/// ```
 pub fn decrypt_and_verify_on_card<F>(
     data: &[u8],
     public_key: &[u8],
@@ -1929,7 +2040,7 @@ where
         decrypted
     };
 
-    // Drain the message — populates the internal hash state needed by the
+    // Drain the message - populates the internal hash state needed by the
     // inner-signature verifier on a sign-then-encrypted payload.
     let plaintext = decompressed
         .as_data_vec()
@@ -1949,7 +2060,7 @@ mod tests {
     // Run with: cargo test --features card-pcsc -- --ignored
     //
     // The tests below exercise input-validation paths that MUST fail fast
-    // before any card I/O — they intentionally run without a card.
+    // before any card I/O - they intentionally run without a card.
 
     use super::*;
     use crate::{create_key_simple, create_key_v6_simple, get_pub_key, CipherSuite};
@@ -1966,9 +2077,9 @@ mod tests {
     #[test]
     fn on_card_with_hidden_validates_recipients_before_touching_card() {
         let err = sign_and_encrypt_to_multiple_on_card_with_hidden(
-            b"",       // signer_public_key — never reached
-            b"123456", // pin                 — never reached
-            None,      // ident               — never reached
+            b"",       // signer_public_key - never reached
+            b"123456", // pin                 - never reached
+            None,      // ident               - never reached
             &[],       // visible_recipient_keys
             &[],       // hidden_recipient_keys
             b"payload",
@@ -1996,8 +2107,8 @@ mod tests {
         let carol_v6_pub = get_pub_key(&carol_v6.secret_key).unwrap();
 
         let err = sign_and_encrypt_to_multiple_on_card_with_hidden(
-            b"",       // signer_public_key — never reached
-            b"123456", // pin                 — never reached
+            b"",       // signer_public_key - never reached
+            b"123456", // pin                 - never reached
             None,
             &[bob_v4_pub.as_bytes()],
             &[carol_v6_pub.as_bytes()],

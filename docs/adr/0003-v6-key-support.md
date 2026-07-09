@@ -54,7 +54,7 @@ V6 rejects `CipherSuite::Cv25519` (legacy Ed25519Legacy + ECDH-Curve25519)
 with `Error::InvalidInput` per RFC 9580 §9.2; all other suites are
 accepted.
 
-### 2. No cross-version mixing — enforced at four layers
+### 2. No cross-version mixing - enforced at four layers
 
 `Error::KeyVersionMismatch { existing, incoming }` is returned by:
 
@@ -87,7 +87,7 @@ callers that need to override the defaults.
 No new parameters for S2K selection. rpgp's `SecretKeyParamsBuilder`
 picks the version-appropriate S2K automatically: iterated+salted+AES-CFB
 for V4, Argon2id+AES-256+OCB for V6 (per RFC 9580 §3.7.2). `update_password`
-is version-preserving by construction — it decrypts with the old
+is version-preserving by construction - it decrypts with the old
 password using the key's existing S2K and re-encrypts with rpgp's
 default for that version.
 
@@ -96,7 +96,7 @@ default for that version.
 Both structs gain a `pub key_version: KeyVersion` field so callers can
 filter or display without re-parsing. Adding public fields is a
 struct-literal-breaking change for external users who construct these
-types — acceptable under the 0.x → 0.11 version bump.
+types - acceptable under the 0.x → 0.11 version bump.
 
 ## Consequences
 
@@ -105,7 +105,7 @@ types — acceptable under the 0.x → 0.11 version bump.
 - V4 call sites port from 0.10 to 0.11 with **zero changes**.
 - V6 is discoverable by name: autocomplete on `create_key_v6`,
   `create_key_v6_simple` makes the intent obvious in review.
-- One code path (`create_key_internal`) — no risk of V4 and V6 logic
+- One code path (`create_key_internal`) - no risk of V4 and V6 logic
   drifting apart.
 - Cross-version mixing fails fast with a precise error at four layers,
   matching the RFC's structural guarantees end-to-end.
@@ -116,13 +116,13 @@ types — acceptable under the 0.x → 0.11 version bump.
 ### Negative
 
 - Public API surface grew: four key-creation functions instead of two.
-  Justified by the "no breaking change for V4" goal — collapsing them
+  Justified by the "no breaking change for V4" goal - collapsing them
   again would require re-introducing a `KeyVersion` argument.
 - `KeyInfo` / `SubkeyInfo` struct-literal construction breaks for
   external callers. 0.x semver permits this; tests and in-tree users are
   updated.
 - V6 keystore rows and V4 keystore rows coexist by fingerprint (they can
-  never collide — structurally different hashes), but a single import
+  never collide - structurally different hashes), but a single import
   operation cannot upgrade a V4 row to V6 or vice versa. Users who want
   to migrate a key from V4 to V6 must generate a fresh V6 key and
   cross-sign; there is no in-place upgrade tool.
@@ -137,7 +137,7 @@ just to enable V6.
 ### New `CipherSuite` variants carrying the version (e.g. `Cv25519V6`)
 
 Considered. Rejected: conflates two orthogonal concerns (algorithm and
-packet version) and doesn't scale — a new V7 would require a full
+packet version) and doesn't scale - a new V7 would require a full
 duplication of every cipher suite variant.
 
 ### Auto-pick V6 when `CipherSuite::Cv25519Modern` or `Cv448Modern` is chosen
@@ -161,9 +161,9 @@ a mixed message; refusing is the only correct behaviour.
 - rpgp 0.19: `SecretKeyParamsBuilder::version`,
   `SignedPublicKey::primary_key.version()`,
   `MessageBuilder::seipd_v2`
-- `WECANENCRYPT_DIFFERENTIAL_REVIEW_2026-04-15_RFC9580.md` — prior
+- `WECANENCRYPT_DIFFERENTIAL_REVIEW_2026-04-15_RFC9580.md` - prior
   review flagging that `Cv448Modern` was producing V4 keys
-- `WECANENCRYPT_DIFFERENTIAL_REVIEW_2026-04-18_V6_SUPPORT.md` — security
+- `WECANENCRYPT_DIFFERENTIAL_REVIEW_2026-04-18_V6_SUPPORT.md` - security
   review of this change
 - ADR 0002: key merge semantics (the mixing guard slots into
   `merge_keys` ahead of the fingerprint compare)

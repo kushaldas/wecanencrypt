@@ -143,6 +143,14 @@ pub fn fetch_key_by_fingerprint(fingerprint: &str, keyserver: Option<&str>) -> R
 ///
 /// # Returns
 /// The key data if found.
+///
+/// # Example
+/// ```no_run
+/// use wecanencrypt::fetch_key_by_keyid;
+///
+/// let key = fetch_key_by_keyid("7857DD79C52B4217", None).unwrap();
+/// println!("Fetched {} bytes", key.len());
+/// ```
 #[cfg(feature = "network")]
 pub fn fetch_key_by_keyid(key_id: &str, keyserver: Option<&str>) -> Result<Vec<u8>> {
     let server = keyserver.unwrap_or("https://keys.openpgp.org");
@@ -171,7 +179,7 @@ pub fn fetch_key_by_keyid(key_id: &str, keyserver: Option<&str>) -> Result<Vec<u
     let (public_key, _) = parse_key(&bytes)?;
     let fetched_keyid = keyid_to_hex(&public_key.primary_key);
     if fetched_keyid != key_id.to_uppercase() {
-        // Also check subkey IDs — the key ID might refer to a subkey
+        // Also check subkey IDs - the key ID might refer to a subkey
         let subkey_match = public_key
             .public_subkeys
             .iter()
@@ -483,7 +491,7 @@ fn dns_query(name: &str, resolver: &str) -> Result<Vec<u8>> {
     let response = Message::from_bytes(&buf[..len])
         .map_err(|e| Error::Network(format!("Failed to parse DNS response: {}", e)))?;
 
-    // Check if truncated — retry over TCP
+    // Check if truncated - retry over TCP
     if response.truncated() {
         return dns_query_tcp(name, resolver, &wire);
     }

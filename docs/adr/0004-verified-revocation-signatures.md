@@ -14,7 +14,7 @@ rpgp's parser admits any packet tagged `KeyRevocation` (type 0x20),
 `SubkeyRevocation` (0x28), or `CertRevocation` (0x30) into the parsed
 key structure without cryptographically verifying the signature on it.
 `composed/signed_key/key_parser.rs` performs framing and type checks
-only — it never calls `Signature::verify_key`,
+only - it never calls `Signature::verify_key`,
 `verify_subkey_binding`, or `verify_certification`. Every revocation
 packet with a valid wire format survives parsing, regardless of who
 signed it.
@@ -25,7 +25,7 @@ and the inline `CertRevocation` scan in `parse.rs::extract_key_info`
 all tested `sig.typ() == Some(SignatureType::…Revocation)` and
 accepted the first match. A single existing helper,
 `verified_primary_revocation` (added in PR #16 for the schema v4
-summary cache), did verify `KeyRevocation` signatures — but it was
+summary cache), did verify `KeyRevocation` signatures - but it was
 only used in two keystore paths (`import_key`, schema v4 backfill).
 Every other revocation check in the library, including every one in
 `verify.rs`, `sign.rs`, `ssh.rs`, `encrypt.rs`, and the public
@@ -64,8 +64,8 @@ policy-deduplication cache allocated a 0-length `Vec` as a SHA-512
 output buffer, causing every policy to hash to the empty key, so
 only the first policy encountered during BFS got checked for hard
 revocations. sq-git's fix is a one-character buffer change, but the
-generalisable lesson — do not trust unverified revocation packets,
-anywhere — applies directly to wecanencrypt's own packet-type-only
+generalisable lesson - do not trust unverified revocation packets,
+anywhere - applies directly to wecanencrypt's own packet-type-only
 checks.
 
 Sequoia-PGP solves this at the policy layer: `StandardPolicy`
@@ -91,14 +91,14 @@ The three revocation types and the rpgp methods that verify them:
 All three are self-revocations produced by the primary key revoking
 itself, one of its subkeys, or one of its UIDs. Designated-revoker
 signatures (revocations via a separate "revocation key" subpacket)
-are explicitly out of scope — verifying them would require resolving
+are explicitly out of scope - verifying them would require resolving
 the `Revocation Key` subpacket against an external keyring, which
 the current architecture does not wire up.
 
 `SubkeyBinding` and `SubkeyRevocation` signatures hash exactly the
 same input (primary public key packet + subkey public key packet per
 RFC 4880 §5.2.4), so `verify_subkey_binding` is the correct rpgp
-method for both types — the signature-type byte is read from the
+method for both types - the signature-type byte is read from the
 signature's own config, not from the method name. Passing the
 subkey's *public* form is mandatory: `PublicSubkey` and `SecretSubkey`
 have different `Serialize` impls (tag 14 vs tag 7), so hashing over
@@ -110,8 +110,8 @@ against a signature computed over the public form.
 `internal::policy` is the single source of truth. `is_subkey_revoked`,
 `is_subkey_valid`, `is_primary_key_revoked`, and `is_primary_key_valid_for_verification`
 now all internally verify against the primary key. Every existing
-consumer — `verify.rs`, `parse.rs`, `sign.rs`, `ssh.rs`, `encrypt.rs`,
-`key.rs`, `card/crypto.rs` — picks up the verified behaviour
+consumer - `verify.rs`, `parse.rs`, `sign.rs`, `ssh.rs`, `encrypt.rs`,
+`key.rs`, `card/crypto.rs` - picks up the verified behaviour
 automatically by calling the same helper with the primary passed in.
 
 This is strictly stronger than adding parallel `verified_*` helpers
@@ -144,7 +144,7 @@ Signatures produced by any conforming signer (including rpgp's own
 `sign_subkey_binding`) hash over the tag-14 form. Passing
 `&subkey.key` (the `SecretSubkey` packet) into `verify_subkey_binding`
 would recompute the hash over tag-7 bytes and fail verification
-against every genuine revocation — with the catastrophic result that
+against every genuine revocation - with the catastrophic result that
 `find_signing_subkey` and the SSH-auth path would happily use
 revoked signing subkeys. The generic core takes
 `K: KeyDetails + Serialize`, so the trait bounds alone do not enforce
@@ -179,7 +179,7 @@ fn is_primary_secret_key_revoked(key: &SignedSecretKey) -> bool;
 Both delegate to `verified_primary_revocation` (for the public
 variant) or a secret-key equivalent that calls
 `sig.verify_key(key.primary_key.public_key())`. Merging them into
-one generic form was considered but rejected — the two call-site
+one generic form was considered but rejected - the two call-site
 groups are small and the concrete types are clearer.
 
 `is_details_revoked(&SignedKeyDetails)`, which existed pre-ADR, is
@@ -217,7 +217,7 @@ packet attached to each subkey. In practice:
   bounded by how much rpgp is willing to parse in the first place.
 
 No caching layer is introduced. If profiling shows this is hot, a
-per-key verification cache could be added in a follow-up ADR — but
+per-key verification cache could be added in a follow-up ADR - but
 premature caching here risks reintroducing the exact class of bug
 that sq-git fell into.
 
@@ -228,14 +228,14 @@ that sq-git fell into.
 - DoS vectors via forged `KeyRevocation`, `SubkeyRevocation`, and
   `CertRevocation` are closed across the entire public API.
 - The keystore summary cache is no longer the only path that
-  verifies revocations — the in-memory `parse_key_bytes`,
+  verifies revocations - the in-memory `parse_key_bytes`,
   `verify_bytes`, `sign_bytes`, `encrypt_bytes`, and SSH-auth flows
   all enforce the same invariant.
 - The public API's `KeyInfo.is_revoked`, `KeyInfo.user_ids[].revoked`,
   and `revocation_time` values reflect cryptographic truth rather
   than packet-type tags.
-- `is_details_revoked` is gone — a helper that by construction could
-  never verify — which removes a tempting wrong-path for future
+- `is_details_revoked` is gone - a helper that by construction could
+  never verify - which removes a tempting wrong-path for future
   contributors.
 - Downstream UIs (tumpa, `tcli`) get the correct behaviour for free;
   no changes needed in those consumers.
@@ -244,7 +244,7 @@ that sq-git fell into.
 
 - Breaking internal API changes: `is_subkey_revoked`,
   `is_subkey_valid`, and `validate_signing_usage` signatures all
-  change. All are `pub(crate)`, so no semver bump is required — but
+  change. All are `pub(crate)`, so no semver bump is required - but
   any downstream fork maintaining patches against these helpers will
   need a rebase.
 - Every subkey evaluation now runs at least one signature
@@ -252,8 +252,8 @@ that sq-git fell into.
   revocation packets) but non-zero on every call.
 - Designated-revoker support is not added. Certs that list a third
   party as their designated revoker will not have that revocation
-  honored by wecanencrypt. This was already the prior behaviour —
-  the ADR does not regress it — but it is now an explicit gap
+  honored by wecanencrypt. This was already the prior behaviour -
+  the ADR does not regress it - but it is now an explicit gap
   rather than an implicit one.
 
 ## Alternatives Considered
@@ -263,7 +263,7 @@ that sq-git fell into.
 The initial plan was to add `verified_subkey_revocation`,
 `verified_cert_revocation`, etc., alongside the existing
 unverified helpers and migrate call sites one by one. Rejected
-because it leaves unverified helpers in the codebase as a footgun —
+because it leaves unverified helpers in the codebase as a footgun -
 every new call site is a fresh opportunity to pick the wrong one.
 The helper-level change forces every consumer onto the verified
 path automatically.
@@ -280,7 +280,7 @@ that is dominated by existing parse/verify work.
 
 ### Submit the fix upstream to rpgp's parser
 
-Correct in principle — rpgp should reject unverified revocations at
+Correct in principle - rpgp should reject unverified revocations at
 parse time, just as it rejects malformed packets. Considered for a
 future contribution but out of scope for this change, which needs
 to ship on the currently-pinned rpgp 0.19.x without blocking on
@@ -309,23 +309,23 @@ indirection for no runtime benefit.
 
 ## References
 
-- sequoia-git commit [`f9c9074b`][sq-git-fix] — the incident that
+- sequoia-git commit [`f9c9074b`][sq-git-fix] - the incident that
   prompted this review; demonstrates a materially equivalent
   revocation-bypass caused by unverified policy deduplication
-- RFC 4880 §5.2.1 "Signature Types" — definitions of 0x20, 0x28, 0x30
-- RFC 4880 §5.2.4 "Computing Signatures" — identical hash input for
+- RFC 4880 §5.2.1 "Signature Types" - definitions of 0x20, 0x28, 0x30
+- RFC 4880 §5.2.4 "Computing Signatures" - identical hash input for
   SubkeyBinding and SubkeyRevocation
-- RFC 9580 §5.2 — carryover of the above for v6 keys
+- RFC 9580 §5.2 - carryover of the above for v6 keys
 - rpgp 0.19 `src/packet/signature/types.rs::verify_key` /
-  `verify_subkey_binding` / `verify_certification` — the three
+  `verify_subkey_binding` / `verify_certification` - the three
   verification primitives used here
-- GnuPG `g10/sig-check.c::check_revocation_keys` — reference
+- GnuPG `g10/sig-check.c::check_revocation_keys` - reference
   implementation of revocation verification
-- Sequoia-PGP `openpgp/src/cert/mod.rs::valid_revocation_keys` —
+- Sequoia-PGP `openpgp/src/cert/mod.rs::valid_revocation_keys` -
   reference implementation of policy-level revocation checking
 - ADR 0001: RFC 4880 "latest self-signature wins" for key flags
 - ADR 0002: Secret-key-aware merging (introduces
-  `verify_bindings` on subkey absorption — complementary to this
+  `verify_bindings` on subkey absorption - complementary to this
   change but distinct)
 - PR #16 and commit `a8d6…`: first use of `verified_primary_revocation`
   in the schema v4 summary cache (the starting point that this ADR

@@ -17,7 +17,7 @@ key cleans up its dependent rows automatically:
 
 - `user_ids` (UIDs + emails)
 - `subkeys` (per-subkey cache)
-- `card_keys` (which hardware card slot holds the key — written by
+- `card_keys` (which hardware card slot holds the key - written by
   `save_card_key`, read by `get_card_keys` / `list_all_card_keys`)
 
 The connection runs with `PRAGMA foreign_keys = ON`
@@ -25,7 +25,7 @@ The connection runs with `PRAGMA foreign_keys = ON`
 
 `KeyStore::import_key` stored the key with **`INSERT OR REPLACE INTO
 keys`**. In SQLite, the REPLACE conflict-resolution algorithm does not
-update the conflicting row in place — it **DELETEs the pre-existing row
+update the conflicting row in place - it **DELETEs the pre-existing row
 and INSERTs a fresh one** (SQLite docs, "ON CONFLICT", REPLACE). When
 foreign keys are enabled, that implicit DELETE fires every dependent
 `ON DELETE CASCADE`.
@@ -40,9 +40,9 @@ them back.
 This surfaced as **tumpa-cli#32**: a user runs `tcli card link` (writes
 `card_keys`), then later re-imports the same cert with
 `gpg --export | tcli import -`. tumpa-cli's import path
-(`merge_and_reimport`) calls `import_key` unconditionally — even on the
-"Unchanged — no new data" branch, where `merge_keys` correctly returns
-byte-identical material. The user saw `Unchanged … — no new data`,
+(`merge_and_reimport`) calls `import_key` unconditionally - even on the
+"Unchanged - no new data" branch, where `merge_keys` correctly returns
+byte-identical material. The user saw `Unchanged … - no new data`,
 believed nothing happened, yet their card linkage was gone and signing
 fell back to (or failed without) the software key until they re-ran
 `tcli card link`. Silent loss of a hardware-key association is a
@@ -76,7 +76,7 @@ ON CONFLICT(fingerprint) DO UPDATE SET
 An `ON CONFLICT … DO UPDATE` mutates the row in place: no DELETE is
 issued, so no cascade fires, so `card_keys` survives a re-import. The
 existing explicit rebuild of `user_ids` and `subkeys` further down
-`import_key` is unchanged and still correct — those tables are
+`import_key` is unchanged and still correct - those tables are
 intentionally rewritten from the freshly parsed cert on every import.
 
 `fingerprint` is the table's PRIMARY KEY, which is exactly the unique
@@ -92,7 +92,7 @@ deliberately left as-is. `subkeys` has no child tables cascading off
 it, and `import_key` rebuilds it wholesale anyway, so REPLACE there
 deletes nothing that is not immediately rewritten. `save_card_key`'s own
 `INSERT OR REPLACE INTO card_keys` (keyed on `(card_ident, slot)`) is
-also untouched — its REPLACE updates a `last_seen` timestamp and has no
+also untouched - its REPLACE updates a `last_seen` timestamp and has no
 cascading children, which is the intended behaviour.
 
 ### Regression test
@@ -111,11 +111,11 @@ cascade wipes the row) and passes on the UPSERT path.
   fixed at the storage layer, so every consumer (`tcli`, the desktop
   app, the ops socket) gets the correct behaviour with no change of
   their own.
-- The fix is invisible to callers — `import_key`'s signature and return
+- The fix is invisible to callers - `import_key`'s signature and return
   value are unchanged.
 - An in-place UPDATE writes one row instead of delete-plus-insert, and
   skips firing (and the engine skips bookkeeping for) the three
-  cascades — marginally less work per re-import.
+  cascades - marginally less work per re-import.
 
 ### Negative / Neutral
 
@@ -137,7 +137,7 @@ cascade wipes the row) and passes on the UPSERT path.
 Symmetrical with how the other two children are handled, but
 unworkable: `import_key` parses only the OpenPGP cert bytes, which carry
 no card-association data. There is nothing in its inputs to rebuild
-`card_keys` from — the associations live only in the database. It would
+`card_keys` from - the associations live only in the database. It would
 have to snapshot `card_keys` before the write and replay it after,
 which is strictly more code and more fragile than simply not deleting
 the rows.
@@ -145,7 +145,7 @@ the rows.
 ### Drop `ON DELETE CASCADE` from `card_keys`
 
 Would stop the cascade, but at the cost of leaking orphaned `card_keys`
-rows when a key is genuinely deleted — trading a re-import bug for a
+rows when a key is genuinely deleted - trading a re-import bug for a
 delete bug. The cascade is correct for real deletions; the fix belongs
 on the write that should not have been a deletion in the first place.
 
@@ -154,7 +154,7 @@ on the write that should not have been a deletion in the first place.
 `merge_and_reimport` could avoid calling `import_key` when the merged
 bytes equal the stored bytes, sidestepping the "Unchanged" case. This
 is a reasonable optimization but does **not** fix the bug: the
-"Updated — merged new signatures" path still re-imports and would still
+"Updated - merged new signatures" path still re-imports and would still
 wipe the linkage. The defect is in the storage primitive, so the fix
 has to be there. (The tumpa-cli no-op skip may still be added later as
 an independent write-reduction, not as a correctness fix.)
@@ -168,19 +168,19 @@ round-trips.
 
 ## References
 
-- tumpa-cli#32 — "linked secret key disappears when re-importing the
+- tumpa-cli#32 - "linked secret key disappears when re-importing the
   public key": the reported bug this ADR fixes.
-- SQLite docs, "ON CONFLICT" — REPLACE deletes the conflicting row
+- SQLite docs, "ON CONFLICT" - REPLACE deletes the conflicting row
   (firing delete triggers and foreign-key actions) before inserting:
   https://www.sqlite.org/lang_conflict.html
-- SQLite docs, "UPSERT" — `ON CONFLICT … DO UPDATE` semantics and the
+- SQLite docs, "UPSERT" - `ON CONFLICT … DO UPDATE` semantics and the
   `excluded.` pseudo-table: https://www.sqlite.org/lang_upsert.html
-- SQLite docs, "Foreign Key Actions" — `ON DELETE CASCADE` fires for the
+- SQLite docs, "Foreign Key Actions" - `ON DELETE CASCADE` fires for the
   implicit delete performed by REPLACE:
   https://www.sqlite.org/foreignkeys.html#fk_actions
-- `store.rs::import_key` — the changed write.
-- `schema.rs` migration v2/v3 — `card_keys` table + its FK rewired from
+- `store.rs::import_key` - the changed write.
+- `schema.rs` migration v2/v3 - `card_keys` table + its FK rewired from
   `certificates(fingerprint)` to `keys(fingerprint)`.
-- ADR 0002: Key-merge semantics — the merge layer that (correctly)
+- ADR 0002: Key-merge semantics - the merge layer that (correctly)
   preserves secret material; this ADR fixes the storage layer beneath
   it.

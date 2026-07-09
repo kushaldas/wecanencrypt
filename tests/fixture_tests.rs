@@ -1828,7 +1828,7 @@ mod dane_tests {
     #[test]
     #[ignore = "requires network access and domain with OPENPGPKEY records"]
     fn test_fetch_key_dane_live() {
-        // Try fetching — most domains won't have OPENPGPKEY records,
+        // Try fetching - most domains won't have OPENPGPKEY records,
         // so KeyNotFound is the expected result for most addresses.
         let result = fetch_key_by_email_from_dane("test@example.com", None);
         match result {

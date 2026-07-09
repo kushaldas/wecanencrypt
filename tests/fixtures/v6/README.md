@@ -26,7 +26,7 @@ All secret keys use the password `v6-fixture-password`.
 Run `cargo run --example gen_v6_fixtures` from the repository root. The
 example writes the files deterministically to this directory; commit the
 result. Regenerate only when the fixture contract (filenames, UIDs, password,
-or plaintext payloads) changes — otherwise the committed files are stable
+or plaintext payloads) changes - otherwise the committed files are stable
 test inputs.
 
 ## Why commit these?

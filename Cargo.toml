@@ -23,23 +23,23 @@ network = ["reqwest", "sha1"]
 
 # Card support is layered:
 #
-#   `card`          — transport-agnostic OpenPGP-card logic. Exposes
+#   `card`          - transport-agnostic OpenPGP-card logic. Exposes
 #                     `*_with(backend)` helpers that take any type
 #                     convertible into `Box<dyn CardBackend + Send + Sync>`
 #                     (see the openpgp-card crate). This layer alone is
-#                     not directly usable at runtime — it has no way to
-#                     enumerate or acquire a card backend — but it's
+#                     not directly usable at runtime - it has no way to
+#                     enumerate or acquire a card backend - but it's
 #                     what mobile consumers (e.g. libtumpa's
 #                     MobileCardBackend bridging YubiKit over NFC/USB)
 #                     compile against.
 #
-#   `card-pcsc`     — desktop backend via PC/SC. Adds
+#   `card-pcsc`     - desktop backend via PC/SC. Adds
 #                     `card-backend-pcsc` and the enumeration + wrapper
 #                     APIs (`is_card_connected`, `list_all_cards`,
 #                     `get_card_details(ident)` …) that auto-acquire a
 #                     PCSC backend. `card-pcsc` implies `card`.
 #
-#   `card-external` — mobile / custom backend. The consumer registers a
+#   `card-external` - mobile / custom backend. The consumer registers a
 #                     provider callback (`set_backend_provider`) that
 #                     returns a `Box<dyn CardBackend + Send + Sync>` for
 #                     a given ident. The same operation functions
@@ -50,7 +50,7 @@ network = ["reqwest", "sha1"]
 #                     under `card-external`.
 #
 # Consumers that previously enabled `card` should switch to `card-pcsc`
-# — `card` alone no longer pulls in any transport.
+# - `card` alone no longer pulls in any transport.
 card = ["openpgp-card", "card-backend", "secrecy", "digest", "aes", "aes-kw", "hkdf"]
 card-pcsc = ["card", "card-backend-pcsc"]
 card-external = ["card"]
@@ -106,7 +106,7 @@ hickory-proto = { version = "0.25", default-features = false, optional = true }
 
 # Smart card support (optional)
 openpgp-card = { version = "0.6", optional = true }
-# The CardBackend / CardTransaction traits — separate crate from
+# The CardBackend / CardTransaction traits - separate crate from
 # openpgp-card, not re-exported by it. Required by `card` so libtumpa's
 # MobileCardBackend (and any other `card-external` consumer) can
 # implement the trait on its own type.

@@ -44,6 +44,16 @@ impl std::str::FromStr for CipherSuite {
     type Err = String;
 
     /// Parse cipher suite from string (case-insensitive).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::str::FromStr;
+    /// use wecanencrypt::CipherSuite;
+    ///
+    /// assert_eq!(CipherSuite::from_str("x25519").unwrap(), CipherSuite::Cv25519Modern);
+    /// assert!("not-a-suite".parse::<CipherSuite>().is_err());
+    /// ```
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "rsa2k" | "rsa2048" => Ok(CipherSuite::Rsa2k),
@@ -64,13 +74,30 @@ impl CipherSuite {
     ///
     /// RFC 9580 §9.2 forbids `Ed25519Legacy` and `ECDH(Curve25519)` under V6, so
     /// the legacy [`CipherSuite::Cv25519`] variant (which maps to those types) is
-    /// rejected. All other suites — RSA, NIST curves, `Cv25519Modern`, and
-    /// `Cv448Modern` — are allowed under V6.
+    /// rejected. All other suites - RSA, NIST curves, `Cv25519Modern`, and
+    /// `Cv448Modern` - are allowed under V6.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use wecanencrypt::CipherSuite;
+    ///
+    /// assert!(!CipherSuite::Cv25519.is_allowed_for_v6());
+    /// assert!(CipherSuite::Cv25519Modern.is_allowed_for_v6());
+    /// ```
     pub fn is_allowed_for_v6(&self) -> bool {
         !matches!(self, CipherSuite::Cv25519)
     }
 
     /// Get a human-readable name for the cipher suite.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use wecanencrypt::CipherSuite;
+    ///
+    /// assert_eq!(CipherSuite::Rsa4k.name(), "RSA 4096");
+    /// ```
     pub fn name(&self) -> &'static str {
         match self {
             CipherSuite::Rsa2k => "RSA 2048",
@@ -97,12 +124,12 @@ impl CipherSuite {
 /// | `Rsa`               | RSA / RSAEncrypt / RSASign                        |
 /// | `Dsa`               | DSA                                               |
 /// | `Elgamal`           | Elgamal                                           |
-/// | `EdDsaLegacy`       | EdDSALegacy — v4 Ed25519 (`CipherSuite::Cv25519`) |
-/// | `Ed25519`           | Ed25519 — RFC 9580 (`CipherSuite::Cv25519Modern`) |
-/// | `Ed448`             | Ed448 — RFC 9580 (`CipherSuite::Cv448Modern`)     |
+/// | `EdDsaLegacy`       | EdDSALegacy - v4 Ed25519 (`CipherSuite::Cv25519`) |
+/// | `Ed25519`           | Ed25519 - RFC 9580 (`CipherSuite::Cv25519Modern`) |
+/// | `Ed448`             | Ed448 - RFC 9580 (`CipherSuite::Cv448Modern`)     |
 /// | `EcdhCurve25519`    | ECDH over Curve25519 (`CipherSuite::Cv25519`)     |
-/// | `X25519`            | X25519 — RFC 9580 (`CipherSuite::Cv25519Modern`)  |
-/// | `X448`              | X448 — RFC 9580 (`CipherSuite::Cv448Modern`)      |
+/// | `X25519`            | X25519 - RFC 9580 (`CipherSuite::Cv25519Modern`)  |
+/// | `X448`              | X448 - RFC 9580 (`CipherSuite::Cv448Modern`)      |
 /// | `EcdhNist`          | ECDH over NIST P-256 / P-384 / P-521              |
 /// | `EcdhBrainpool`     | ECDH over Brainpool 256 / 384 / 512               |
 /// | `Ecdsa`             | ECDSA over any NIST / secp256k1 / brainpool curve |
@@ -110,23 +137,45 @@ impl CipherSuite {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum KeyAlgorithm {
+    /// RSA public-key algorithm.
     Rsa,
+    /// DSA signing algorithm.
     Dsa,
+    /// Elgamal encryption algorithm.
     Elgamal,
+    /// Legacy EdDSA key, typically V4 Ed25519.
     EdDsaLegacy,
+    /// RFC 9580 Ed25519 key.
     Ed25519,
+    /// RFC 9580 Ed448 key.
     Ed448,
+    /// Legacy ECDH over Curve25519.
     EcdhCurve25519,
+    /// RFC 9580 X25519 encryption key.
     X25519,
+    /// RFC 9580 X448 encryption key.
     X448,
+    /// ECDH over a NIST curve.
     EcdhNist,
+    /// ECDH over a Brainpool curve.
     EcdhBrainpool,
+    /// ECDSA signing key.
     Ecdsa,
+    /// Algorithm that wecanencrypt does not classify.
     Unknown,
 }
 
 impl KeyAlgorithm {
     /// Human-readable label matching wecanencrypt's cipher-suite vocabulary.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use wecanencrypt::KeyAlgorithm;
+    ///
+    /// assert_eq!(KeyAlgorithm::X25519.name(), "X25519");
+    /// assert_eq!(KeyAlgorithm::EcdhCurve25519.to_string(), "ECDH/Curve25519");
+    /// ```
     pub fn name(&self) -> &'static str {
         match self {
             KeyAlgorithm::Rsa => "RSA",
@@ -165,6 +214,15 @@ pub struct SubkeyFlags {
 
 impl SubkeyFlags {
     /// Create flags with all subkeys enabled.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use wecanencrypt::SubkeyFlags;
+    ///
+    /// let flags = SubkeyFlags::all();
+    /// assert!(flags.encryption && flags.signing && flags.authentication);
+    /// ```
     pub fn all() -> Self {
         Self {
             encryption: true,
@@ -174,6 +232,16 @@ impl SubkeyFlags {
     }
 
     /// Create flags with only encryption enabled.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use wecanencrypt::SubkeyFlags;
+    ///
+    /// let flags = SubkeyFlags::encryption_only();
+    /// assert!(flags.encryption);
+    /// assert!(!flags.signing);
+    /// ```
     pub fn encryption_only() -> Self {
         Self {
             encryption: true,
@@ -183,6 +251,16 @@ impl SubkeyFlags {
     }
 
     /// Create flags with only signing enabled.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use wecanencrypt::SubkeyFlags;
+    ///
+    /// let flags = SubkeyFlags::signing_only();
+    /// assert!(flags.signing);
+    /// assert!(!flags.encryption);
+    /// ```
     pub fn signing_only() -> Self {
         Self {
             encryption: false,
@@ -192,6 +270,17 @@ impl SubkeyFlags {
     }
 
     /// Create flags from a bitmask (1=encryption, 2=signing, 4=authentication).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use wecanencrypt::SubkeyFlags;
+    ///
+    /// let flags = SubkeyFlags::from_bitmask(0b101);
+    /// assert!(flags.encryption);
+    /// assert!(!flags.signing);
+    /// assert!(flags.authentication);
+    /// ```
     pub fn from_bitmask(mask: u8) -> Self {
         Self {
             encryption: (mask & 1) != 0,
@@ -201,6 +290,15 @@ impl SubkeyFlags {
     }
 
     /// Convert to bitmask representation.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use wecanencrypt::SubkeyFlags;
+    ///
+    /// assert_eq!(SubkeyFlags::all().to_bitmask(), 0b111);
+    /// assert_eq!(SubkeyFlags::signing_only().to_bitmask(), 0b010);
+    /// ```
     pub fn to_bitmask(&self) -> u8 {
         let mut mask = 0u8;
         if self.encryption {
@@ -320,8 +418,8 @@ pub struct KeyCipherDetails {
 
 /// Lightweight view of a key suitable for list rendering. Populated
 /// entirely from normalized SQL columns (schema v4+), with no OpenPGP
-/// parse on the hot path. See [`KeyStore::list_keys_summary`] and
-/// [`KeyStore::get_key_summary`].
+/// parse on the hot path. See [`crate::KeyStore::list_keys_summary`] and
+/// [`crate::KeyStore::get_key_summary`].
 #[derive(Debug, Clone)]
 pub struct KeySummary {
     /// Primary key fingerprint (hex).
@@ -345,10 +443,10 @@ pub struct KeySummary {
 }
 
 /// One UID in a [`KeySummary`]. This is deliberately thinner than
-/// [`UserIDInfo`] — it carries only what the SQL `user_ids` table
+/// [`UserIDInfo`] - it carries only what the SQL `user_ids` table
 /// caches (no revocation status, no third-party certifications),
 /// because callers who need those details already know to call
-/// [`KeyStore::get_key_info`] / [`KeyStore::get_key`].
+/// [`crate::KeyStore::get_key_info`] / [`crate::KeyStore::get_key`].
 #[derive(Debug, Clone)]
 pub struct UserIdSummary {
     /// Raw UID string (e.g. `"Alice <alice@example.com>"`).
@@ -406,6 +504,14 @@ pub enum CertificationType {
 
 impl CertificationType {
     /// Convert to the OpenPGP signature type value.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use wecanencrypt::CertificationType;
+    ///
+    /// assert_eq!(CertificationType::Positive.to_signature_type(), 0x13);
+    /// ```
     pub fn to_signature_type(self) -> u8 {
         match self {
             CertificationType::Generic => 0x10,
@@ -494,6 +600,14 @@ pub struct AvailableSubkey {
 
 impl CipherSuite {
     /// Get the rpgp KeyType for the primary key (signing/certification).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use wecanencrypt::CipherSuite;
+    ///
+    /// let _primary_type = CipherSuite::Cv25519Modern.primary_key_type();
+    /// ```
     pub fn primary_key_type(&self) -> pgp::composed::KeyType {
         match self {
             CipherSuite::Rsa2k => pgp::composed::KeyType::Rsa(2048),
@@ -514,6 +628,14 @@ impl CipherSuite {
     }
 
     /// Get the rpgp KeyType for encryption subkeys.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use wecanencrypt::CipherSuite;
+    ///
+    /// let _encryption_type = CipherSuite::Cv25519Modern.encryption_key_type();
+    /// ```
     pub fn encryption_key_type(&self) -> pgp::composed::KeyType {
         match self {
             CipherSuite::Rsa2k => pgp::composed::KeyType::Rsa(2048),

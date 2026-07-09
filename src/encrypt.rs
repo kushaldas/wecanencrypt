@@ -75,6 +75,19 @@ pub fn encrypt_bytes(recipient_key: &[u8], plaintext: &[u8], armor: bool) -> Res
 /// * `recipient_key` - The recipient's public key (armored or binary)
 /// * `plaintext` - The data to encrypt
 /// * `armor` - If true, output ASCII-armored; otherwise binary
+///
+/// # Example
+/// ```no_run
+/// use wecanencrypt::{create_key_v6_simple, encrypt_bytes_v2, CipherSuite};
+///
+/// let recipient = create_key_v6_simple(
+///     "password",
+///     &["Alice <alice@example.com>"],
+///     CipherSuite::Cv25519Modern,
+/// ).unwrap();
+/// let ciphertext = encrypt_bytes_v2(recipient.public_key.as_bytes(), b"hello", true).unwrap();
+/// assert!(ciphertext.starts_with(b"-----BEGIN PGP MESSAGE-----"));
+/// ```
 pub fn encrypt_bytes_v2(recipient_key: &[u8], plaintext: &[u8], armor: bool) -> Result<Vec<u8>> {
     encrypt_bytes_to_multiple_v2(&[recipient_key], plaintext, armor)
 }
@@ -147,6 +160,20 @@ pub fn encrypt_bytes_to_multiple(
 ///
 /// # Returns
 /// The encrypted message using SEIPD v2 format.
+///
+/// # Example
+/// ```no_run
+/// use wecanencrypt::{create_key_v6_simple, encrypt_bytes_to_multiple_v2, CipherSuite};
+///
+/// let alice = create_key_v6_simple("pw", &["Alice <a@example.com>"], CipherSuite::Cv25519Modern).unwrap();
+/// let bob = create_key_v6_simple("pw", &["Bob <b@example.com>"], CipherSuite::Cv25519Modern).unwrap();
+/// let ciphertext = encrypt_bytes_to_multiple_v2(
+///     &[alice.public_key.as_bytes(), bob.public_key.as_bytes()],
+///     b"group secret",
+///     true,
+/// ).unwrap();
+/// assert!(!ciphertext.is_empty());
+/// ```
 pub fn encrypt_bytes_to_multiple_v2(
     recipient_keys: &[&[u8]],
     plaintext: &[u8],
@@ -174,6 +201,20 @@ pub fn encrypt_bytes_to_multiple_v2(
 ///
 /// # Returns
 /// The encrypted message that can be decrypted by any of the recipients.
+///
+/// # Example
+/// ```no_run
+/// use wecanencrypt::{create_key_simple, encrypt_bytes_to_multiple_with_algo, SymmetricKeyAlgorithm};
+///
+/// let recipient = create_key_simple("pw", &["Alice <a@example.com>"]).unwrap();
+/// let ciphertext = encrypt_bytes_to_multiple_with_algo(
+///     &[recipient.public_key.as_bytes()],
+///     b"payload",
+///     true,
+///     SymmetricKeyAlgorithm::AES128,
+/// ).unwrap();
+/// assert!(!ciphertext.is_empty());
+/// ```
 pub fn encrypt_bytes_to_multiple_with_algo(
     recipient_keys: &[&[u8]],
     plaintext: &[u8],
@@ -235,6 +276,23 @@ pub fn encrypt_bytes_to_multiple_with_algo(
 ///
 /// # Returns
 /// The encrypted message using SEIPD v2 format.
+///
+/// # Example
+/// ```no_run
+/// use wecanencrypt::{
+///     create_key_v6_simple, encrypt_bytes_to_multiple_seipd_v2,
+///     CipherSuite, SymmetricKeyAlgorithm,
+/// };
+///
+/// let recipient = create_key_v6_simple("pw", &["Alice <a@example.com>"], CipherSuite::Cv25519Modern).unwrap();
+/// let ciphertext = encrypt_bytes_to_multiple_seipd_v2(
+///     &[recipient.public_key.as_bytes()],
+///     b"payload",
+///     true,
+///     SymmetricKeyAlgorithm::AES256,
+/// ).unwrap();
+/// assert!(!ciphertext.is_empty());
+/// ```
 pub fn encrypt_bytes_to_multiple_seipd_v2(
     recipient_keys: &[&[u8]],
     plaintext: &[u8],
@@ -270,6 +328,30 @@ pub fn encrypt_bytes_to_multiple_seipd_v2(
 /// * `recipient_keys` - Slice of recipient public keys (armored or binary)
 /// * `plaintext` - The data to sign and encrypt
 /// * `armor` - If true, output ASCII-armored; otherwise binary
+///
+/// # Example
+/// ```no_run
+/// use wecanencrypt::{create_key_simple, decrypt_and_verify, sign_and_encrypt_to_multiple};
+///
+/// let sender = create_key_simple("sender-pw", &["Sender <s@example.com>"]).unwrap();
+/// let recipient = create_key_simple("recipient-pw", &["Recipient <r@example.com>"]).unwrap();
+///
+/// let ciphertext = sign_and_encrypt_to_multiple(
+///     &sender.secret_key,
+///     "sender-pw",
+///     &[recipient.public_key.as_bytes()],
+///     b"signed secret",
+///     true,
+/// ).unwrap();
+///
+/// let result = decrypt_and_verify(
+///     &recipient.secret_key,
+///     &ciphertext,
+///     "recipient-pw",
+///     |_| Some(sender.public_key.as_bytes().to_vec()),
+/// ).unwrap();
+/// assert_eq!(result.plaintext, b"signed secret");
+/// ```
 pub fn sign_and_encrypt_to_multiple(
     signer_secret_key: &[u8],
     signer_password: &str,
@@ -369,7 +451,7 @@ pub fn sign_and_encrypt_to_multiple(
 /// This is the primitive that PGP/MIME mail clients use to deliver
 /// "Bcc with encryption" without leaking Bcc identities to the To/Cc
 /// recipients. The full ciphertext is still a single OpenPGP message
-/// (efficient on the wire); every recipient — visible or hidden — sees the
+/// (efficient on the wire); every recipient - visible or hidden - sees the
 /// same plaintext after decryption.
 ///
 /// At least one recipient (visible OR hidden) must be supplied; both
@@ -386,6 +468,29 @@ pub fn sign_and_encrypt_to_multiple(
 ///   suppressed (V4: wildcard key id; V6: omitted fingerprint).
 /// * `plaintext` - Bytes to sign and encrypt.
 /// * `armor` - If true, ASCII-armored output; otherwise binary.
+///
+/// # Example
+/// ```no_run
+/// use wecanencrypt::{
+///     create_key_simple, decrypt_bytes, sign_and_encrypt_to_multiple_with_hidden,
+/// };
+///
+/// let sender = create_key_simple("sender-pw", &["Sender <s@example.com>"]).unwrap();
+/// let visible = create_key_simple("visible-pw", &["Visible <v@example.com>"]).unwrap();
+/// let hidden = create_key_simple("hidden-pw", &["Hidden <h@example.com>"]).unwrap();
+///
+/// let ciphertext = sign_and_encrypt_to_multiple_with_hidden(
+///     &sender.secret_key,
+///     "sender-pw",
+///     &[visible.public_key.as_bytes()],
+///     &[hidden.public_key.as_bytes()],
+///     b"bcc body",
+///     true,
+/// ).unwrap();
+///
+/// let hidden_plaintext = decrypt_bytes(&hidden.secret_key, &ciphertext, "hidden-pw").unwrap();
+/// assert_eq!(hidden_plaintext, b"bcc body");
+/// ```
 pub fn sign_and_encrypt_to_multiple_with_hidden(
     signer_secret_key: &[u8],
     signer_password: &str,
@@ -479,6 +584,24 @@ pub fn sign_and_encrypt_to_multiple_with_hidden(
 /// 8-byte key id; V6 PKESK (used with V6 keys, RFC 9580) omits the
 /// optional fingerprint field. Either way the PKESK leaks no identifier
 /// for the recipient (RFC 4880 `throw-keyid` / `--hidden-recipient`).
+///
+/// # Example
+/// ```no_run
+/// use wecanencrypt::{create_key_simple, decrypt_bytes, encrypt_bytes_to_multiple_with_hidden};
+///
+/// let visible = create_key_simple("visible-pw", &["Visible <v@example.com>"]).unwrap();
+/// let hidden = create_key_simple("hidden-pw", &["Hidden <h@example.com>"]).unwrap();
+///
+/// let ciphertext = encrypt_bytes_to_multiple_with_hidden(
+///     &[visible.public_key.as_bytes()],
+///     &[hidden.public_key.as_bytes()],
+///     b"quiet copy",
+///     true,
+/// ).unwrap();
+///
+/// let plaintext = decrypt_bytes(&hidden.secret_key, &ciphertext, "hidden-pw").unwrap();
+/// assert_eq!(plaintext, b"quiet copy");
+/// ```
 pub fn encrypt_bytes_to_multiple_with_hidden(
     visible_recipient_keys: &[&[u8]],
     hidden_recipient_keys: &[&[u8]],
@@ -549,7 +672,7 @@ pub fn encrypt_bytes_to_multiple_with_hidden(
 ///
 /// At least one of the two lists must be non-empty; an empty-empty call
 /// is rejected with [`Error::InvalidInput`]. A mixed V4/V6 split between
-/// the two sides surfaces as [`Error::KeyVersionMismatch`] — RFC 9580
+/// the two sides surfaces as [`Error::KeyVersionMismatch`] - RFC 9580
 /// forbids V6 ESK packets preceding a V1 SEIPD and vice versa, so the
 /// caller could not route the message down a single SEIPD path.
 pub(crate) fn collect_visible_and_hidden_keys(
@@ -776,6 +899,16 @@ pub fn encrypt_file_to_multiple(
 /// * `reader` - Source of plaintext data
 /// * `output` - Path to the output file
 /// * `armor` - If true, output ASCII-armored
+///
+/// # Example
+/// ```no_run
+/// use std::fs::File;
+/// use wecanencrypt::encrypt_reader_to_file;
+///
+/// let recipient = std::fs::read("recipient.asc").unwrap();
+/// let input = File::open("document.pdf").unwrap();
+/// encrypt_reader_to_file(&[&recipient], input, "document.pdf.gpg", true).unwrap();
+/// ```
 pub fn encrypt_reader_to_file<R: Read>(
     recipient_keys: &[&[u8]],
     mut reader: R,
@@ -796,6 +929,16 @@ pub fn encrypt_reader_to_file<R: Read>(
 ///
 /// # Returns
 /// A list of key IDs (hex strings) that can decrypt this message.
+///
+/// # Example
+/// ```no_run
+/// use wecanencrypt::bytes_encrypted_for;
+///
+/// let ciphertext = std::fs::read("message.pgp").unwrap();
+/// for recipient in bytes_encrypted_for(&ciphertext).unwrap() {
+///     println!("recipient key id or fingerprint: {}", recipient);
+/// }
+/// ```
 pub fn bytes_encrypted_for(ciphertext: &[u8]) -> Result<Vec<String>> {
     let mut key_ids = Vec::new();
 
@@ -857,6 +1000,14 @@ pub fn bytes_encrypted_for(ciphertext: &[u8]) -> Result<Vec<String>> {
 ///
 /// # Returns
 /// A list of key IDs (hex strings) that can decrypt this file.
+///
+/// # Example
+/// ```no_run
+/// use wecanencrypt::file_encrypted_for;
+///
+/// let recipients = file_encrypted_for("message.pgp").unwrap();
+/// println!("message has {} visible recipients", recipients.len());
+/// ```
 pub fn file_encrypted_for(path: impl AsRef<Path>) -> Result<Vec<String>> {
     let ciphertext = std::fs::read(path.as_ref())?;
     bytes_encrypted_for(&ciphertext)
@@ -901,7 +1052,7 @@ mod tests {
     /// Walk every PKESK packet in a (possibly armored) ciphertext and
     /// return the parsed enum values. Unlike [`bytes_encrypted_for`],
     /// which formats and drops anonymous V6 PKESKs, this helper preserves
-    /// every PKESK so tests can match on the exact variant shape — in
+    /// every PKESK so tests can match on the exact variant shape - in
     /// particular `V6 { fingerprint: None, .. }` for V6 hidden recipients.
     fn parse_pkesks(ciphertext: &[u8]) -> Vec<PublicKeyEncryptedSessionKey> {
         let data = if ciphertext.starts_with(b"-----BEGIN PGP") {
@@ -920,7 +1071,7 @@ mod tests {
             match packet_result {
                 Ok(Packet::PublicKeyEncryptedSessionKey(pkesk)) => out.push(pkesk),
                 Ok(_) => {}
-                // Stop walking at the first parse error — usually the
+                // Stop walking at the first parse error - usually the
                 // ciphertext body, which we can't decode without the key.
                 Err(_) => break,
             }
@@ -963,7 +1114,7 @@ mod tests {
         // PKESK enumeration: at least one wildcard (Carol, hidden) and at
         // least one non-wildcard (Bob, visible). Note: `bytes_encrypted_for`
         // emits the wildcard key id for V3 PKESK anonymous recipients and
-        // *skips* V6 PKESK anonymous recipients — these tests use V4 keys
+        // *skips* V6 PKESK anonymous recipients - these tests use V4 keys
         // (the default of `create_key_simple`) so the wildcard form is
         // what shows up.
         let key_ids = bytes_encrypted_for(&ct).expect("enumerate PKESKs");
@@ -991,7 +1142,7 @@ mod tests {
     /// wildcard-PKESK behaviour, same dual decryptability.
     ///
     /// Assertions are presence-based (at least one wildcard + at least
-    /// one non-wildcard PKESK), not count-based — see the sibling test
+    /// one non-wildcard PKESK), not count-based - see the sibling test
     /// above for the rationale.
     #[test]
     fn encrypt_only_with_hidden_emits_wildcard_keyid_for_hidden_recipients() {
@@ -1032,7 +1183,7 @@ mod tests {
         );
     }
 
-    /// At least one recipient must be supplied across the two lists —
+    /// At least one recipient must be supplied across the two lists -
     /// both empty is rejected. Prevents accidentally producing a
     /// "header-only" OpenPGP message that no-one can decrypt.
     #[test]
@@ -1089,7 +1240,7 @@ mod tests {
         assert_eq!(pt, b"hidden-only");
     }
 
-    /// V6 keys exercise the SEIPD-v2 / `encrypt_to_key_anonymous` path —
+    /// V6 keys exercise the SEIPD-v2 / `encrypt_to_key_anonymous` path -
     /// hidden recipients receive a V6 PKESK whose optional `fingerprint`
     /// field is `None` (RFC 9580 §5.1.2). Pin both the packet shape and
     /// that both recipients still decrypt to the same plaintext.
@@ -1290,7 +1441,7 @@ mod tests {
         );
 
         // sign_and_encrypt_to_multiple_with_hidden: V6 visible + V4 hidden
-        // (swap the two sides — the guard must fire either way).
+        // (swap the two sides - the guard must fire either way).
         assert_mismatch(
             sign_and_encrypt_to_multiple_with_hidden(
                 &alice_v4.secret_key,
