@@ -1,6 +1,9 @@
-//! Types for smart card operations.
+//! Data types returned by OpenPGP smart-card helpers.
 //!
-//! This module defines the core types used for YubiKey/OpenPGP card operations.
+//! These structs and enums describe connected cards, slot matches, touch
+//! policies, and card-specific errors without exposing `openpgp-card` internals
+//! to callers. They are used by both desktop PC/SC transports and external
+//! mobile/custom backends.
 
 /// Key slot identifiers on an OpenPGP smart card.
 ///

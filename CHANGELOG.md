@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.3] - 2026-07-09
+
 ### Security
 
 - Public subkey binding signatures are now cryptographically verified
@@ -50,6 +52,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   treated as "does not expire" instead of being reported as an
   expiration at the subkey creation time. Regression tests cover a
   verified binding with an explicit zero-second expiration.
+
+### Documentation
+
+- Expanded public API rustdoc with clearer module guidance and examples
+  for parsing, keyring, encryption/decryption, signing/verification,
+  network lookup, SSH helpers, key management, keystore operations, and
+  smart-card helpers.
 
 ## [0.16.2] — 2026-06-22
 

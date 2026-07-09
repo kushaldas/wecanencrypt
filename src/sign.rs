@@ -166,6 +166,26 @@ pub fn sign_bytes(secret_key: &[u8], data: &[u8], password: &str) -> Result<Vec<
 /// * `secret_key` - The signer's secret key (armored or binary)
 /// * `data` - The data to sign
 /// * `password` - Password to unlock the secret key
+///
+/// # Example
+/// ```no_run
+/// use wecanencrypt::{create_key, sign_bytes_with_primary_key, CipherSuite, SubkeyFlags};
+///
+/// let key = create_key(
+///     "password",
+///     &["Alice <alice@example.com>"],
+///     CipherSuite::Cv25519,
+///     None,
+///     None,
+///     None,
+///     SubkeyFlags::signing_only(),
+///     true,
+///     true,
+/// ).unwrap();
+///
+/// let signed = sign_bytes_with_primary_key(&key.secret_key, b"primary signed", "password").unwrap();
+/// assert!(!signed.is_empty());
+/// ```
 pub fn sign_bytes_with_primary_key(
     secret_key: &[u8],
     data: &[u8],
@@ -216,6 +236,30 @@ pub fn sign_bytes_cleartext(secret_key: &[u8], data: &[u8], password: &str) -> R
 /// * `secret_key` - The signer's secret key (armored or binary)
 /// * `data` - The data to sign (should be text)
 /// * `password` - Password to unlock the secret key
+///
+/// # Example
+/// ```no_run
+/// use wecanencrypt::{create_key, sign_bytes_cleartext_with_primary_key, CipherSuite, SubkeyFlags};
+///
+/// let key = create_key(
+///     "password",
+///     &["Alice <alice@example.com>"],
+///     CipherSuite::Cv25519,
+///     None,
+///     None,
+///     None,
+///     SubkeyFlags::signing_only(),
+///     true,
+///     true,
+/// ).unwrap();
+///
+/// let clearsigned = sign_bytes_cleartext_with_primary_key(
+///     &key.secret_key,
+///     b"status update",
+///     "password",
+/// ).unwrap();
+/// assert!(clearsigned.starts_with(b"-----BEGIN PGP SIGNED MESSAGE-----"));
+/// ```
 pub fn sign_bytes_cleartext_with_primary_key(
     secret_key: &[u8],
     data: &[u8],
@@ -265,6 +309,30 @@ pub fn sign_bytes_detached(secret_key: &[u8], data: &[u8], password: &str) -> Re
 /// * `secret_key` - The signer's secret key (armored or binary)
 /// * `data` - The data to sign
 /// * `password` - Password to unlock the secret key
+///
+/// # Example
+/// ```no_run
+/// use wecanencrypt::{create_key, sign_bytes_detached_with_primary_key, CipherSuite, SubkeyFlags};
+///
+/// let key = create_key(
+///     "password",
+///     &["Alice <alice@example.com>"],
+///     CipherSuite::Cv25519,
+///     None,
+///     None,
+///     None,
+///     SubkeyFlags::signing_only(),
+///     true,
+///     true,
+/// ).unwrap();
+///
+/// let signature = sign_bytes_detached_with_primary_key(
+///     &key.secret_key,
+///     b"primary detached",
+///     "password",
+/// ).unwrap();
+/// assert!(signature.contains("BEGIN PGP SIGNATURE"));
+/// ```
 pub fn sign_bytes_detached_with_primary_key(
     secret_key: &[u8],
     data: &[u8],
@@ -281,7 +349,9 @@ pub fn sign_bytes_detached_with_primary_key(
 /// signature packet, we surface it directly here.
 #[derive(Debug, Clone)]
 pub struct DetachedSignOutput {
+    /// ASCII-armored detached OpenPGP signature.
     pub armored: String,
+    /// Hash algorithm selected or explicitly requested for the signature.
     pub hash_algorithm: HashAlgorithm,
 }
 
@@ -289,15 +359,30 @@ pub struct DetachedSignOutput {
 /// algorithm.
 ///
 /// Behaves like [`sign_bytes_detached`] when `hash_algo` is `None` (the
-/// hash is derived from the signing key's public params per
-/// [`select_hash_for_params`]). When `hash_algo` is `Some(algo)`, that
-/// algorithm is used regardless. The chosen algorithm is returned in the
-/// output so the caller can echo it onto a status line or into a
-/// `multipart/signed` `micalg` parameter.
+/// hash is derived from the signing key's public parameters). When
+/// `hash_algo` is `Some(algo)`, that algorithm is used regardless. The
+/// chosen algorithm is returned in the output so the caller can echo it
+/// onto a status line or into a `multipart/signed` `micalg` parameter.
 ///
 /// rpgp may reject combinations the underlying public-key algorithm
 /// disallows (e.g. an unsupported hash for an Ed448 key); those surface
 /// as [`Error::Crypto`].
+///
+/// # Example
+/// ```no_run
+/// use wecanencrypt::{create_key_simple, sign_bytes_detached_with_hash, HashAlgorithm};
+///
+/// let key = create_key_simple("password", &["Alice <alice@example.com>"]).unwrap();
+/// let output = sign_bytes_detached_with_hash(
+///     &key.secret_key,
+///     b"mime body",
+///     "password",
+///     Some(HashAlgorithm::Sha256),
+/// ).unwrap();
+///
+/// assert_eq!(output.hash_algorithm, HashAlgorithm::Sha256);
+/// assert!(output.armored.contains("BEGIN PGP SIGNATURE"));
+/// ```
 pub fn sign_bytes_detached_with_hash(
     secret_key: &[u8],
     data: &[u8],
@@ -444,6 +529,14 @@ pub fn sign_file(
 /// * `input` - Path to the file to sign (should be text)
 /// * `output` - Path to write the signed file
 /// * `password` - Password to unlock the secret key
+///
+/// # Example
+/// ```no_run
+/// use wecanencrypt::sign_file_cleartext;
+///
+/// let secret_key = std::fs::read("secret.asc").unwrap();
+/// sign_file_cleartext(&secret_key, "announcement.txt", "announcement.asc", "password").unwrap();
+/// ```
 pub fn sign_file_cleartext(
     secret_key: &[u8],
     input: impl AsRef<Path>,
@@ -465,6 +558,15 @@ pub fn sign_file_cleartext(
 ///
 /// # Returns
 /// The ASCII-armored detached signature.
+///
+/// # Example
+/// ```no_run
+/// use wecanencrypt::sign_file_detached;
+///
+/// let secret_key = std::fs::read("secret.asc").unwrap();
+/// let signature = sign_file_detached(&secret_key, "release.tar.gz", "password").unwrap();
+/// std::fs::write("release.tar.gz.asc", signature).unwrap();
+/// ```
 pub fn sign_file_detached(
     secret_key: &[u8],
     input: impl AsRef<Path>,

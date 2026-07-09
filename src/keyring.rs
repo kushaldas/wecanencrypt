@@ -54,6 +54,15 @@ pub fn parse_keyring_file(path: impl AsRef<Path>) -> Result<Vec<(KeyInfo, Vec<u8
 ///
 /// # Returns
 /// A list of (KeyInfo, raw_bytes) for each key.
+///
+/// # Example
+/// ```no_run
+/// use wecanencrypt::parse_keyring_bytes;
+///
+/// let keyring = std::fs::read("pubring.gpg").unwrap();
+/// let keys = parse_keyring_bytes(&keyring).unwrap();
+/// println!("parsed {} keys", keys.len());
+/// ```
 pub fn parse_keyring_bytes(data: &[u8]) -> Result<Vec<(KeyInfo, Vec<u8>)>> {
     let mut results = Vec::new();
 
@@ -115,6 +124,16 @@ pub fn export_keyring_file(keys: &[&[u8]], output: impl AsRef<Path>) -> Result<(
 ///
 /// # Returns
 /// ASCII-armored keyring containing all keys.
+///
+/// # Example
+/// ```no_run
+/// use wecanencrypt::export_keyring_armored;
+///
+/// let alice = std::fs::read("alice.asc").unwrap();
+/// let bob = std::fs::read("bob.asc").unwrap();
+/// let armored = export_keyring_armored(&[&alice, &bob]).unwrap();
+/// std::fs::write("contacts.asc", armored).unwrap();
+/// ```
 pub fn export_keyring_armored(keys: &[&[u8]]) -> Result<String> {
     let mut all_armored = String::new();
 
@@ -151,6 +170,16 @@ pub fn export_keyring_armored(keys: &[&[u8]]) -> Result<String> {
 /// # Errors
 /// * [`Error::InvalidInput`] if the two keys have different primary
 ///   fingerprints.
+///
+/// # Example
+/// ```no_run
+/// use wecanencrypt::merge_keys;
+///
+/// let stored = std::fs::read("alice-old.asc").unwrap();
+/// let update = std::fs::read("alice-new.asc").unwrap();
+/// let merged = merge_keys(&stored, &update).unwrap();
+/// std::fs::write("alice-merged.pgp", &*merged).unwrap();
+/// ```
 pub fn merge_keys(key_data: &[u8], update_data: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
     let (orig_public, orig_is_secret) = parse_key(key_data)?;
     let (update_public, update_is_secret) = parse_key(update_data)?;

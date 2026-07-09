@@ -63,6 +63,16 @@ pub fn verify_bytes(signer_key: &[u8], signed_message: &[u8]) -> Result<bool> {
 ///
 /// # Returns
 /// The original message content if the signature is valid.
+///
+/// # Example
+/// ```no_run
+/// use wecanencrypt::verify_and_extract_bytes;
+///
+/// let public_key = std::fs::read("signer.asc").unwrap();
+/// let signed_message = std::fs::read("message.asc").unwrap();
+/// let plaintext = verify_and_extract_bytes(&public_key, &signed_message).unwrap();
+/// println!("{}", String::from_utf8_lossy(&plaintext));
+/// ```
 pub fn verify_and_extract_bytes(signer_key: &[u8], signed_message: &[u8]) -> Result<Vec<u8>> {
     let public_key = parse_public_key(signer_key)?;
 
@@ -88,6 +98,16 @@ pub fn verify_and_extract_bytes(signer_key: &[u8], signed_message: &[u8]) -> Res
 ///
 /// # Returns
 /// `true` if the signature is valid.
+///
+/// # Example
+/// ```no_run
+/// use wecanencrypt::verify_bytes_detached;
+///
+/// let public_key = std::fs::read("signer.asc").unwrap();
+/// let document = std::fs::read("document.txt").unwrap();
+/// let signature = std::fs::read("document.txt.asc").unwrap();
+/// assert!(verify_bytes_detached(&public_key, &document, &signature).unwrap());
+/// ```
 pub fn verify_bytes_detached(signer_key: &[u8], data: &[u8], signature: &[u8]) -> Result<bool> {
     let public_key = parse_public_key(signer_key)?;
 
@@ -135,6 +155,15 @@ pub fn verify_bytes_detached(signer_key: &[u8], data: &[u8], signature: &[u8]) -
 ///
 /// # Returns
 /// `true` if the signature is valid.
+///
+/// # Example
+/// ```no_run
+/// use wecanencrypt::verify_file;
+///
+/// let public_key = std::fs::read("signer.asc").unwrap();
+/// let valid = verify_file(&public_key, "message.signed.asc").unwrap();
+/// assert!(valid);
+/// ```
 pub fn verify_file(signer_key: &[u8], signed_file: impl AsRef<Path>) -> Result<bool> {
     let signed_message = std::fs::read(signed_file.as_ref())?;
     verify_bytes(signer_key, &signed_message)
@@ -146,6 +175,14 @@ pub fn verify_file(signer_key: &[u8], signed_file: impl AsRef<Path>) -> Result<b
 /// * `signer_key` - The signer's public key
 /// * `signed_file` - Path to the signed file
 /// * `output` - Path to write the extracted content
+///
+/// # Example
+/// ```no_run
+/// use wecanencrypt::verify_and_extract_file;
+///
+/// let public_key = std::fs::read("signer.asc").unwrap();
+/// verify_and_extract_file(&public_key, "message.signed.asc", "message.txt").unwrap();
+/// ```
 pub fn verify_and_extract_file(
     signer_key: &[u8],
     signed_file: impl AsRef<Path>,
@@ -166,6 +203,15 @@ pub fn verify_and_extract_file(
 ///
 /// # Returns
 /// `true` if the signature is valid.
+///
+/// # Example
+/// ```no_run
+/// use wecanencrypt::verify_file_detached;
+///
+/// let public_key = std::fs::read("signer.asc").unwrap();
+/// let signature = std::fs::read("document.txt.asc").unwrap();
+/// assert!(verify_file_detached(&public_key, "document.txt", &signature).unwrap());
+/// ```
 pub fn verify_file_detached(
     signer_key: &[u8],
     file: impl AsRef<Path>,

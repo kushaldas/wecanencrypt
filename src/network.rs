@@ -143,6 +143,14 @@ pub fn fetch_key_by_fingerprint(fingerprint: &str, keyserver: Option<&str>) -> R
 ///
 /// # Returns
 /// The key data if found.
+///
+/// # Example
+/// ```no_run
+/// use wecanencrypt::fetch_key_by_keyid;
+///
+/// let key = fetch_key_by_keyid("7857DD79C52B4217", None).unwrap();
+/// println!("Fetched {} bytes", key.len());
+/// ```
 #[cfg(feature = "network")]
 pub fn fetch_key_by_keyid(key_id: &str, keyserver: Option<&str>) -> Result<Vec<u8>> {
     let server = keyserver.unwrap_or("https://keys.openpgp.org");

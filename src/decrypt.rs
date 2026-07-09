@@ -73,6 +73,16 @@ pub fn decrypt_bytes(secret_key: &[u8], ciphertext: &[u8], password: &str) -> Re
 ///
 /// # Returns
 /// The decrypted plaintext bytes.
+///
+/// # Example
+/// ```no_run
+/// use wecanencrypt::decrypt_bytes_legacy;
+///
+/// let secret_key = std::fs::read("secret.asc").unwrap();
+/// let old_ciphertext = std::fs::read("archive-message.pgp").unwrap();
+/// let plaintext = decrypt_bytes_legacy(&secret_key, &old_ciphertext, "password").unwrap();
+/// println!("recovered {} bytes", plaintext.len());
+/// ```
 pub fn decrypt_bytes_legacy(
     secret_key: &[u8],
     ciphertext: &[u8],
@@ -150,14 +160,20 @@ pub enum DecryptVerifySignature {
     /// returned by `resolve_signer`. The fingerprint is the 40-char
     /// uppercase hex of the verifying key (subkey fingerprint when the
     /// signature was made by a subkey, else primary).
-    Good { verifier_fingerprint: String },
+    Good {
+        /// Fingerprint of the key or subkey that verified the signature.
+        verifier_fingerprint: String,
+    },
     /// Inner signature(s) present, signer(s) resolved by the caller, but
     /// none verified.
     Bad,
     /// Inner signature(s) present, but no signer was resolvable via
     /// `resolve_signer`. Returns the issuer ids (uppercase hex
     /// fingerprints / 16-char key IDs) so the caller can report them.
-    UnknownKey { issuer_ids: Vec<String> },
+    UnknownKey {
+        /// Issuer fingerprints or key IDs advertised by the inner signature.
+        issuer_ids: Vec<String>,
+    },
 }
 
 /// Result of [`decrypt_and_verify`].
@@ -191,6 +207,30 @@ pub struct DecryptVerifyResult {
 /// Only integrity-protected messages (SEIPDv1 with MDC, SEIPDv2 with
 /// AEAD) are decrypted; legacy SED packets are rejected, matching
 /// [`decrypt_bytes`].
+///
+/// # Example
+/// ```no_run
+/// use wecanencrypt::{decrypt_and_verify, DecryptVerifySignature};
+///
+/// let recipient_secret = std::fs::read("recipient-secret.asc").unwrap();
+/// let signer_public = std::fs::read("sender-public.asc").unwrap();
+/// let ciphertext = std::fs::read("message.pgp").unwrap();
+///
+/// let result = decrypt_and_verify(
+///     &recipient_secret,
+///     &ciphertext,
+///     "recipient-password",
+///     |_issuer_ids| Some(signer_public.clone()),
+/// ).unwrap();
+///
+/// match result.signature {
+///     DecryptVerifySignature::Good { verifier_fingerprint } => {
+///         println!("signed by {}", verifier_fingerprint);
+///     }
+///     DecryptVerifySignature::Unsigned => println!("message was not signed"),
+///     other => println!("signature status: {:?}", other),
+/// }
+/// ```
 pub fn decrypt_and_verify<F>(
     secret_key: &[u8],
     ciphertext: &[u8],
@@ -371,6 +411,14 @@ fn parse_verifying_cert(cert_bytes: &[u8]) -> Result<SignedPublicKey> {
 /// * `input` - Path to the encrypted file
 /// * `output` - Path to write the decrypted file
 /// * `password` - Password to unlock the secret key
+///
+/// # Example
+/// ```no_run
+/// use wecanencrypt::decrypt_file;
+///
+/// let secret_key = std::fs::read("secret.asc").unwrap();
+/// decrypt_file(&secret_key, "document.pdf.gpg", "document.pdf", "password").unwrap();
+/// ```
 pub fn decrypt_file(
     secret_key: &[u8],
     input: impl AsRef<Path>,
@@ -390,6 +438,16 @@ pub fn decrypt_file(
 /// * `reader` - Source of encrypted data
 /// * `output` - Path to write the decrypted file
 /// * `password` - Password to unlock the secret key
+///
+/// # Example
+/// ```no_run
+/// use std::fs::File;
+/// use wecanencrypt::decrypt_reader_to_file;
+///
+/// let secret_key = std::fs::read("secret.asc").unwrap();
+/// let input = File::open("document.pdf.gpg").unwrap();
+/// decrypt_reader_to_file(&secret_key, input, "document.pdf", "password").unwrap();
+/// ```
 pub fn decrypt_reader_to_file<R: Read>(
     secret_key: &[u8],
     mut reader: R,

@@ -467,7 +467,7 @@ pub fn get_pub_key(key_data: &[u8]) -> Result<String> {
 ///
 /// Returns the binary OpenPGP bytes the caller should base64-encode into the
 /// `keydata=` attribute of the `Autocrypt:` mail header (RFC-ish — see
-/// https://autocrypt.org/level1.html#openpgp-based-key-data). The bytes are
+/// <https://autocrypt.org/level1.html#openpgp-based-key-data>). The bytes are
 /// a minimised transferable public key per Autocrypt §5.2:
 ///
 /// - the primary public-key packet
@@ -515,6 +515,19 @@ pub fn get_pub_key(key_data: &[u8]) -> Result<String> {
 /// dropped from the output (also per §11.1: a subkey packet must be
 /// followed by a binding signature, or it isn't part of the
 /// transferable public key).
+///
+/// # Example
+///
+/// ```no_run
+/// use wecanencrypt::{create_key_simple, export_public_for_autocrypt};
+///
+/// let key = create_key_simple("password", &["Alice <alice@example.com>"]).unwrap();
+/// let keydata = export_public_for_autocrypt(&key.secret_key, "alice@example.com").unwrap();
+///
+/// // Mail clients base64-encode these bytes into the Autocrypt header's
+/// // keydata= attribute.
+/// assert!(!keydata.is_empty());
+/// ```
 pub fn export_public_for_autocrypt(key_data: &[u8], addr: &str) -> Result<Vec<u8>> {
     use pgp::ser::Serialize;
 

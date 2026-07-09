@@ -53,6 +53,14 @@ pub fn parse_key_bytes(data: &[u8], allow_expired: bool) -> Result<KeyInfo> {
 ///
 /// # Returns
 /// Key information including user IDs, fingerprint, and subkey details.
+///
+/// # Example
+/// ```no_run
+/// use wecanencrypt::parse_key_file;
+///
+/// let info = parse_key_file("alice.asc", false).unwrap();
+/// println!("{} has {} subkeys", info.fingerprint, info.subkeys.len());
+/// ```
 pub fn parse_key_file(path: impl AsRef<Path>, allow_expired: bool) -> Result<KeyInfo> {
     let data = std::fs::read(path.as_ref())?;
     parse_key_bytes(&data, allow_expired)
@@ -65,6 +73,16 @@ pub fn parse_key_file(path: impl AsRef<Path>, allow_expired: bool) -> Result<Key
 ///
 /// # Returns
 /// A list of cipher details for the primary key and all subkeys.
+///
+/// # Example
+/// ```no_run
+/// use wecanencrypt::get_key_cipher_details;
+///
+/// let key = std::fs::read("alice.asc").unwrap();
+/// for part in get_key_cipher_details(&key).unwrap() {
+///     println!("{}: {} ({} bits)", part.fingerprint, part.algorithm, part.bit_length);
+/// }
+/// ```
 pub fn get_key_cipher_details(data: &[u8]) -> Result<Vec<KeyCipherDetails>> {
     let (public_key, _) = parse_key(data)?;
     let mut details = Vec::new();
@@ -303,6 +321,15 @@ fn determine_key_type(binding: Option<&pgp::packet::Signature>) -> KeyType {
 ///
 /// # Returns
 /// List of available encryption subkeys.
+///
+/// # Example
+/// ```no_run
+/// use wecanencrypt::get_available_encryption_subkeys;
+///
+/// let key = std::fs::read("recipient.asc").unwrap();
+/// let encryption_subkeys = get_available_encryption_subkeys(&key).unwrap();
+/// assert!(!encryption_subkeys.is_empty());
+/// ```
 pub fn get_available_encryption_subkeys(data: &[u8]) -> Result<Vec<AvailableSubkey>> {
     get_available_subkeys_by_type(data, |flags| {
         flags.encrypt_comms() || flags.encrypt_storage()
@@ -316,6 +343,16 @@ pub fn get_available_encryption_subkeys(data: &[u8]) -> Result<Vec<AvailableSubk
 ///
 /// # Returns
 /// List of available signing subkeys.
+///
+/// # Example
+/// ```no_run
+/// use wecanencrypt::get_available_signing_subkeys;
+///
+/// let key = std::fs::read("signer.asc").unwrap();
+/// for subkey in get_available_signing_subkeys(&key).unwrap() {
+///     println!("signing subkey {}", subkey.fingerprint);
+/// }
+/// ```
 pub fn get_available_signing_subkeys(data: &[u8]) -> Result<Vec<AvailableSubkey>> {
     get_available_subkeys_by_type(data, |flags| flags.sign())
 }
@@ -327,6 +364,15 @@ pub fn get_available_signing_subkeys(data: &[u8]) -> Result<Vec<AvailableSubkey>
 ///
 /// # Returns
 /// List of available authentication subkeys.
+///
+/// # Example
+/// ```no_run
+/// use wecanencrypt::get_available_authentication_subkeys;
+///
+/// let key = std::fs::read("ssh-key.asc").unwrap();
+/// let auth_subkeys = get_available_authentication_subkeys(&key).unwrap();
+/// println!("{} authentication-capable subkeys", auth_subkeys.len());
+/// ```
 pub fn get_available_authentication_subkeys(data: &[u8]) -> Result<Vec<AvailableSubkey>> {
     get_available_subkeys_by_type(data, |flags| flags.authentication())
 }
@@ -338,6 +384,17 @@ pub fn get_available_authentication_subkeys(data: &[u8]) -> Result<Vec<Available
 ///
 /// # Returns
 /// List of all available subkeys.
+///
+/// # Example
+/// ```no_run
+/// use wecanencrypt::get_all_available_subkeys;
+///
+/// let key = std::fs::read("alice.asc").unwrap();
+/// let usable = get_all_available_subkeys(&key).unwrap();
+/// for subkey in usable {
+///     println!("{:?}: {}", subkey.key_type, subkey.fingerprint);
+/// }
+/// ```
 pub fn get_all_available_subkeys(data: &[u8]) -> Result<Vec<AvailableSubkey>> {
     get_available_subkeys_by_type(data, |_| true)
 }
@@ -393,6 +450,16 @@ where
 ///
 /// # Returns
 /// True if at least one valid encryption subkey is available.
+///
+/// # Example
+/// ```no_run
+/// use wecanencrypt::has_available_encryption_subkey;
+///
+/// let key = std::fs::read("recipient.asc").unwrap();
+/// if has_available_encryption_subkey(&key).unwrap() {
+///     println!("key can receive encrypted messages");
+/// }
+/// ```
 pub fn has_available_encryption_subkey(data: &[u8]) -> Result<bool> {
     Ok(!get_available_encryption_subkeys(data)?.is_empty())
 }
@@ -404,6 +471,14 @@ pub fn has_available_encryption_subkey(data: &[u8]) -> Result<bool> {
 ///
 /// # Returns
 /// True if at least one valid signing subkey is available.
+///
+/// # Example
+/// ```no_run
+/// use wecanencrypt::has_available_signing_subkey;
+///
+/// let key = std::fs::read("signer.asc").unwrap();
+/// assert!(has_available_signing_subkey(&key).unwrap());
+/// ```
 pub fn has_available_signing_subkey(data: &[u8]) -> Result<bool> {
     Ok(!get_available_signing_subkeys(data)?.is_empty())
 }

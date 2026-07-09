@@ -1,4 +1,9 @@
-//! KeyStore implementation.
+//! SQLite-backed key storage and store-integrated crypto helpers.
+//!
+//! [`KeyStore`] persists OpenPGP keys, keeps lookup indexes for fingerprints,
+//! key IDs, user IDs, email addresses, and card associations, and exposes
+//! convenience wrappers that fetch keys from the store before calling the
+//! crate's encryption, decryption, signing, and verification helpers.
 
 use std::path::{Path, PathBuf};
 
@@ -966,6 +971,25 @@ impl KeyStore {
     /// * `card_manufacturer` - Human-readable manufacturer name
     /// * `slot` - Slot name: "signature", "encryption", or "authentication"
     /// * `slot_fingerprint` - Fingerprint of the key in this card slot
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use wecanencrypt::{create_key_simple, KeyStore};
+    ///
+    /// let store = KeyStore::open_in_memory().unwrap();
+    /// let key = create_key_simple("password", &["Alice <alice@example.com>"]).unwrap();
+    /// let fingerprint = store.import_key(&key.secret_key).unwrap();
+    ///
+    /// store.save_card_key(
+    ///     &fingerprint,
+    ///     "0006:00000001",
+    ///     "00000001",
+    ///     Some("Yubico"),
+    ///     "signature",
+    ///     &fingerprint,
+    /// ).unwrap();
+    /// ```
     pub fn save_card_key(
         &self,
         key_fingerprint: &str,
@@ -992,6 +1016,20 @@ impl KeyStore {
     /// # Arguments
     ///
     /// * `key_fingerprint` - Fingerprint of the key
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use wecanencrypt::{create_key_simple, KeyStore};
+    ///
+    /// let store = KeyStore::open_in_memory().unwrap();
+    /// let key = create_key_simple("password", &["Alice <alice@example.com>"]).unwrap();
+    /// let fingerprint = store.import_key(&key.secret_key).unwrap();
+    ///
+    /// store.save_card_key(&fingerprint, "0006:00000001", "00000001", None, "signature", &fingerprint).unwrap();
+    /// let cards = store.get_card_keys(&fingerprint).unwrap();
+    /// assert_eq!(cards.len(), 1);
+    /// ```
     pub fn get_card_keys(&self, key_fingerprint: &str) -> Result<Vec<StoredCardKey>> {
         let mut stmt = self.conn.prepare(
             "SELECT card_ident, card_serial, card_manufacturer, slot, slot_fingerprint, last_seen
@@ -1022,6 +1060,20 @@ impl KeyStore {
     /// # Arguments
     ///
     /// * `card_ident` - Card identifier ("MANUFACTURER:SERIAL")
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use wecanencrypt::{create_key_simple, KeyStore};
+    ///
+    /// let store = KeyStore::open_in_memory().unwrap();
+    /// let key = create_key_simple("password", &["Alice <alice@example.com>"]).unwrap();
+    /// let fingerprint = store.import_key(&key.secret_key).unwrap();
+    ///
+    /// store.save_card_key(&fingerprint, "0006:00000001", "00000001", None, "signature", &fingerprint).unwrap();
+    /// store.remove_card_keys_for_card("0006:00000001").unwrap();
+    /// assert!(store.get_card_keys(&fingerprint).unwrap().is_empty());
+    /// ```
     pub fn remove_card_keys_for_card(&self, card_ident: &str) -> Result<()> {
         self.conn
             .execute("DELETE FROM card_keys WHERE card_ident = ?1", [card_ident])?;
@@ -1035,6 +1087,20 @@ impl KeyStore {
     /// for callers that need a fingerprint→cards map — e.g. the
     /// desktop key-list view — so they avoid the N+1 pattern that
     /// otherwise falls out of per-key lookups.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use wecanencrypt::{create_key_simple, KeyStore};
+    ///
+    /// let store = KeyStore::open_in_memory().unwrap();
+    /// let key = create_key_simple("password", &["Alice <alice@example.com>"]).unwrap();
+    /// let fingerprint = store.import_key(&key.secret_key).unwrap();
+    /// store.save_card_key(&fingerprint, "0006:00000001", "00000001", None, "signature", &fingerprint).unwrap();
+    ///
+    /// let rows = store.list_all_card_keys().unwrap();
+    /// assert_eq!(rows[0].0, fingerprint);
+    /// ```
     pub fn list_all_card_keys(&self) -> Result<Vec<(String, StoredCardKey)>> {
         let mut stmt = self.conn.prepare(
             "SELECT fingerprint, card_ident, card_serial, card_manufacturer,
@@ -1072,6 +1138,20 @@ impl KeyStore {
     /// this for list / gallery views where the caller does not need
     /// the full signature graph; call [`KeyStore::get_key_info`] only
     /// when the user drills into a specific key.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use wecanencrypt::{create_key_simple, KeyStore};
+    ///
+    /// let store = KeyStore::open_in_memory().unwrap();
+    /// let key = create_key_simple("password", &["Alice <alice@example.com>"]).unwrap();
+    /// store.import_key(&key.secret_key).unwrap();
+    ///
+    /// let summaries = store.list_keys_summary().unwrap();
+    /// assert_eq!(summaries.len(), 1);
+    /// assert_eq!(summaries[0].primary_uid.as_deref(), Some("Alice <alice@example.com>"));
+    /// ```
     pub fn list_keys_summary(&self) -> Result<Vec<KeySummary>> {
         // 1) Primary-row columns.
         let mut stmt = self.conn.prepare(
@@ -1191,6 +1271,19 @@ impl KeyStore {
     /// Fetch a single [`KeySummary`] by fingerprint. Same payload as
     /// one entry of [`KeyStore::list_keys_summary`], scoped to a
     /// single row.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use wecanencrypt::{create_key_simple, KeyStore};
+    ///
+    /// let store = KeyStore::open_in_memory().unwrap();
+    /// let key = create_key_simple("password", &["Alice <alice@example.com>"]).unwrap();
+    /// let fingerprint = store.import_key(&key.secret_key).unwrap();
+    ///
+    /// let summary = store.get_key_summary(&fingerprint).unwrap();
+    /// assert_eq!(summary.fingerprint, fingerprint);
+    /// ```
     pub fn get_key_summary(&self, fingerprint: &str) -> Result<KeySummary> {
         let primary: (
             i32,

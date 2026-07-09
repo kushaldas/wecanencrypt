@@ -230,6 +230,18 @@ fn write_ssh_mpint(buf: &mut Vec<u8>, data: &[u8]) {
 ///
 /// # Returns
 /// Public key components in algorithm-specific format.
+///
+/// # Example
+/// ```no_run
+/// use wecanencrypt::{get_signing_pubkey, SigningPublicKey};
+///
+/// let key = std::fs::read("signer.asc").unwrap();
+/// match get_signing_pubkey(&key).unwrap() {
+///     SigningPublicKey::Ed25519 { public } => println!("Ed25519 {}", public),
+///     SigningPublicKey::Rsa(rsa) => println!("RSA n={} e={}", rsa.n, rsa.e),
+///     SigningPublicKey::Ecdsa { curve, point } => println!("{} {}", curve, point),
+/// }
+/// ```
 pub fn get_signing_pubkey(key_data: &[u8]) -> Result<SigningPublicKey> {
     let public_key = parse_public_key(key_data)?;
 
@@ -360,8 +372,11 @@ pub enum SshSignResult {
     Ed25519(Vec<u8>),
     /// ECDSA signature with named curve. Contains raw (r, s) scalars.
     Ecdsa {
+        /// SSH curve name such as `nistp256`, `nistp384`, or `nistp521`.
         curve: String,
+        /// ECDSA `r` scalar as unsigned big-endian bytes.
         r: Vec<u8>,
+        /// ECDSA `s` scalar as unsigned big-endian bytes.
         s: Vec<u8>,
     },
     /// RSA signature bytes.
@@ -375,7 +390,9 @@ pub enum SshSignResult {
 /// value is only consulted for RSA.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SshHashAlgorithm {
+    /// RSA/SHA-256 (`rsa-sha2-256`) signing.
     Sha256,
+    /// RSA/SHA-512 (`rsa-sha2-512`) signing.
     Sha512,
 }
 
@@ -393,6 +410,25 @@ pub enum SshHashAlgorithm {
 ///
 /// # Returns
 /// An `SshSignResult` containing the algorithm-specific signature.
+///
+/// # Example
+/// ```no_run
+/// use wecanencrypt::{ssh_sign_raw, SshHashAlgorithm, SshSignResult};
+///
+/// let secret_key = std::fs::read("auth-secret.asc").unwrap();
+/// let signature = ssh_sign_raw(
+///     &secret_key,
+///     b"ssh session identifier and request",
+///     "password",
+///     SshHashAlgorithm::Sha256,
+/// ).unwrap();
+///
+/// match signature {
+///     SshSignResult::Ed25519(sig) => println!("ed25519 signature: {} bytes", sig.len()),
+///     SshSignResult::Ecdsa { curve, r, s } => println!("{} r={} s={}", curve, r.len(), s.len()),
+///     SshSignResult::Rsa(sig) => println!("rsa signature: {} bytes", sig.len()),
+/// }
+/// ```
 pub fn ssh_sign_raw(
     secret_key: &[u8],
     data: &[u8],
