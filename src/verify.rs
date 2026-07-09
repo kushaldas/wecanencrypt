@@ -1,9 +1,10 @@
 //! OpenPGP signature verification helpers.
 //!
 //! The verification functions accept armored or binary public certificate bytes
-//! and verify inline, cleartext, detached, and file signatures. Revoked signing
-//! keys and revoked signing subkeys are ignored. Expired keys may still verify
-//! signatures made while the key was valid, matching OpenPGP's usual semantics.
+//! and verify inline, cleartext, detached, and file signatures. Revoked primary
+//! certificates and revoked signing subkeys are ignored. Expired keys may still
+//! verify signatures made while the key was valid, matching OpenPGP's usual
+//! semantics.
 
 use std::io::Cursor;
 use std::path::Path;
@@ -101,14 +102,17 @@ pub fn verify_bytes_detached(signer_key: &[u8], data: &[u8], signature: &[u8]) -
         }
     };
 
-    // Try verifying against primary key (only if not expired/revoked)
-    if is_primary_key_valid_for_verification(&public_key)
-        && sig.verify(&public_key.primary_key, data).is_ok()
-    {
+    if !is_primary_key_valid_for_verification(&public_key) {
+        return Ok(false);
+    }
+
+    // Try verifying against primary key
+    if sig.verify(&public_key.primary_key, data).is_ok() {
         return Ok(true);
     }
 
-    // Try verifying against non-revoked subkeys only
+    // Try verifying against non-revoked subkeys only. The primary certificate
+    // revocation check above applies to these subkey signatures too.
     for subkey in &public_key.public_subkeys {
         if can_subkey_sign(&public_key.primary_key, subkey)
             && !is_subkey_revoked(&public_key.primary_key, subkey)
@@ -176,14 +180,17 @@ fn verify_cleartext(public_key: &SignedPublicKey, signed_message: &[u8]) -> Resu
     let (msg, _) =
         CleartextSignedMessage::from_string(&text).map_err(|e| Error::Parse(e.to_string()))?;
 
-    // Try verifying against primary key (only if not expired/revoked)
-    if is_primary_key_valid_for_verification(public_key)
-        && msg.verify(&public_key.primary_key).is_ok()
-    {
+    if !is_primary_key_valid_for_verification(public_key) {
+        return Ok(false);
+    }
+
+    // Try verifying against primary key
+    if msg.verify(&public_key.primary_key).is_ok() {
         return Ok(true);
     }
 
-    // Try verifying against non-revoked subkeys only
+    // Try verifying against non-revoked subkeys only. The primary certificate
+    // revocation check above applies to these subkey signatures too.
     for subkey in &public_key.public_subkeys {
         if can_subkey_sign(&public_key.primary_key, subkey)
             && !is_subkey_revoked(&public_key.primary_key, subkey)
@@ -212,15 +219,18 @@ fn extract_cleartext(
         Err(_) => return Ok(None),
     };
 
-    // Try verifying against primary key (only if not revoked)
-    if is_primary_key_valid_for_verification(public_key)
-        && msg.verify(&public_key.primary_key).is_ok()
-    {
+    if !is_primary_key_valid_for_verification(public_key) {
+        return Ok(None);
+    }
+
+    // Try verifying against primary key
+    if msg.verify(&public_key.primary_key).is_ok() {
         let content = normalize_line_endings(&msg.signed_text());
         return Ok(Some(content));
     }
 
-    // Try verifying against non-revoked subkeys only
+    // Try verifying against non-revoked subkeys only. The primary certificate
+    // revocation check above applies to these subkey signatures too.
     for subkey in &public_key.public_subkeys {
         if can_subkey_sign(&public_key.primary_key, subkey)
             && !is_subkey_revoked(&public_key.primary_key, subkey)
@@ -259,14 +269,17 @@ fn verify_inline_signed(public_key: &SignedPublicKey, signed_message: &[u8]) -> 
         .as_data_vec()
         .map_err(|e| Error::Parse(e.to_string()))?;
 
-    // Try verifying against primary key (only if not revoked)
-    if is_primary_key_valid_for_verification(public_key)
-        && message.verify(&public_key.primary_key).is_ok()
-    {
+    if !is_primary_key_valid_for_verification(public_key) {
+        return Ok(false);
+    }
+
+    // Try verifying against primary key
+    if message.verify(&public_key.primary_key).is_ok() {
         return Ok(true);
     }
 
-    // Try verifying against non-revoked subkeys only
+    // Try verifying against non-revoked subkeys only. The primary certificate
+    // revocation check above applies to these subkey signatures too.
     for subkey in &public_key.public_subkeys {
         if can_subkey_sign(&public_key.primary_key, subkey)
             && !is_subkey_revoked(&public_key.primary_key, subkey)
@@ -299,14 +312,17 @@ fn extract_inline_signed(public_key: &SignedPublicKey, signed_message: &[u8]) ->
         .as_data_vec()
         .map_err(|e| Error::Parse(e.to_string()))?;
 
-    // Try verifying against primary key (only if not revoked)
-    if is_primary_key_valid_for_verification(public_key)
-        && message.verify(&public_key.primary_key).is_ok()
-    {
+    if !is_primary_key_valid_for_verification(public_key) {
+        return Err(Error::VerificationFailed);
+    }
+
+    // Try verifying against primary key
+    if message.verify(&public_key.primary_key).is_ok() {
         return Ok(content);
     }
 
-    // Try verifying against non-revoked subkeys only
+    // Try verifying against non-revoked subkeys only. The primary certificate
+    // revocation check above applies to these subkey signatures too.
     for subkey in &public_key.public_subkeys {
         if can_subkey_sign(&public_key.primary_key, subkey)
             && !is_subkey_revoked(&public_key.primary_key, subkey)
