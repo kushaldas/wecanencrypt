@@ -24,6 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of being provisioned onto a card and later rejected by the rest of
   the library. Regression tests cover expired signing and encryption
   subkeys.
+- Signature verification now rejects signing-subkey signatures when
+  the containing primary certificate has a verified revocation.
+  Regression tests cover detached, inline, cleartext, and extract
+  verification through the public API.
 
 ### Fixed
 

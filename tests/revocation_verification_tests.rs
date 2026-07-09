@@ -14,6 +14,8 @@
 //! public API's verdict matches the cryptographic truth rather than
 //! the packet-type tag.
 
+use std::io::Cursor;
+
 use pgp::composed::{
     Deserializable, SignedKeyDetails, SignedPublicKey, SignedPublicSubKey, SignedSecretKey,
     SignedSecretSubKey,
@@ -27,8 +29,9 @@ use pgp::composed::DetachedSignature;
 use wecanencrypt::{
     create_key_simple, decrypt_bytes, encrypt_bytes, get_all_available_subkeys,
     get_available_authentication_subkeys, get_available_encryption_subkeys,
-    get_available_signing_subkeys, get_signing_pubkey, get_ssh_pubkey, parse_key_bytes, revoke_uid,
-    sign_bytes, sign_bytes_detached, verify_bytes, verify_bytes_detached,
+    get_available_signing_subkeys, get_signing_pubkey, get_ssh_pubkey, parse_key_bytes, revoke_key,
+    revoke_uid, sign_bytes, sign_bytes_cleartext, sign_bytes_detached, verify_and_extract_bytes,
+    verify_bytes, verify_bytes_detached,
 };
 
 fn parse_secret(bytes: &[u8]) -> SignedSecretKey {
@@ -36,6 +39,45 @@ fn parse_secret(bytes: &[u8]) -> SignedSecretKey {
         .or_else(|_| SignedSecretKey::from_bytes(bytes).map(|k| (k, Default::default())))
         .expect("parse secret key");
     parsed
+}
+
+fn assert_detached_signature_issued_by_secret_subkey(secret: &SignedSecretKey, sig_armored: &str) {
+    let (parsed, _) =
+        DetachedSignature::from_armor_single(Cursor::new(sig_armored.as_bytes())).unwrap();
+    let issuer_fps: Vec<String> = parsed
+        .signature
+        .issuer_fingerprint()
+        .iter()
+        .map(|fp| hex::encode_upper(fp.as_bytes()))
+        .collect();
+    let issuer_kids: Vec<String> = parsed
+        .signature
+        .issuer_key_id()
+        .iter()
+        .map(|kid| hex::encode_upper(kid.as_ref()))
+        .collect();
+    assert!(
+        !issuer_fps.is_empty() || !issuer_kids.is_empty(),
+        "detached signature must carry an issuer fingerprint or key ID"
+    );
+
+    let subkey_fps: Vec<String> = secret
+        .secret_subkeys
+        .iter()
+        .map(|subkey| hex::encode_upper(subkey.key.fingerprint().as_bytes()))
+        .collect();
+    let subkey_kids: Vec<String> = subkey_fps
+        .iter()
+        .map(|fp| fp[fp.len() - 16..].to_string())
+        .collect();
+
+    assert!(
+        issuer_fps.iter().any(|fp| subkey_fps.contains(fp))
+            || issuer_kids.iter().any(|kid| subkey_kids.contains(kid)),
+        "test signature must be issued by a signing subkey \
+         (issuer_fps={issuer_fps:?}, issuer_kids={issuer_kids:?}, \
+         subkey_fps={subkey_fps:?})"
+    );
 }
 
 /// Build a SubkeyRevocation signature over `subkey` issued by `signer`.
@@ -584,6 +626,84 @@ fn forged_subkey_revocation_does_not_block_verify() {
     assert!(
         ok,
         "forged SubkeyRevocation must not cause a legitimate signature to fail verification"
+    );
+}
+
+#[test]
+fn revoked_primary_rejects_signing_subkey_signatures_across_verify_apis() {
+    let key = create_key_simple("pw", &["Alice <alice@example.com>"]).unwrap();
+    let message = b"revoked primary should reject subkey signatures";
+
+    let signed = sign_bytes(&key.secret_key, message, "pw").expect("sign inline");
+    let cleartext = sign_bytes_cleartext(&key.secret_key, message, "pw").expect("sign cleartext");
+    let detached = sign_bytes_detached(&key.secret_key, message, "pw").expect("sign detached");
+
+    let original_secret = parse_secret(&key.secret_key);
+    assert_detached_signature_issued_by_secret_subkey(&original_secret, &detached);
+
+    assert!(
+        verify_bytes(key.public_key.as_bytes(), &signed).expect("verify inline before revocation"),
+        "non-revoked certificate must verify inline subkey signatures"
+    );
+    assert!(
+        verify_bytes(key.public_key.as_bytes(), &cleartext)
+            .expect("verify cleartext before revocation"),
+        "non-revoked certificate must verify cleartext subkey signatures"
+    );
+    assert!(
+        verify_bytes_detached(key.public_key.as_bytes(), message, detached.as_bytes())
+            .expect("verify detached before revocation"),
+        "non-revoked certificate must verify detached subkey signatures"
+    );
+    assert_eq!(
+        verify_and_extract_bytes(key.public_key.as_bytes(), &signed)
+            .expect("extract inline before revocation"),
+        message
+    );
+    assert_eq!(
+        verify_and_extract_bytes(key.public_key.as_bytes(), &cleartext)
+            .expect("extract cleartext before revocation"),
+        message
+    );
+
+    let revoked_secret = revoke_key(&key.secret_key, "pw").expect("revoke primary");
+    let revoked_public = parse_secret(&revoked_secret)
+        .to_public_key()
+        .to_bytes()
+        .expect("serialize revoked public key");
+    assert!(
+        parse_key_bytes(&revoked_public, true)
+            .expect("parse revoked public key")
+            .is_revoked,
+        "test setup must produce a revoked public certificate"
+    );
+
+    assert!(
+        !verify_bytes_detached(&revoked_public, message, detached.as_bytes())
+            .expect("verify detached after revocation"),
+        "revoked primary certificate must reject detached subkey signatures"
+    );
+    assert!(
+        !verify_bytes(&revoked_public, &signed).expect("verify inline after revocation"),
+        "revoked primary certificate must reject inline subkey signatures"
+    );
+    assert!(
+        !verify_bytes(&revoked_public, &cleartext).expect("verify cleartext after revocation"),
+        "revoked primary certificate must reject cleartext subkey signatures"
+    );
+    assert!(
+        matches!(
+            verify_and_extract_bytes(&revoked_public, &signed),
+            Err(wecanencrypt::Error::VerificationFailed)
+        ),
+        "revoked primary certificate must not extract inline signed content"
+    );
+    assert!(
+        matches!(
+            verify_and_extract_bytes(&revoked_public, &cleartext),
+            Err(wecanencrypt::Error::VerificationFailed)
+        ),
+        "revoked primary certificate must not extract cleartext signed content"
     );
 }
 
