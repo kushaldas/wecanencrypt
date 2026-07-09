@@ -352,7 +352,6 @@ fn sign_bytes_detached_impl(
     let password: Password = password.into();
 
     let mut rng = thread_rng();
-    let primary_can_sign = can_secret_primary_sign(&secret_key);
 
     // Prefer a signing subkey if available; fall back to primary key
     let (signature, hash_used) = if !use_primary {
@@ -368,7 +367,7 @@ fn sign_bytes_detached_impl(
             )
             .map_err(|e| Error::Crypto(e.to_string()))?;
             (sig, hash_alg)
-        } else if primary_can_sign {
+        } else if can_secret_primary_sign(&secret_key) {
             let hash_alg = hash_override
                 .unwrap_or_else(|| select_hash_for_params(secret_key.primary_key.public_params()));
             let sig = DetachedSignature::sign_binary_data(
@@ -383,7 +382,7 @@ fn sign_bytes_detached_impl(
         } else {
             return Err(Error::NoSigningSubkey);
         }
-    } else if !primary_can_sign {
+    } else if !can_secret_primary_sign(&secret_key) {
         return Err(Error::NoSigningSubkey);
     } else {
         let hash_alg = hash_override
@@ -488,7 +487,6 @@ fn sign_bytes_internal(
     let password_obj: Password = password.into();
 
     let mut rng = thread_rng();
-    let primary_can_sign = can_secret_primary_sign(&secret_key);
 
     // Determine which key to use: signing subkey (preferred) or primary key.
     // When not explicitly using the primary, check that the primary has the
@@ -500,11 +498,11 @@ fn sign_bytes_internal(
     };
     let use_subkey = signing_subkey.is_some();
 
-    if use_primary && !primary_can_sign {
-        return Err(Error::NoSigningSubkey);
-    }
-
-    if !use_subkey && !primary_can_sign {
+    if use_primary {
+        if !can_secret_primary_sign(&secret_key) {
+            return Err(Error::NoSigningSubkey);
+        }
+    } else if !use_subkey && !can_secret_primary_sign(&secret_key) {
         return Err(Error::NoSigningSubkey);
     }
 
