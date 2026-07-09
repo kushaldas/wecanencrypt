@@ -32,6 +32,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   verified subkey binding when evaluating signing and authentication
   key flags. Regression tests cover newer bindings that remove those
   roles while stale historical bindings remain on the key.
+- Expiry maintenance now refreshes only user IDs and subkeys that
+  already have verified owner self-certifications or primary-issued
+  subkey bindings. This prevents unverified metadata introduced by a
+  public-key merge from being upgraded into fresh owner signatures.
+  Regression tests cover poisoned merged user IDs and public subkeys.
 
 ### Fixed
 
