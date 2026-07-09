@@ -23,7 +23,7 @@ use rand::thread_rng;
 
 use crate::error::{Error, Result};
 use crate::internal::{
-    can_details_sign, parse_public_key, parse_secret_key, subkey_binding_can_encrypt,
+    can_secret_primary_sign, parse_public_key, parse_secret_key, subkey_binding_can_encrypt,
     validate_secret_signing_usage, verified_usable_subkey_binding, SigningKeyUsage,
 };
 use crate::sign::{find_signing_subkey, select_hash_for_params};
@@ -293,7 +293,7 @@ pub fn sign_and_encrypt_to_multiple(
         if let Some(subkey) = find_signing_subkey(&secret_key) {
             let h = select_hash_for_params(subkey.key.public_params());
             (&subkey.key, h)
-        } else if can_details_sign(&secret_key.details) {
+        } else if can_secret_primary_sign(&secret_key) {
             let h = select_hash_for_params(secret_key.primary_key.public_params());
             (&secret_key.primary_key, h)
         } else {
@@ -406,7 +406,7 @@ pub fn sign_and_encrypt_to_multiple_with_hidden(
         if let Some(subkey) = find_signing_subkey(&secret_key) {
             let h = select_hash_for_params(subkey.key.public_params());
             (&subkey.key, h)
-        } else if can_details_sign(&secret_key.details) {
+        } else if can_secret_primary_sign(&secret_key) {
             let h = select_hash_for_params(secret_key.primary_key.public_params());
             (&secret_key.primary_key, h)
         } else {

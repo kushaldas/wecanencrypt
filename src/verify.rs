@@ -15,7 +15,8 @@ use pgp::composed::{
 
 use crate::error::{Error, Result};
 use crate::internal::{
-    can_subkey_sign, is_primary_key_valid_for_verification, is_subkey_revoked, parse_public_key,
+    can_primary_sign, can_subkey_sign, is_primary_key_valid_for_verification, is_subkey_revoked,
+    parse_public_key,
 };
 
 /// Verify a signed message (inline or cleartext signature).
@@ -106,8 +107,9 @@ pub fn verify_bytes_detached(signer_key: &[u8], data: &[u8], signature: &[u8]) -
         return Ok(false);
     }
 
-    // Try verifying against primary key
-    if sig.verify(&public_key.primary_key, data).is_ok() {
+    // Try verifying against the primary key only if the primary is authorized
+    // for data signatures.
+    if can_primary_sign(&public_key) && sig.verify(&public_key.primary_key, data).is_ok() {
         return Ok(true);
     }
 
@@ -184,8 +186,9 @@ fn verify_cleartext(public_key: &SignedPublicKey, signed_message: &[u8]) -> Resu
         return Ok(false);
     }
 
-    // Try verifying against primary key
-    if msg.verify(&public_key.primary_key).is_ok() {
+    // Try verifying against the primary key only if the primary is authorized
+    // for data signatures.
+    if can_primary_sign(public_key) && msg.verify(&public_key.primary_key).is_ok() {
         return Ok(true);
     }
 
@@ -223,8 +226,9 @@ fn extract_cleartext(
         return Err(Error::VerificationFailed);
     }
 
-    // Try verifying against primary key
-    if msg.verify(&public_key.primary_key).is_ok() {
+    // Try verifying against the primary key only if the primary is authorized
+    // for data signatures.
+    if can_primary_sign(public_key) && msg.verify(&public_key.primary_key).is_ok() {
         let content = normalize_line_endings(&msg.signed_text());
         return Ok(Some(content));
     }
@@ -241,7 +245,7 @@ fn extract_cleartext(
         }
     }
 
-    Ok(None)
+    Err(Error::VerificationFailed)
 }
 
 /// Normalize CRLF line endings to LF.
@@ -273,8 +277,9 @@ fn verify_inline_signed(public_key: &SignedPublicKey, signed_message: &[u8]) -> 
         return Ok(false);
     }
 
-    // Try verifying against primary key
-    if message.verify(&public_key.primary_key).is_ok() {
+    // Try verifying against the primary key only if the primary is authorized
+    // for data signatures.
+    if can_primary_sign(public_key) && message.verify(&public_key.primary_key).is_ok() {
         return Ok(true);
     }
 
@@ -316,8 +321,9 @@ fn extract_inline_signed(public_key: &SignedPublicKey, signed_message: &[u8]) ->
         return Err(Error::VerificationFailed);
     }
 
-    // Try verifying against primary key
-    if message.verify(&public_key.primary_key).is_ok() {
+    // Try verifying against the primary key only if the primary is authorized
+    // for data signatures.
+    if can_primary_sign(public_key) && message.verify(&public_key.primary_key).is_ok() {
         return Ok(content);
     }
 

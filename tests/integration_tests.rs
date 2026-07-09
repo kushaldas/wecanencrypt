@@ -474,6 +474,63 @@ mod encryption {
 
 mod signing {
     use super::*;
+    use std::io::Cursor;
+    use wecanencrypt::pgp::composed::{
+        CleartextSignedMessage, Deserializable, DetachedSignature, MessageBuilder, SignedSecretKey,
+    };
+    use wecanencrypt::pgp::crypto::hash::HashAlgorithm;
+    use wecanencrypt::pgp::types::Password;
+
+    fn parse_secret(data: &[u8]) -> SignedSecretKey {
+        SignedSecretKey::from_armor_single(Cursor::new(data))
+            .map(|(k, _)| k)
+            .or_else(|_| SignedSecretKey::from_bytes(Cursor::new(data)))
+            .expect("parse as secret")
+    }
+
+    fn raw_primary_detached_signature(secret_key: &SignedSecretKey, data: &[u8]) -> String {
+        let mut rng = rand::thread_rng();
+        let signature = DetachedSignature::sign_binary_data(
+            &mut rng,
+            &secret_key.primary_key,
+            &Password::from(TEST_PASSWORD),
+            HashAlgorithm::Sha256,
+            Cursor::new(data),
+        )
+        .expect("create primary detached signature");
+        signature
+            .to_armored_string(None.into())
+            .expect("armor detached signature")
+    }
+
+    fn raw_primary_inline_signature(secret_key: &SignedSecretKey, data: &[u8]) -> Vec<u8> {
+        let mut rng = rand::thread_rng();
+        let mut builder = MessageBuilder::from_bytes("", data.to_vec());
+        builder.sign(
+            &secret_key.primary_key,
+            Password::from(TEST_PASSWORD),
+            HashAlgorithm::Sha256,
+        );
+        builder
+            .to_armored_string(&mut rng, None.into())
+            .expect("armor inline signature")
+            .into_bytes()
+    }
+
+    fn raw_primary_cleartext_signature(secret_key: &SignedSecretKey, data: &[u8]) -> Vec<u8> {
+        let mut rng = rand::thread_rng();
+        let text = String::from_utf8_lossy(data);
+        CleartextSignedMessage::sign(
+            &mut rng,
+            &text,
+            &secret_key.primary_key,
+            &Password::from(TEST_PASSWORD),
+        )
+        .expect("create cleartext signature")
+        .to_armored_string(None.into())
+        .expect("armor cleartext signature")
+        .into_bytes()
+    }
 
     #[test]
     fn test_sign_verify_roundtrip() {
@@ -586,7 +643,19 @@ mod signing {
             sign_bytes_with_primary_key,
         };
 
-        let (secret_key, _) = generate_test_key();
+        let key = create_key(
+            TEST_PASSWORD,
+            &[TEST_UID],
+            CipherSuite::Cv25519,
+            None,
+            None,
+            None,
+            SubkeyFlags::all(),
+            true,
+            true,
+        )
+        .unwrap();
+        let secret_key = key.secret_key;
         let public_key = get_pub_key(&secret_key).unwrap();
         let message = b"Test primary key signing";
 
@@ -607,6 +676,98 @@ mod signing {
         let valid =
             verify_bytes_detached(public_key.as_bytes(), message, signature.as_bytes()).unwrap();
         assert!(valid);
+    }
+
+    #[test]
+    fn test_forced_primary_signing_rejects_certify_only_primary() {
+        use wecanencrypt::{
+            sign_bytes_cleartext_with_primary_key, sign_bytes_detached_with_primary_key,
+            sign_bytes_with_primary_key,
+        };
+
+        let key = create_key(
+            TEST_PASSWORD,
+            &[TEST_UID],
+            CipherSuite::Cv25519,
+            None,
+            None,
+            None,
+            SubkeyFlags::encryption_only(),
+            false,
+            true,
+        )
+        .unwrap();
+        let info = parse_key_bytes(&key.secret_key, true).unwrap();
+        assert!(!info.can_primary_sign);
+
+        let message = b"certify-only primary must not sign data";
+
+        let result = sign_bytes_with_primary_key(&key.secret_key, message, TEST_PASSWORD);
+        assert!(
+            matches!(result, Err(wecanencrypt::Error::NoSigningSubkey)),
+            "forced inline primary signing should reject certify-only primary, got {result:?}"
+        );
+
+        let result = sign_bytes_cleartext_with_primary_key(&key.secret_key, message, TEST_PASSWORD);
+        assert!(
+            matches!(result, Err(wecanencrypt::Error::NoSigningSubkey)),
+            "forced cleartext primary signing should reject certify-only primary, got {result:?}"
+        );
+
+        let result = sign_bytes_detached_with_primary_key(&key.secret_key, message, TEST_PASSWORD);
+        assert!(
+            matches!(result, Err(wecanencrypt::Error::NoSigningSubkey)),
+            "forced detached primary signing should reject certify-only primary, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_certify_only_primary_signatures_fail_policy_verification() {
+        let key = create_key(
+            TEST_PASSWORD,
+            &[TEST_UID],
+            CipherSuite::Cv25519,
+            None,
+            None,
+            None,
+            SubkeyFlags::encryption_only(),
+            false,
+            true,
+        )
+        .unwrap();
+        let public_key = get_pub_key(&key.secret_key).unwrap();
+        let secret_key = parse_secret(&key.secret_key);
+        let message = b"certify-only primary signature must not verify as data signing";
+
+        let detached = raw_primary_detached_signature(&secret_key, message);
+        let valid =
+            verify_bytes_detached(public_key.as_bytes(), message, detached.as_bytes()).unwrap();
+        assert!(
+            !valid,
+            "policy-aware detached verification must reject certify-only primary signatures"
+        );
+
+        let inline = raw_primary_inline_signature(&secret_key, message);
+        let valid = verify_bytes(public_key.as_bytes(), &inline).unwrap();
+        assert!(
+            !valid,
+            "policy-aware inline verification must reject certify-only primary signatures"
+        );
+        assert!(matches!(
+            verify_and_extract_bytes(public_key.as_bytes(), &inline),
+            Err(wecanencrypt::Error::VerificationFailed)
+        ));
+
+        let cleartext = raw_primary_cleartext_signature(&secret_key, message);
+        let valid = verify_bytes(public_key.as_bytes(), &cleartext).unwrap();
+        assert!(
+            !valid,
+            "policy-aware cleartext verification must reject certify-only primary signatures"
+        );
+        assert!(matches!(
+            verify_and_extract_bytes(public_key.as_bytes(), &cleartext),
+            Err(wecanencrypt::Error::VerificationFailed)
+        ));
     }
 
     #[test]
