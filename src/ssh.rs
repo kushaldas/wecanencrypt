@@ -12,8 +12,8 @@ use zeroize::Zeroizing;
 
 use crate::error::{Error, Result};
 use crate::internal::{
-    can_primary_sign, parse_public_key, parse_secret_key, subkey_binding_can_sign,
-    verified_usable_secret_subkey_binding, verified_usable_subkey_binding,
+    can_primary_sign, parse_public_key, parse_secret_key, subkey_binding_can_authenticate,
+    subkey_binding_can_sign, verified_usable_secret_subkey_binding, verified_usable_subkey_binding,
 };
 use crate::types::{RsaPublicKey, SigningPublicKey};
 
@@ -43,7 +43,7 @@ pub fn get_ssh_pubkey(key_data: &[u8], comment: Option<&str>) -> Result<String> 
         else {
             return false;
         };
-        binding.key_flags().authentication()
+        subkey_binding_can_authenticate(binding)
     });
 
     let params = match auth_subkey {
@@ -411,7 +411,7 @@ pub fn ssh_sign_raw(
         ) else {
             continue;
         };
-        if !binding.key_flags().authentication() {
+        if !subkey_binding_can_authenticate(binding) {
             continue;
         }
 

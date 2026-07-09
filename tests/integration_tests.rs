@@ -936,9 +936,11 @@ mod reader_encryption {
 
 mod key_flag_policy {
     use super::*;
-    use wecanencrypt::pgp::composed::{SignedKeyDetails, SignedSecretKey};
+    use wecanencrypt::pgp::composed::{
+        SignedKeyDetails, SignedPublicSubKey, SignedSecretKey, SignedSecretSubKey,
+    };
     use wecanencrypt::pgp::packet::{
-        KeyFlags, PacketTrait, SignatureConfig, SignatureType, Subpacket, SubpacketData,
+        KeyFlags, PacketTrait, Signature, SignatureConfig, SignatureType, Subpacket, SubpacketData,
     };
     use wecanencrypt::pgp::ser::Serialize;
     use wecanencrypt::pgp::types::{KeyDetails, KeyVersion, Password, SignedUser, Timestamp};
@@ -1025,6 +1027,109 @@ mod key_flag_policy {
             ),
             secret_key.public_subkeys.clone(),
             secret_key.secret_subkeys.clone(),
+        );
+
+        updated.to_bytes().unwrap()
+    }
+
+    /// Helper: create a newer verified subkey binding with specific key flags.
+    fn subkey_binding_with_flags(
+        secret_key: &SignedSecretKey,
+        subkey: &SignedSecretSubKey,
+        password: &str,
+        sign_flag: bool,
+        auth_flag: bool,
+    ) -> Signature {
+        let mut rng = rand::thread_rng();
+        let mut flags = KeyFlags::default();
+        flags.set_sign(sign_flag);
+        flags.set_authentication(auth_flag);
+
+        let newest_binding_created = subkey
+            .signatures
+            .iter()
+            .filter(|sig| sig.typ() == Some(SignatureType::SubkeyBinding))
+            .filter_map(|sig| sig.created().map(|ts| ts.as_secs()))
+            .max()
+            .unwrap_or_else(|| subkey.key.created_at().as_secs());
+
+        let mut config = SignatureConfig::from_key(
+            &mut rng,
+            &secret_key.primary_key,
+            SignatureType::SubkeyBinding,
+        )
+        .unwrap();
+        config.hashed_subpackets = vec![
+            Subpacket::regular(SubpacketData::SignatureCreationTime(Timestamp::from_secs(
+                newest_binding_created + 2,
+            )))
+            .unwrap(),
+            Subpacket::regular(SubpacketData::IssuerFingerprint(
+                secret_key.primary_key.fingerprint(),
+            ))
+            .unwrap(),
+            Subpacket::regular(SubpacketData::KeyFlags(flags)).unwrap(),
+        ];
+        if secret_key.primary_key.version() <= KeyVersion::V4 {
+            config.unhashed_subpackets = vec![Subpacket::regular(SubpacketData::IssuerKeyId(
+                secret_key.primary_key.legacy_key_id(),
+            ))
+            .unwrap()];
+        }
+
+        config
+            .sign_subkey_binding(
+                &secret_key.primary_key,
+                secret_key.primary_key.public_key(),
+                &Password::from(password),
+                subkey.key.public_key(),
+            )
+            .unwrap()
+    }
+
+    /// Helper: append a newer verified binding to a secret subkey and its
+    /// matching public copy, preserving the old binding history.
+    fn resign_subkey_with_flags(
+        secret_data: &[u8],
+        password: &str,
+        target_fp: &wecanencrypt::pgp::types::Fingerprint,
+        sign_flag: bool,
+        auth_flag: bool,
+    ) -> Vec<u8> {
+        let secret_key = parse_secret(secret_data);
+        let target = secret_key
+            .secret_subkeys
+            .iter()
+            .find(|subkey| &subkey.key.fingerprint() == target_fp)
+            .expect("target subkey exists");
+        let binding =
+            subkey_binding_with_flags(&secret_key, target, password, sign_flag, auth_flag);
+
+        let mut secret_subkeys = secret_key.secret_subkeys.clone();
+        let idx = secret_subkeys
+            .iter()
+            .position(|subkey| &subkey.key.fingerprint() == target_fp)
+            .expect("target secret subkey exists");
+        let secret_subkey = &mut secret_subkeys[idx];
+        let mut secret_sigs = secret_subkey.signatures.clone();
+        secret_sigs.push(binding.clone());
+        *secret_subkey = SignedSecretSubKey::new(secret_subkey.key.clone(), secret_sigs);
+
+        let mut public_subkeys = secret_key.public_subkeys.clone();
+        if let Some(public_subkey) = public_subkeys
+            .iter_mut()
+            .find(|subkey| &subkey.key.fingerprint() == target_fp)
+        {
+            let mut public_sigs = public_subkey.signatures.clone();
+            public_sigs.push(binding);
+            *public_subkey = SignedPublicSubKey::new(public_subkey.key.clone(), public_sigs);
+        }
+
+        let updated = SignedSecretKey::new(
+            secret_key.primary_key.clone(),
+            secret_key.details.clone(),
+            public_subkeys,
+            secret_subkeys,
         );
 
         updated.to_bytes().unwrap()
@@ -1194,6 +1299,151 @@ mod key_flag_policy {
         assert!(
             !info2.can_primary_sign,
             "After expiry update, certify-only key should still not have sign capability"
+        );
+    }
+
+    #[test]
+    fn test_latest_subkey_binding_removing_sign_flag_blocks_signing_helpers() {
+        let key = create_key(
+            TEST_PASSWORD,
+            &[TEST_UID],
+            CipherSuite::Cv25519,
+            None,
+            None,
+            None,
+            SubkeyFlags::signing_only(),
+            false,
+            true,
+        )
+        .unwrap();
+        let secret_key = parse_secret(&key.secret_key);
+        let signing_fp = secret_key
+            .secret_subkeys
+            .iter()
+            .find(|subkey| subkey.signatures.iter().any(|sig| sig.key_flags().sign()))
+            .expect("generated key has a signing subkey")
+            .key
+            .fingerprint();
+
+        assert!(
+            sign_bytes_detached(&key.secret_key, b"before role removal", TEST_PASSWORD).is_ok(),
+            "original signing subkey should be usable before the newer binding removes signing"
+        );
+
+        let updated =
+            resign_subkey_with_flags(&key.secret_key, TEST_PASSWORD, &signing_fp, false, false);
+        let updated_public = get_pub_key(&updated).unwrap();
+
+        assert!(
+            !wecanencrypt::has_available_signing_subkey(&updated).unwrap(),
+            "latest binding without sign flag must remove the available signing subkey"
+        );
+        assert!(
+            matches!(
+                sign_bytes(&updated, b"inline", TEST_PASSWORD),
+                Err(wecanencrypt::Error::NoSigningSubkey)
+            ),
+            "inline signing must not use a stale historical sign flag"
+        );
+        assert!(
+            matches!(
+                sign_bytes_cleartext(&updated, b"cleartext", TEST_PASSWORD),
+                Err(wecanencrypt::Error::NoSigningSubkey)
+            ),
+            "cleartext signing must not use a stale historical sign flag"
+        );
+        assert!(
+            matches!(
+                sign_bytes_detached(&updated, b"detached", TEST_PASSWORD),
+                Err(wecanencrypt::Error::NoSigningSubkey)
+            ),
+            "detached signing must not use a stale historical sign flag"
+        );
+        assert!(
+            matches!(
+                wecanencrypt::get_signing_pubkey(updated_public.as_bytes()),
+                Err(wecanencrypt::Error::NoSigningSubkey)
+            ),
+            "signing public-key export must not use a stale historical sign flag"
+        );
+    }
+
+    #[test]
+    fn test_latest_subkey_binding_removing_auth_flag_blocks_ssh_helpers() {
+        let key = create_key(
+            TEST_PASSWORD,
+            &[TEST_UID],
+            CipherSuite::Cv25519,
+            None,
+            None,
+            None,
+            SubkeyFlags {
+                encryption: false,
+                signing: false,
+                authentication: true,
+            },
+            false,
+            true,
+        )
+        .unwrap();
+        let secret_key = parse_secret(&key.secret_key);
+        let auth_fp = secret_key
+            .secret_subkeys
+            .iter()
+            .find(|subkey| {
+                subkey
+                    .signatures
+                    .iter()
+                    .any(|sig| sig.key_flags().authentication())
+            })
+            .expect("generated key has an authentication subkey")
+            .key
+            .fingerprint();
+
+        let public_before = get_pub_key(&key.secret_key).unwrap();
+        assert!(
+            wecanencrypt::get_ssh_pubkey(public_before.as_bytes(), None).is_ok(),
+            "original authentication subkey should export for SSH"
+        );
+        assert!(
+            wecanencrypt::ssh_sign_raw(
+                &key.secret_key,
+                b"before role removal",
+                TEST_PASSWORD,
+                wecanencrypt::SshHashAlgorithm::Sha256,
+            )
+            .is_ok(),
+            "original authentication subkey should sign SSH challenges"
+        );
+
+        let updated =
+            resign_subkey_with_flags(&key.secret_key, TEST_PASSWORD, &auth_fp, false, false);
+        let updated_public = get_pub_key(&updated).unwrap();
+
+        assert!(
+            wecanencrypt::get_available_authentication_subkeys(&updated)
+                .unwrap()
+                .is_empty(),
+            "latest binding without auth flag must remove the available authentication subkey"
+        );
+        assert!(
+            matches!(
+                wecanencrypt::get_ssh_pubkey(updated_public.as_bytes(), None),
+                Err(wecanencrypt::Error::NoAuthenticationSubkey)
+            ),
+            "SSH public-key export must not use a stale historical auth flag"
+        );
+        assert!(
+            matches!(
+                wecanencrypt::ssh_sign_raw(
+                    &updated,
+                    b"after role removal",
+                    TEST_PASSWORD,
+                    wecanencrypt::SshHashAlgorithm::Sha256,
+                ),
+                Err(wecanencrypt::Error::NoAuthenticationSubkey)
+            ),
+            "SSH raw signing must not use a stale historical auth flag"
         );
     }
 }
