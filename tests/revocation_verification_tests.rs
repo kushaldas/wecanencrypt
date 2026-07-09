@@ -699,7 +699,10 @@ fn revoked_primary_rejects_signing_subkey_signatures_across_verify_apis() {
         "revoked primary certificate must not extract inline signed content"
     );
     assert!(
-        verify_and_extract_bytes(&revoked_public, &cleartext).is_err(),
+        matches!(
+            verify_and_extract_bytes(&revoked_public, &cleartext),
+            Err(wecanencrypt::Error::VerificationFailed)
+        ),
         "revoked primary certificate must not extract cleartext signed content"
     );
 }

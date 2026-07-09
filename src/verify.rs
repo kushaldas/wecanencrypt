@@ -220,7 +220,7 @@ fn extract_cleartext(
     };
 
     if !is_primary_key_valid_for_verification(public_key) {
-        return Ok(None);
+        return Err(Error::VerificationFailed);
     }
 
     // Try verifying against primary key
