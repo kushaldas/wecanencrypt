@@ -231,24 +231,33 @@ pub(crate) fn can_subkey_sign(
         .unwrap_or(false)
 }
 
-/// Find the most recent self-signature for a user ID.
+fn is_uid_certification_signature(sig: &pgp::packet::Signature) -> bool {
+    matches!(
+        sig.typ(),
+        Some(SignatureType::CertGeneric)
+            | Some(SignatureType::CertPersona)
+            | Some(SignatureType::CertCasual)
+            | Some(SignatureType::CertPositive)
+    )
+}
+
+/// Find the most recent cryptographically verified self-signature for a user ID.
 ///
 /// Per RFC 4880 §5.2.3.3, newer self-signatures supersede older ones.
 /// Only the self-signature with the latest creation timestamp is
 /// authoritative for key flags, preferences, and other properties.
 ///
-/// Returns `None` if the user has no signatures.
-fn most_recent_self_sig(user: &pgp::types::SignedUser) -> Option<&pgp::packet::Signature> {
+/// Returns `None` if the user has no verified self-certification.
+fn most_recent_verified_self_sig<'a>(
+    primary: &pgp::packet::PublicKey,
+    user: &'a pgp::types::SignedUser,
+) -> Option<&'a pgp::packet::Signature> {
     user.signatures
         .iter()
+        .filter(|sig| is_uid_certification_signature(sig))
         .filter(|sig| {
-            matches!(
-                sig.typ(),
-                Some(SignatureType::CertGeneric)
-                    | Some(SignatureType::CertPersona)
-                    | Some(SignatureType::CertCasual)
-                    | Some(SignatureType::CertPositive)
-            )
+            sig.verify_certification(primary, Tag::UserId, &user.id)
+                .is_ok()
         })
         .max_by_key(|sig| sig.created().map(|t| t.as_secs()).unwrap_or(0))
 }
@@ -261,11 +270,14 @@ fn most_recent_self_sig(user: &pgp::types::SignedUser) -> Option<&pgp::packet::S
 /// self-signature grants the signing capability.
 ///
 /// This is the single source of truth for primary-key signing-capability checks.
-/// Both `SignedPublicKey` and `SignedSecretKey` share `details: SignedKeyDetails`,
-/// so callers can pass `&key.details` regardless of key type.
-pub(crate) fn can_details_sign(details: &pgp::composed::SignedKeyDetails) -> bool {
+/// The self-signature must verify against `primary` before its key flags are
+/// trusted.
+pub(crate) fn can_details_sign(
+    primary: &pgp::packet::PublicKey,
+    details: &pgp::composed::SignedKeyDetails,
+) -> bool {
     for user in &details.users {
-        if let Some(sig) = most_recent_self_sig(user) {
+        if let Some(sig) = most_recent_verified_self_sig(primary, user) {
             if sig.key_flags().sign() {
                 return true;
             }
@@ -278,7 +290,12 @@ pub(crate) fn can_details_sign(details: &pgp::composed::SignedKeyDetails) -> boo
 ///
 /// Convenience wrapper over [`can_details_sign`] for `SignedPublicKey`.
 pub(crate) fn can_primary_sign(key: &SignedPublicKey) -> bool {
-    can_details_sign(&key.details)
+    can_details_sign(&key.primary_key, &key.details)
+}
+
+/// Check if a secret primary key can sign (has signing flag).
+pub(crate) fn can_secret_primary_sign(key: &SignedSecretKey) -> bool {
+    can_details_sign(key.primary_key.public_key(), &key.details)
 }
 
 /// Check if primary key has the certify flag on the most recent
@@ -292,7 +309,7 @@ pub(crate) fn can_primary_sign(key: &SignedPublicKey) -> bool {
 #[cfg(feature = "card")]
 pub(crate) fn can_primary_certify(key: &SignedPublicKey) -> bool {
     key.details.users.iter().any(|u| {
-        most_recent_self_sig(u)
+        most_recent_verified_self_sig(&key.primary_key, u)
             .map(|sig| sig.key_flags().certify())
             .unwrap_or(false)
     })

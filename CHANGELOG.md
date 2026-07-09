@@ -37,6 +37,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   subkey bindings. This prevents unverified metadata introduced by a
   public-key merge from being upgraded into fresh owner signatures.
   Regression tests cover poisoned merged user IDs and public subkeys.
+- Forced-primary signing and primary-key signature verification now
+  require a verified primary self-certification with the signing flag.
+  Certify-only primaries can no longer create or verify data signatures
+  through policy-aware signing and verification helpers. Regression
+  tests cover forced signing rejection and detached, inline, and
+  cleartext verification rejection.
 
 ### Fixed
 
