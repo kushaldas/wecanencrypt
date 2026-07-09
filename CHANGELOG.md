@@ -28,6 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the containing primary certificate has a verified revocation.
   Regression tests cover detached, inline, cleartext, and extract
   verification through the public API.
+- Signing and SSH helper selection now consistently uses the latest
+  verified subkey binding when evaluating signing and authentication
+  key flags. Regression tests cover newer bindings that remove those
+  roles while stale historical bindings remain on the key.
 
 ### Fixed
 

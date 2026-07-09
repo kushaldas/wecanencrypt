@@ -140,6 +140,11 @@ pub(crate) fn subkey_binding_can_encrypt(binding: &Signature) -> bool {
     flags.encrypt_comms() || flags.encrypt_storage()
 }
 
+/// Check whether a verified subkey binding signature grants authentication use.
+pub(crate) fn subkey_binding_can_authenticate(binding: &Signature) -> bool {
+    binding.key_flags().authentication()
+}
+
 /// Compute the expiration time described by a verified subkey binding.
 pub(crate) fn subkey_binding_expiration_time(
     binding: &Signature,
