@@ -940,10 +940,10 @@ mod key_flag_policy {
         SignedKeyDetails, SignedPublicSubKey, SignedSecretKey, SignedSecretSubKey,
     };
     use wecanencrypt::pgp::packet::{
-        KeyFlags, PacketTrait, Signature, SignatureConfig, SignatureType, Subpacket, SubpacketData,
+        KeyFlags, Signature, SignatureConfig, SignatureType, Subpacket, SubpacketData,
     };
     use wecanencrypt::pgp::ser::Serialize;
-    use wecanencrypt::pgp::types::{KeyDetails, KeyVersion, Password, SignedUser, Timestamp};
+    use wecanencrypt::pgp::types::{KeyDetails, KeyVersion, Password, SignedUser, Tag, Timestamp};
 
     /// Helper: parse a secret key from bytes.
     fn parse_secret(data: &[u8]) -> SignedSecretKey {
@@ -1005,7 +1005,7 @@ mod key_flag_policy {
                     &secret_key.primary_key,
                     &secret_key.primary_key.public_key(),
                     &password_obj,
-                    signed_user.id.tag(),
+                    Tag::UserId,
                     &signed_user.id,
                 )
                 .unwrap();

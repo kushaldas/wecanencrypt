@@ -13,7 +13,7 @@ use zeroize::Zeroizing;
 use crate::error::{Error, Result};
 use crate::internal::{
     can_primary_sign, parse_public_key, parse_secret_key, subkey_binding_can_authenticate,
-    subkey_binding_can_sign, verified_usable_secret_subkey_binding, verified_usable_subkey_binding,
+    verified_usable_secret_subkey_binding, verified_usable_subkey_binding,
 };
 use crate::types::{RsaPublicKey, SigningPublicKey};
 
@@ -236,7 +236,7 @@ pub fn get_signing_pubkey(key_data: &[u8]) -> Result<SigningPublicKey> {
     // Find a signing-capable subkey
     let sign_subkey = public_key.public_subkeys.iter().find(|sk| {
         verified_usable_subkey_binding(&public_key.primary_key, sk, false)
-            .map(subkey_binding_can_sign)
+            .map(crate::internal::subkey_binding_can_sign)
             .unwrap_or(false)
     });
 
