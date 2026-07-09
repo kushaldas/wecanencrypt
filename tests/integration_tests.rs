@@ -1456,8 +1456,11 @@ mod key_flag_policy {
 mod merge_secret_dispatch {
     use super::*;
     use pgp::composed::{Deserializable, SignedPublicKey, SignedSecretKey};
+    use pgp::packet::{SignatureConfig, SignatureType, Subpacket, SubpacketData, UserId};
     use pgp::ser::Serialize;
-    use pgp::types::KeyDetails;
+    use pgp::types::{
+        KeyDetails, KeyVersion, PacketHeaderVersion, Password, SignedUser, Tag, Timestamp,
+    };
     use std::io::Cursor;
 
     fn fresh_key() -> wecanencrypt::GeneratedKey {
@@ -1476,6 +1479,102 @@ mod merge_secret_dispatch {
             .map(|(k, _)| k)
             .or_else(|_| SignedSecretKey::from_bytes(Cursor::new(data)))
             .expect("parse as secret")
+    }
+
+    fn attacker_signed_uid(attacker: &SignedSecretKey, uid: &str) -> SignedUser {
+        let mut rng = rand::thread_rng();
+        let user_id = UserId::from_str(PacketHeaderVersion::New, uid).expect("create UID");
+        let mut config =
+            SignatureConfig::from_key(&mut rng, &attacker.primary_key, SignatureType::CertPositive)
+                .expect("signature config");
+        config.hashed_subpackets = vec![
+            Subpacket::regular(SubpacketData::SignatureCreationTime(Timestamp::now())).unwrap(),
+            Subpacket::regular(SubpacketData::IssuerFingerprint(
+                attacker.primary_key.fingerprint(),
+            ))
+            .unwrap(),
+        ];
+        if attacker.primary_key.version() <= KeyVersion::V4 {
+            config.unhashed_subpackets = vec![Subpacket::regular(SubpacketData::IssuerKeyId(
+                attacker.primary_key.legacy_key_id(),
+            ))
+            .unwrap()];
+        }
+
+        let sig = config
+            .sign_certification(
+                &attacker.primary_key,
+                attacker.primary_key.public_key(),
+                &Password::from(TEST_PASSWORD),
+                Tag::UserId,
+                &user_id,
+            )
+            .expect("attacker signs UID");
+        SignedUser::new(user_id, vec![sig])
+    }
+
+    fn public_with_extra_user(victim: &SignedSecretKey, user: SignedUser) -> Vec<u8> {
+        let mut details = victim.details.clone();
+        details.users.push(user);
+        let poisoned = SignedPublicKey {
+            primary_key: victim.primary_key.public_key().clone(),
+            details,
+            public_subkeys: victim.to_public_key().public_subkeys,
+        };
+        poisoned.to_bytes().expect("serialize poisoned public key")
+    }
+
+    fn public_with_attacker_subkeys(
+        victim: &SignedSecretKey,
+        attacker: &SignedSecretKey,
+    ) -> Vec<u8> {
+        let poisoned = SignedPublicKey {
+            primary_key: victim.primary_key.public_key().clone(),
+            details: victim.details.clone(),
+            public_subkeys: attacker.to_public_key().public_subkeys,
+        };
+        poisoned.to_bytes().expect("serialize poisoned public key")
+    }
+
+    fn uid_has_verified_self_cert(secret: &SignedSecretKey, uid: &str) -> bool {
+        let primary = secret.primary_key.public_key();
+        secret
+            .details
+            .users
+            .iter()
+            .find(|user| std::str::from_utf8(user.id.id()).unwrap_or("") == uid)
+            .map(|user| {
+                user.signatures.iter().any(|sig| {
+                    matches!(
+                        sig.typ(),
+                        Some(SignatureType::CertGeneric)
+                            | Some(SignatureType::CertPersona)
+                            | Some(SignatureType::CertCasual)
+                            | Some(SignatureType::CertPositive)
+                    ) && sig
+                        .verify_certification(primary, Tag::UserId, &user.id)
+                        .is_ok()
+                })
+            })
+            .unwrap_or(false)
+    }
+
+    fn public_subkey_has_verified_binding(
+        secret: &SignedSecretKey,
+        fp: &pgp::types::Fingerprint,
+    ) -> bool {
+        let primary = secret.primary_key.public_key();
+        secret
+            .public_subkeys
+            .iter()
+            .find(|subkey| &subkey.key.fingerprint() == fp)
+            .map(|subkey| {
+                subkey.signatures.iter().any(|sig| {
+                    sig.typ() == Some(SignatureType::SubkeyBinding)
+                        && sig.verify_subkey_binding(primary, &subkey.key).is_ok()
+                })
+            })
+            .unwrap_or(false)
     }
 
     #[test]
@@ -1913,6 +2012,91 @@ mod merge_secret_dispatch {
             .signatures
             .len();
         assert_eq!(k2.signatures.len(), update_sig_count);
+    }
+
+    #[test]
+    fn test_primary_expiry_does_not_self_certify_poisoned_merged_uid() {
+        let victim = fresh_key();
+        let attacker = create_key_simple(TEST_PASSWORD, &["Attacker <a@example.com>"]).unwrap();
+        let victim_sec = parse_sec(&victim.secret_key);
+        let attacker_sec = parse_sec(&attacker.secret_key);
+        let poisoned_uid = "Mallory <mallory@example.com>";
+        let poisoned_public = public_with_extra_user(
+            &victim_sec,
+            attacker_signed_uid(&attacker_sec, poisoned_uid),
+        );
+
+        let merged = merge_keys(&victim.secret_key, &poisoned_public).unwrap();
+        let merged_sec = parse_sec(&merged);
+        assert!(
+            merged_sec
+                .details
+                .users
+                .iter()
+                .any(|user| std::str::from_utf8(user.id.id()).unwrap_or("") == poisoned_uid),
+            "poisoned UID must be present before maintenance for the regression to be meaningful"
+        );
+        assert!(
+            !uid_has_verified_self_cert(&merged_sec, poisoned_uid),
+            "poisoned UID must not start with a victim self-certification"
+        );
+
+        let future = chrono::Utc::now() + chrono::Duration::days(365);
+        let renewed = wecanencrypt::update_primary_expiry(&merged, future, TEST_PASSWORD).unwrap();
+        let renewed_sec = parse_sec(&renewed);
+
+        assert!(
+            !uid_has_verified_self_cert(&renewed_sec, poisoned_uid),
+            "primary expiry maintenance must not create the first valid self-certification \
+             for an unverified merged UID"
+        );
+    }
+
+    #[test]
+    fn test_subkey_expiry_does_not_bind_poisoned_merged_public_subkey() {
+        let victim = fresh_key();
+        let attacker = create_key_simple(TEST_PASSWORD, &["Attacker <a@example.com>"]).unwrap();
+        let victim_sec = parse_sec(&victim.secret_key);
+        let attacker_sec = parse_sec(&attacker.secret_key);
+        let attacker_public = attacker_sec.to_public_key();
+        let poisoned_fp = attacker_public
+            .public_subkeys
+            .first()
+            .expect("attacker key has a public subkey")
+            .key
+            .fingerprint();
+        let poisoned_fp_hex = fingerprint_hex(&poisoned_fp);
+        let poisoned_public = public_with_attacker_subkeys(&victim_sec, &attacker_sec);
+
+        let merged = merge_keys(&victim.secret_key, &poisoned_public).unwrap();
+        let merged_sec = parse_sec(&merged);
+        assert!(
+            merged_sec
+                .public_subkeys
+                .iter()
+                .any(|subkey| subkey.key.fingerprint() == poisoned_fp),
+            "poisoned public subkey must be present before maintenance"
+        );
+        assert!(
+            !public_subkey_has_verified_binding(&merged_sec, &poisoned_fp),
+            "poisoned public subkey must not start with a victim binding"
+        );
+
+        let future = chrono::Utc::now() + chrono::Duration::days(365);
+        let renewed = wecanencrypt::update_subkeys_expiry(
+            &merged,
+            &[&poisoned_fp_hex],
+            future,
+            TEST_PASSWORD,
+        )
+        .unwrap();
+        let renewed_sec = parse_sec(&renewed);
+
+        assert!(
+            !public_subkey_has_verified_binding(&renewed_sec, &poisoned_fp),
+            "subkey expiry maintenance must not create the first valid binding \
+             for an unverified merged public subkey"
+        );
     }
 
     fn fingerprint_hex(fp: &pgp::types::Fingerprint) -> String {

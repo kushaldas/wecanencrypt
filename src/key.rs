@@ -14,7 +14,9 @@ use pgp::composed::{
     EncryptionCaps, SecretKeyParamsBuilder, SignedKeyDetails, SignedPublicKey, SignedSecretKey,
     SubkeyParamsBuilder,
 };
-use pgp::packet::{PacketTrait, SignatureConfig, SignatureType, Subpacket, SubpacketData, UserId};
+use pgp::packet::{
+    PacketTrait, Signature, SignatureConfig, SignatureType, Subpacket, SubpacketData, UserId,
+};
 use pgp::types::{KeyDetails, KeyVersion, PacketHeaderVersion, Password, SignedUser, Timestamp};
 use rand::thread_rng;
 use std::time::SystemTime;
@@ -683,6 +685,30 @@ fn is_verified_self_uid_signature(
         .is_ok()
 }
 
+fn is_uid_certification_signature(sig: &Signature) -> bool {
+    matches!(
+        sig.typ(),
+        Some(SignatureType::CertGeneric)
+            | Some(SignatureType::CertPersona)
+            | Some(SignatureType::CertCasual)
+            | Some(SignatureType::CertPositive)
+    )
+}
+
+fn most_recent_verified_uid_certification<'a>(
+    primary: &pgp::packet::PublicKey,
+    user: &'a SignedUser,
+) -> Option<&'a Signature> {
+    user.signatures
+        .iter()
+        .filter(|sig| is_uid_certification_signature(sig))
+        .filter(|sig| {
+            sig.verify_certification(primary, pgp::types::Tag::UserId, &user.id)
+                .is_ok()
+        })
+        .max_by_key(|sig| sig.created().map(|t| t.as_secs()).unwrap_or(0))
+}
+
 /// True if `sig` is a subkey binding or subkey revocation that
 /// cryptographically verifies against `primary` over `subkey_key`.
 /// `verify_subkey_binding` hashes `primary || subkey`, which is the
@@ -699,6 +725,21 @@ where
         sig.typ(),
         Some(SignatureType::SubkeyBinding) | Some(SignatureType::SubkeyRevocation)
     ) && sig.verify_subkey_binding(primary, subkey_key).is_ok()
+}
+
+fn most_recent_verified_subkey_binding<'a, K>(
+    primary: &pgp::packet::PublicKey,
+    signatures: &'a [Signature],
+    subkey_key: &K,
+) -> Option<&'a Signature>
+where
+    K: pgp::types::KeyDetails + pgp::ser::Serialize,
+{
+    signatures
+        .iter()
+        .filter(|sig| sig.typ() == Some(SignatureType::SubkeyBinding))
+        .filter(|sig| sig.verify_subkey_binding(primary, subkey_key).is_ok())
+        .max_by_key(|sig| sig.created().map(|t| t.as_secs()).unwrap_or(0))
 }
 
 /// True if `sig` is a direct-key signature (0x1F) or self key-revocation
@@ -789,6 +830,7 @@ pub fn update_subkeys_expiry(
     let secret_key = parse_secret_key(key_data)?;
     ensure_secret_primary_not_revoked(&secret_key)?;
     let password = Password::from(password);
+    let primary_public = secret_key.primary_key.public_key();
 
     // Normalize fingerprints for comparison (uppercase, no spaces)
     let normalized_fps: Vec<String> = fingerprints
@@ -816,12 +858,15 @@ pub fn update_subkeys_expiry(
             }
             let expiry_duration = pgp::types::Duration::from_secs(duration.num_seconds() as u32);
 
-            // Get existing key flags
-            let key_flags = subkey
-                .signatures
-                .first()
-                .map(|sig| sig.key_flags())
-                .unwrap_or_default();
+            let Some(existing_binding) = most_recent_verified_subkey_binding(
+                primary_public,
+                &subkey.signatures,
+                &subkey.key,
+            ) else {
+                new_public_subkeys.push(subkey.clone());
+                continue;
+            };
+            let key_flags = existing_binding.key_flags();
 
             // Build new binding signature
             let hashed_subpackets = vec![
@@ -900,12 +945,15 @@ pub fn update_subkeys_expiry(
             }
             let expiry_duration = pgp::types::Duration::from_secs(duration.num_seconds() as u32);
 
-            // Get existing key flags
-            let key_flags = subkey
-                .signatures
-                .first()
-                .map(|sig| sig.key_flags())
-                .unwrap_or_default();
+            let Some(existing_binding) = most_recent_verified_subkey_binding(
+                primary_public,
+                &subkey.signatures,
+                subkey.key.public_key(),
+            ) else {
+                new_secret_subkeys.push(subkey.clone());
+                continue;
+            };
+            let key_flags = existing_binding.key_flags();
 
             // Build new binding signature
             let hashed_subpackets = vec![
@@ -1031,6 +1079,7 @@ pub fn update_primary_expiry(
     let secret_key = parse_secret_key(key_data)?;
     ensure_secret_primary_not_revoked(&secret_key)?;
     let password = Password::from(password);
+    let primary_public = secret_key.primary_key.public_key();
 
     // Calculate the duration from key creation to expiry
     let creation_systime: SystemTime = secret_key.primary_key.created_at().into();
@@ -1048,6 +1097,11 @@ pub fn update_primary_expiry(
     for existing_sig in &secret_key.details.direct_signatures {
         // Only update direct key signatures (0x1f), not revocations
         if existing_sig.typ() == Some(SignatureType::Key) {
+            if !is_verified_self_primary_signature(existing_sig, primary_public) {
+                new_direct_signatures.push(existing_sig.clone());
+                continue;
+            }
+
             // Preserve existing subpackets, updating only creation time and expiry
             let existing_config = existing_sig.config().ok_or_else(|| {
                 Error::Crypto("Cannot read existing direct signature config".to_string())
@@ -1123,6 +1177,13 @@ pub fn update_primary_expiry(
     let mut new_users: Vec<SignedUser> = Vec::new();
 
     for signed_user in &secret_key.details.users {
+        let Some(existing_self_cert) =
+            most_recent_verified_uid_certification(primary_public, signed_user)
+        else {
+            new_users.push(signed_user.clone());
+            continue;
+        };
+
         // Build the hashed subpackets including expiry
         let mut hashed_subpackets = vec![
             Subpacket::regular(SubpacketData::SignatureCreationTime(Timestamp::now()))
@@ -1135,14 +1196,12 @@ pub fn update_primary_expiry(
                 .map_err(|e| Error::Crypto(e.to_string()))?,
         ];
 
-        // Copy key flags from existing signature if present
-        if let Some(existing_sig) = signed_user.signatures.first() {
-            let flags = existing_sig.key_flags();
-            hashed_subpackets.push(
-                Subpacket::regular(SubpacketData::KeyFlags(flags))
-                    .map_err(|e| Error::Crypto(e.to_string()))?,
-            );
-        }
+        // Copy flags only from a self-certification that the primary actually issued.
+        let flags = existing_self_cert.key_flags();
+        hashed_subpackets.push(
+            Subpacket::regular(SubpacketData::KeyFlags(flags))
+                .map_err(|e| Error::Crypto(e.to_string()))?,
+        );
 
         // Create the signature config
         let mut config = SignatureConfig::from_key(
