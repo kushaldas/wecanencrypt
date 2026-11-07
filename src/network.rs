@@ -448,11 +448,8 @@ fn dns_query(name: &str, resolver: &str) -> Result<Vec<u8>> {
         .map_err(|e| Error::Network(format!("Invalid DNS name '{}': {}", name, e)))?;
 
     // Build the query message
-    let mut msg = Message::new();
-    msg.set_id(rand::random::<u16>());
-    msg.set_message_type(MessageType::Query);
-    msg.set_op_code(OpCode::Query);
-    msg.set_recursion_desired(true);
+    let mut msg = Message::new(rand::random::<u16>(), MessageType::Query, OpCode::Query);
+    msg.metadata.recursion_desired = true;
 
     let mut query = Query::new();
     query.set_name(dns_name.clone());
@@ -492,13 +489,13 @@ fn dns_query(name: &str, resolver: &str) -> Result<Vec<u8>> {
         .map_err(|e| Error::Network(format!("Failed to parse DNS response: {}", e)))?;
 
     // Check if truncated - retry over TCP
-    if response.truncated() {
+    if response.truncation {
         return dns_query_tcp(name, resolver, &wire);
     }
 
     // Check response code
     use hickory_proto::op::ResponseCode;
-    match response.response_code() {
+    match response.response_code {
         ResponseCode::NoError => {}
         ResponseCode::NXDomain => {
             return Err(Error::KeyNotFound(format!(
@@ -515,9 +512,9 @@ fn dns_query(name: &str, resolver: &str) -> Result<Vec<u8>> {
     }
 
     // Extract OPENPGPKEY record data
-    for record in response.answers() {
-        if let hickory_proto::rr::RData::OPENPGPKEY(ref key) = *record.data() {
-            return Ok(key.public_key().to_vec());
+    for record in &response.answers {
+        if let hickory_proto::rr::RData::OPENPGPKEY(ref key) = record.data {
+            return Ok(key.public_key.to_vec());
         }
     }
 
@@ -572,9 +569,9 @@ fn dns_query_tcp(name: &str, resolver: &str, wire: &[u8]) -> Result<Vec<u8>> {
         .map_err(|e| Error::Network(format!("Failed to parse DNS response: {}", e)))?;
 
     // Extract OPENPGPKEY record data
-    for record in response.answers() {
-        if let hickory_proto::rr::RData::OPENPGPKEY(ref key) = *record.data() {
-            return Ok(key.public_key().to_vec());
+    for record in &response.answers {
+        if let hickory_proto::rr::RData::OPENPGPKEY(ref key) = record.data {
+            return Ok(key.public_key.to_vec());
         }
     }
 

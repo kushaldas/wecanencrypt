@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-11-07
+
+### Changed
+
+- Upgrade rPGP to 0.21.0 and map the existing `draft-pqc` feature to
+  upstream `pqc` (RFC 9980).
+- Upgrade compatible dependencies, including rusqlite 0.41, hickory-proto
+  0.26, openpgp-card 0.7, aes 0.9, aes-kw 0.3, sha1 0.11, and
+  hex-literal 1.1. Adapt card signing, key upload, DNS parsing, and AES-KW
+  calls to the new APIs. Keep the digest-carrying `CardHash` variants as a
+  local type after upstream removed its `Hash` type.
+
 ## [0.16.3] - 2026-07-09
 
 ### Security

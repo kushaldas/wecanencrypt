@@ -5,6 +5,50 @@
 //! to callers. They are used by both desktop PC/SC transports and external
 //! mobile/custom backends.
 
+/// Digest or raw input for card signing and authentication.
+///
+/// Preserves the digest-carrying variants formerly re-exported from
+/// `openpgp-card`. RSA variants request DigestInfo encoding; ECC variants
+/// pass the bytes directly to the card.
+#[derive(Debug)]
+pub enum CardHash<'a> {
+    /// RSA with SHA-1.
+    SHA1([u8; 20]),
+    /// RSA with SHA-256.
+    SHA256([u8; 32]),
+    /// RSA with SHA-384.
+    SHA384([u8; 48]),
+    /// RSA with SHA-512.
+    SHA512([u8; 64]),
+    /// ECDSA prehashed input.
+    ECDSA(&'a [u8]),
+    /// EdDSA input.
+    EdDSA(&'a [u8]),
+}
+
+impl CardHash<'_> {
+    pub(crate) fn algorithm(&self) -> openpgp_card::ocard::crypto::SigningAlgo {
+        use openpgp_card::ocard::crypto::{HashAlgo, SigningAlgo};
+        match self {
+            Self::SHA1(_) => SigningAlgo::RSA(HashAlgo::SHA1),
+            Self::SHA256(_) => SigningAlgo::RSA(HashAlgo::SHA256),
+            Self::SHA384(_) => SigningAlgo::RSA(HashAlgo::SHA384),
+            Self::SHA512(_) => SigningAlgo::RSA(HashAlgo::SHA512),
+            Self::ECDSA(_) | Self::EdDSA(_) => SigningAlgo::ECC,
+        }
+    }
+
+    pub(crate) fn digest(&self) -> &[u8] {
+        match self {
+            Self::SHA1(data) => data,
+            Self::SHA256(data) => data,
+            Self::SHA384(data) => data,
+            Self::SHA512(data) => data,
+            Self::ECDSA(data) | Self::EdDSA(data) => data,
+        }
+    }
+}
+
 /// Key slot identifiers on an OpenPGP smart card.
 ///
 /// Each slot can hold one key for a specific purpose.

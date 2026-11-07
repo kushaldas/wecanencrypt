@@ -119,12 +119,11 @@ pub fn list_all_cards() -> Result<Vec<CardSummary>> {
 pub(crate) fn get_card_backend(ident: Option<&str>) -> Result<Box<dyn CardBackend + Send + Sync>> {
     #[cfg(feature = "card-pcsc")]
     {
-        return get_card_backend_pcsc(ident)
-            .map(|b| -> Box<dyn CardBackend + Send + Sync> { Box::new(b) });
+        get_card_backend_pcsc(ident).map(|b| -> Box<dyn CardBackend + Send + Sync> { Box::new(b) })
     }
     #[cfg(all(feature = "card-external", not(feature = "card-pcsc")))]
     {
-        return super::external::invoke_provider(ident);
+        super::external::invoke_provider(ident)
     }
     #[cfg(not(any(feature = "card-pcsc", feature = "card-external")))]
     {
@@ -591,7 +590,7 @@ pub fn reset_user_pin(admin_pin: &[u8], new_pin: &[u8], ident: Option<&str>) -> 
     // COUNTER PW1 with no resetting code, relying on the already-
     // verified admin PIN for authorization.
     let mut admin_card = tx
-        .to_admin_card(admin_secret)
+        .as_admin_card(admin_secret)
         .map_err(|e| Error::Card(CardError::from(e)))?;
     admin_card
         .reset_user_pin(new_secret)

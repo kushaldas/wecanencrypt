@@ -51,7 +51,7 @@ static PROVIDER: OnceLock<BackendProvider> = OnceLock::new();
 /// ```no_run
 /// # #[cfg(feature = "card-external")]
 /// # {
-/// use openpgp_card::CardBackend;
+/// use card_backend::CardBackend;
 /// use wecanencrypt::card::external::set_backend_provider;
 /// use wecanencrypt::Result;
 ///

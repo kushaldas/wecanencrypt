@@ -223,7 +223,11 @@ Note: Card tests automatically reset the card to factory defaults before each te
 - `card-pcsc`: Desktop PC/SC smart-card support (requires `libpcsclite-dev` on Linux)
 - `card-external`: Mobile or custom smart-card backend provider
 - `dane`: DNS DANE OPENPGPKEY key discovery (RFC 7929)
-- `draft-pqc`: Post-quantum cryptography support (experimental)
+- `draft-pqc`: Post-quantum cryptography support via rPGP’s `pqc` feature (RFC 9980); the feature name is retained for compatibility
+
+`card::CardHash` retains its digest-carrying variants (for example,
+`CardHash::SHA256([u8; 32])`) and is now defined by this library rather than
+re-exported from openpgp-card.
 
 ## Release
 
@@ -248,7 +252,7 @@ Then:
 The publish workflow verifies that the tag matches the crate version, runs `cargo publish --dry-run`, and then publishes via crates.io trusted publishing.
 The repository must be configured as a trusted publisher in crates.io before the first tagged release, with the GitHub Actions environment set to `release` to match `.github/workflows/publish.yml`.
 
-The docs.rs build is configured to document `keystore`, `network`, `card`, and `dane`, while leaving `draft-pqc` out of the default published docs because it is experimental.
+The docs.rs build is configured to document `keystore`, `network`, `card`, and `dane`, while leaving the opt-in `draft-pqc` feature out of the default published docs.
 
 ## License
 

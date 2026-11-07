@@ -7,7 +7,8 @@
 
 use std::io::Cursor;
 
-use openpgp_card::ocard::crypto::{Cryptogram, Hash};
+use super::CardHash as Hash;
+use openpgp_card::ocard::crypto::Cryptogram;
 use openpgp_card::Card;
 use secrecy::SecretString;
 
@@ -421,7 +422,7 @@ fn sign_on_card(
 
     // Perform the signature operation
     let signature = low_tx
-        .signature_for_hash(card_hash)
+        .signature_for_hash(card_hash.algorithm(), card_hash.digest())
         .map_err(|e| Error::Card(CardError::from(e)))?;
 
     Ok(signature)
@@ -885,7 +886,7 @@ fn x25519_unwrap_session_key(
     encrypted_session_key: &[u8],
 ) -> Result<Vec<u8>> {
     use aes::Aes256;
-    use aes_kw::Kek;
+    use aes_kw::{AesKw, KeyInit};
     use hkdf::Hkdf;
     use sha2::Sha256;
 
@@ -895,14 +896,18 @@ fn x25519_unwrap_session_key(
     hkdf.expand(b"OpenPGP X25519", &mut kek)
         .map_err(|e| Error::Crypto(format!("HKDF failed: {:?}", e)))?;
 
-    let kek_key = Kek::<Aes256>::try_from(kek.as_slice())
+    let kek_key = AesKw::<Aes256>::new_from_slice(&kek)
         .map_err(|e| Error::Crypto(format!("Invalid KEK: {:?}", e)))?;
 
-    let unwrapped = kek_key
-        .unwrap_vec(encrypted_session_key)
-        .map_err(|e| Error::Crypto(format!("AES unwrap failed: {:?}", e)))?;
+    // aes-kw 0.3 writes the unwrapped key into a caller-provided buffer.
+    let mut buffer = vec![0u8; encrypted_session_key.len()];
+    let unwrapped_len = kek_key
+        .unwrap_key(encrypted_session_key, &mut buffer)
+        .map_err(|e| Error::Crypto(format!("AES unwrap failed: {:?}", e)))?
+        .len();
+    buffer.truncate(unwrapped_len);
 
-    Ok(unwrapped)
+    Ok(buffer)
 }
 
 /// A signing key wrapper that delegates signing to the smart card.
@@ -1571,12 +1576,15 @@ pub fn ssh_authenticate_for_hash_on_card(
         .map_err(|e| Error::Card(CardError::from(e)))?;
 
     // Perform authenticate with hash via the inner ocard::Transaction
-    let signature = tx.card().authenticate_for_hash(hash).map_err(|e| {
-        Error::Card(CardError::CommunicationError(format!(
-            "Authenticate for hash failed: {}",
-            e
-        )))
-    })?;
+    let signature = tx
+        .card()
+        .authenticate_for_hash(hash.algorithm(), hash.digest())
+        .map_err(|e| {
+            Error::Card(CardError::CommunicationError(format!(
+                "Authenticate for hash failed: {}",
+                e
+            )))
+        })?;
 
     Ok(signature)
 }
@@ -2064,6 +2072,25 @@ mod tests {
 
     use super::*;
     use crate::{create_key_simple, create_key_v6_simple, get_pub_key, CipherSuite};
+
+    #[test]
+    fn x25519_unwrap_known_answer_and_invalid_inputs() {
+        // Independently generated with Python cryptography's HKDF-SHA256 and
+        // aes_key_wrap, using the existing OpenPGP X25519 info string.
+        let shared_secret: Vec<u8> = (0..32).collect();
+        let wrapped = hex_literal::hex!("ced85ea71899e0b50691f35e20836eb702bdaa8396eb8b76");
+        assert_eq!(
+            x25519_unwrap_session_key(&shared_secret, &wrapped).unwrap(),
+            (0..16).collect::<Vec<u8>>()
+        );
+
+        let mut corrupted = wrapped;
+        corrupted[0] ^= 1;
+        assert!(x25519_unwrap_session_key(&shared_secret, &corrupted).is_err());
+        for length in [0, 1, 7, 9, 15, 23] {
+            assert!(x25519_unwrap_session_key(&shared_secret, &wrapped[..length]).is_err());
+        }
+    }
 
     /// `sign_and_encrypt_to_multiple_on_card_with_hidden` must reject an
     /// empty-empty recipient list with `Error::InvalidInput` BEFORE doing
