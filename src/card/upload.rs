@@ -283,11 +283,11 @@ impl openpgp_card::ocard::crypto::EccKey for UploadableEccKey {
     fn oid(&self) -> &[u8] {
         &self.oid
     }
-    fn private(&self) -> Vec<u8> {
-        self.private_scalar.to_vec()
+    fn private(&self) -> &[u8] {
+        &self.private_scalar
     }
-    fn public(&self) -> Vec<u8> {
-        self.public_point.clone()
+    fn public(&self) -> &[u8] {
+        &self.public_point
     }
     fn ecc_type(&self) -> EccType {
         self.ecc_type
@@ -314,14 +314,14 @@ impl openpgp_card::ocard::crypto::RSAKey for UploadableRsaKey {
     fn q(&self) -> &[u8] {
         &self.q
     }
-    fn pq(&self) -> Box<[u8]> {
-        self.pq.to_vec().into_boxed_slice()
+    fn pq(&self) -> &[u8] {
+        &self.pq
     }
-    fn dp1(&self) -> Box<[u8]> {
-        self.dp1.to_vec().into_boxed_slice()
+    fn dp1(&self) -> &[u8] {
+        &self.dp1
     }
-    fn dq1(&self) -> Box<[u8]> {
-        self.dq1.to_vec().into_boxed_slice()
+    fn dq1(&self) -> &[u8] {
+        &self.dq1
     }
     fn n(&self) -> &[u8] {
         &self.n
@@ -426,18 +426,16 @@ fn upload_via_openpgp_card(
     zeroize::Zeroize::zeroize(&mut pin_owned);
 
     let mut admin = tx
-        .to_admin_card(pin_secret)
+        .as_admin_card(pin_secret)
         .map_err(|e| Error::Card(CardError::from(e)))?;
 
     // Import the key
-    admin
-        .import_key(Box::new(uploadable), key_type)
-        .map_err(|e| {
-            Error::Card(CardError::CommunicationError(format!(
-                "Key import failed: {}",
-                e
-            )))
-        })?;
+    admin.import_key(&uploadable, key_type).map_err(|e| {
+        Error::Card(CardError::CommunicationError(format!(
+            "Key import failed: {}",
+            e
+        )))
+    })?;
 
     Ok(())
 }

@@ -37,6 +37,7 @@
 //!         b"Hello, world!",
 //!         &public_key,
 //!         b"123456",
+//!         None,
 //!     ).unwrap();
 //!     println!("Signature has {} bytes", signature.len());
 //! }
@@ -99,8 +100,8 @@ pub use crypto::{
     sign_text_cleartext_on_card, ssh_authenticate_for_hash_on_card, ssh_authenticate_on_card,
     update_primary_expiry_on_card, update_subkeys_expiry_on_card,
 };
-// Re-export Hash for callers of ssh_authenticate_for_hash_on_card
-pub use openpgp_card::ocard::crypto::Hash as CardHash;
+// Keep the digest-carrying API after openpgp-card split algorithm from data.
+pub use types::CardHash;
 pub use upload::{
     upload_key_to_card, upload_primary_key_to_card, upload_subkey_by_fingerprint, CardKeySlot,
     KeySelection,

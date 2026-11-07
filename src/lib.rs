@@ -68,7 +68,7 @@
 //! - `card`: transport-agnostic OpenPGP-card operations.
 //! - `card-pcsc`: desktop PC/SC transport; implies `card`.
 //! - `card-external`: mobile or custom transport provider; implies `card`.
-//! - `draft-pqc`: exposes rPGP's experimental post-quantum draft support.
+//! - `draft-pqc`: exposes rPGP's `pqc` support (RFC 9980); retained feature name for compatibility.
 //!
 //! ## Security Defaults
 //!
